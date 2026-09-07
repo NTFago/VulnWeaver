@@ -151,6 +151,42 @@ def test_derived_artifacts_require_parent_and_tool_before_writing(
     asyncio.run(scenario())
 
 
+def test_string_derived_kind_cannot_bypass_lineage_requirements(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path)
+        service = ArtifactRegistrationService(store, database)
+        artifact = _artifact(
+            "artifact:t04-string-derived",
+            "artifact-version:t04-string-derived",
+            cast(ArtifactKind, "derived"),
+        )
+        try:
+            with pytest.raises(PersistenceInvariantError) as captured:
+                await service.register_artifact(
+                    artifact,
+                    ArtifactVersionRequest(
+                        id="artifact-version:t04-string-derived",
+                        artifact_id=artifact["id"],
+                        generation_config={},
+                        created_at=TIMESTAMP,
+                    ),
+                    BytesIO(b"must not be written"),
+                    max_bytes=1024,
+                )
+            assert captured.value.details["mismatched_fields"] == [
+                "parent_version_id",
+                "produced_by",
+            ]
+            assert list((tmp_path / "objects" / "sha256").rglob("*")) == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def _project() -> Project:
     return Project(
         schema_version=SchemaVersion.VALUE_1_0_0,

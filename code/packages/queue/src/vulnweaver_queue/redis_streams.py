@@ -197,9 +197,13 @@ class RedisStreamsClient:
         _validate_consumer_name(group, "group")
         _validate_consumer_name(consumer, "consumer")
         if count < 1 or count > 1000:
-            raise ValueError("stream read count must be between 1 and 1000")
+            raise QueueConfigurationError(
+                "stream read count must be between 1 and 1000"
+            )
         if block_milliseconds < 0 or block_milliseconds > 60_000:
-            raise ValueError("stream block duration must be between 0 and 60000 ms")
+            raise QueueConfigurationError(
+                "stream block duration must be between 0 and 60000 ms"
+            )
         try:
             response = await self._client.xreadgroup(
                 groupname=group,
@@ -262,6 +266,15 @@ def _decode_stream_response(response: object) -> list[StreamMessage]:
                 if not isinstance(payload, dict):
                     raise TypeError("event payload is not an object")
                 validate_contract("QueueEvent", payload)
+                for field in (
+                    "event_id",
+                    "event_type",
+                    "aggregate_id",
+                    "sequence",
+                    "correlation_id",
+                ):
+                    if fields[field] != str(payload[field]):
+                        raise ValueError(f"stream field {field} does not match payload")
                 messages.append(
                     StreamMessage(
                         stream=stream,
@@ -269,7 +282,13 @@ def _decode_stream_response(response: object) -> list[StreamMessage]:
                         event=cast(QueueEvent, payload),
                     )
                 )
-    except (ContractValidationError, KeyError, TypeError, json.JSONDecodeError) as error:
+    except (
+        ContractValidationError,
+        KeyError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+    ) as error:
         raise MalformedQueueMessage("Redis Stream entry contains an invalid event") from error
     return messages
 

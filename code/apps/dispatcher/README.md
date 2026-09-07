@@ -1,9 +1,11 @@
 # VulnWeaver Outbox Dispatcher
 
-The dispatcher locks available PostgreSQL Outbox rows with `FOR UPDATE SKIP LOCKED`,
-publishes each immutable event to Redis Streams, and marks it published in the same
-database transaction. Retryable Redis failures are recorded with bounded exponential
-backoff. Non-retryable conflicts are moved to the Outbox dead-letter state.
+The dispatcher handles one PostgreSQL Outbox row per transaction with
+`FOR UPDATE SKIP LOCKED`, publishes the immutable event to Redis Streams, and records
+the outcome before committing. This prevents one slow Redis call from locking a whole
+batch. Retryable Redis failures use database time and bounded exponential backoff;
+they continue retrying because silently abandoning a fact event would lose delivery.
+Non-retryable conflicts are moved to the Outbox dead-letter state.
 
 The PostgreSQL-to-Redis boundary is intentionally at-least-once: a crash after Redis
 accepts an event but before PostgreSQL commits can cause a retry. The queue client uses

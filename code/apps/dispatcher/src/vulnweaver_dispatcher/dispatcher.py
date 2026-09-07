@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from vulnweaver_persistence import Database, PersistenceInvariantError
 from vulnweaver_queue import EventPublisher, QueueError
@@ -52,24 +51,24 @@ class OutboxDispatcher:
         database: Database,
         publisher: EventPublisher,
         settings: DispatcherSettings | None = None,
-        *,
-        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._database = database
         self._publisher = publisher
         self._settings = settings or DispatcherSettings()
-        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def dispatch_once(self) -> DispatchReport:
         published = 0
         failed = 0
         dead_lettered = 0
         failures: list[DispatchFailure] = []
-        async with self._database.transaction() as repositories:
-            messages = await repositories.outbox.claim_pending(
-                limit=self._settings.batch_size
-            )
-            for message in messages:
+        fetched = 0
+        for _ in range(self._settings.batch_size):
+            async with self._database.transaction() as repositories:
+                messages = await repositories.outbox.claim_pending(limit=1)
+                if not messages:
+                    break
+                fetched += 1
+                message = messages[0]
                 event_id = message.event["event_id"]
                 try:
                     await self._publisher.publish(message.event)
@@ -87,14 +86,12 @@ class OutboxDispatcher:
                             event_id,
                             error=error.as_dict(),
                             retry_after=retry_after,
-                            failed_at=self._clock(),
                         )
                         failed += 1
                     else:
                         updated = await repositories.outbox.mark_dead_lettered(
                             event_id,
                             reason=error.as_dict(),
-                            dead_lettered_at=self._clock(),
                         )
                         dead_lettered += 1
                     if not updated:
@@ -104,9 +101,7 @@ class OutboxDispatcher:
                         ) from error
                     continue
 
-                updated = await repositories.outbox.mark_published(
-                    event_id, published_at=self._clock()
-                )
+                updated = await repositories.outbox.mark_published(event_id)
                 if not updated:
                     raise PersistenceInvariantError(
                         "claimed Outbox event could not be marked published",
@@ -115,7 +110,7 @@ class OutboxDispatcher:
                 published += 1
 
         return DispatchReport(
-            fetched=len(messages),
+            fetched=fetched,
             published=published,
             failed=failed,
             dead_lettered=dead_lettered,

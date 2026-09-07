@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import sys
 from typing import cast
 
@@ -128,6 +129,66 @@ def test_malformed_stream_entry_is_not_acknowledged(
                     "api-events",
                     "api-1",
                     block_milliseconds=10,
+                )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_redundant_stream_fields_must_match_the_event_payload(
+    redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        raw = Redis.from_url(redis_url, decode_responses=True)
+        try:
+            event = job_event(job(), "event:t05-field-mismatch")
+            await raw.xadd(
+                client.streams.jobs,
+                {
+                    "event": json.dumps(event),
+                    "event_id": "event:t05-tampered",
+                    "event_type": event["event_type"],
+                    "aggregate_id": event["aggregate_id"],
+                    "sequence": str(event["sequence"]),
+                    "correlation_id": event["correlation_id"],
+                },
+            )
+            await client.ensure_group(client.streams.jobs, "workers")
+            with pytest.raises(MalformedQueueMessage):
+                await client.read_group(
+                    client.streams.jobs,
+                    "workers",
+                    "worker-1",
+                    block_milliseconds=10,
+                )
+        finally:
+            await raw.aclose()
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_stream_read_bounds_use_structured_configuration_errors(
+    redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        try:
+            with pytest.raises(QueueConfigurationError):
+                await client.read_group(
+                    client.streams.jobs,
+                    "workers",
+                    "worker-1",
+                    count=0,
+                )
+            with pytest.raises(QueueConfigurationError):
+                await client.read_group(
+                    client.streams.jobs,
+                    "workers",
+                    "worker-1",
+                    block_milliseconds=60_001,
                 )
         finally:
             await client.close()

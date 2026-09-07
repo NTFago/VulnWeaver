@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -138,7 +138,6 @@ def test_unpublished_event_is_replayed_until_marked_published(
     async def scenario() -> None:
         database = Database(DatabaseSettings(seeded_database_url))
         try:
-            now = datetime.now(UTC)
             replay_job = job("job:t03-replay", idempotency_key="job:t03-replay-key")
             replay_event = job_event(replay_job, "event:t03-replay")
             async with database.transaction() as repositories:
@@ -147,7 +146,6 @@ def test_unpublished_event_is_replayed_until_marked_published(
                     "event:t03-replay",
                     error={"code": "redis_unavailable", "retryable": True},
                     retry_after=timedelta(0),
-                    failed_at=now,
                 )
             async with database.transaction() as repositories:
                 pending = await repositories.outbox.pending()
@@ -157,18 +155,14 @@ def test_unpublished_event_is_replayed_until_marked_published(
                     if message.event["event_id"] == "event:t03-replay"
                 )
                 assert replay.publish_attempts == 1
-                assert await repositories.outbox.mark_published(
-                    "event:t03-replay", published_at=now
-                )
+                assert await repositories.outbox.mark_published("event:t03-replay")
             async with database.transaction() as repositories:
                 pending_ids = {
                     message.event["event_id"]
                     for message in await repositories.outbox.pending()
                 }
                 assert "event:t03-replay" not in pending_ids
-                assert not await repositories.outbox.mark_published(
-                    "event:t03-replay", published_at=now
-                )
+                assert not await repositories.outbox.mark_published("event:t03-replay")
         finally:
             await database.dispose()
 
@@ -191,6 +185,52 @@ def test_task_idempotency_and_artifact_digest_deduplication(
                 version_result = await repositories.artifacts.add_version(duplicate_version)
                 assert not version_result.created
                 assert version_result.value["id"] == "artifact-version:t03"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_old_content_does_not_move_current_version_backward(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        project_id = "project:t04-version-order"
+        artifact_id = "artifact:t04-version-order"
+        first_id = "artifact-version:t04-version-order-1"
+        second_id = "artifact-version:t04-version-order-2"
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project(project_id))
+                await repositories.artifacts.add(
+                    artifact(
+                        artifact_id,
+                        project_id=project_id,
+                        current_version_id=first_id,
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(first_id, artifact_id=artifact_id)
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        second_id,
+                        artifact_id=artifact_id,
+                        digest_character="b",
+                    )
+                )
+                duplicate = await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:t04-version-order-retry",
+                        artifact_id=artifact_id,
+                    )
+                )
+                stored_artifact = await repositories.artifacts.get(artifact_id)
+
+            assert not duplicate.created
+            assert duplicate.value["id"] == first_id
+            assert stored_artifact["current_version_id"] == second_id
         finally:
             await database.dispose()
 

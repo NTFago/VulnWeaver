@@ -102,7 +102,7 @@ class ArtifactRegistrationService:
             mismatches.append("artifact_id")
         if initial and artifact["current_version_id"] != request.id:
             mismatches.append("current_version_id")
-        if artifact["kind"] is ArtifactKind.DERIVED:
+        if artifact["kind"] == ArtifactKind.DERIVED:
             if request.parent_version_id is None:
                 mismatches.append("parent_version_id")
             if request.produced_by is None:

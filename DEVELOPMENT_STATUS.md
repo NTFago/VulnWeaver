@@ -9,11 +9,11 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T04、T05 已完成）
-- **总体状态**：本地内容寻址工件库、Redis Streams 传输和 Outbox Dispatcher 已就绪，可进入 T06 Worker 租约与幂等框架
+- **当前阶段**：P1 控制面最小闭环（T04、T05 Review 修正已完成）
+- **总体状态**：T04/T05 已通过 Review 回归验证，可进入 T06 Worker 租约与幂等框架
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前开发分支 `feat/t04-t05-artifacts-dispatcher`，基于含 T02/T03 合并结果的本地 `main`
+- **版本管理**：Git；当前开发分支 `fix/t04-t05-review`，基于 T04/T05 实现分支
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：未分配（下一任务待认领）
 
@@ -26,8 +26,8 @@
 | T01 工程工作区 | 已完成 | Codex | 命名为 VulnWeaver；初始化 uv、pnpm、质量工具、Dev Container、PostgreSQL/Redis Compose；配置国内依赖源 | 无 | 2026-09-07 |
 | T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
 | T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 新增 SQLAlchemy Core 模型、Alembic `0001` 迁移、异步事务仓储和结构化错误；覆盖 Project、Artifact/ArtifactVersion、Task、Job、Outbox、TaskEvent，保证 Job/Outbox 原子写入、请求指纹幂等、未发布事件重放和工件版本去重 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
-| T04 本地内容寻址工件库 | 已完成 | Codex | 新增后端无关接口与本地 CAS；实现流式 SHA-256、大小上限、staging 刷盘、排他硬链接原子发布、同内容去重、严格对象引用解析、读取校验和结构化错误；ArtifactRegistrationService 将对象与 ArtifactVersion、父版本、工具身份及生成配置登记到 PostgreSQL | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
-| T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 新增 Redis Streams 客户端、稳定事件编码、Redis 7 Lua 原子去重、消费者组 read/ack；新增可运行 Dispatcher、Outbox `FOR UPDATE SKIP LOCKED` 批量领取、成功确认、结构化失败、指数退避和 dead-letter 终止态；Compose 以一次性迁移任务、非 root 用户、只读根文件系统和零能力集运行 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
+| T04 本地内容寻址工件库 | 已完成 | Codex | 主体实现及 Review 修正完成：字符串 `derived` 输入无法绕过谱系约束，合法字符串枚举可持久化；重复旧摘要不回退 current version；新摘要目录逐级 fsync；首版本循环外键的事务内临时 NULL 语义已明确 | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
+| T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -76,6 +76,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T04/T05 Codex Review 核查与修正
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/artifact-store/`、`code/packages/persistence/`、`code/packages/queue/`、`code/apps/dispatcher/`、对应测试、ADR-012、ADR-013、`DEVELOPMENT_STATUS.md`
+- 已完成：修复字符串枚举绕过派生谱系约束及其持久化兼容；将重复旧摘要定义为幂等重试并禁止 current version 回退；新摘要目录从父到叶逐级 fsync；Dispatcher 从整批长事务改为单条事件独立事务并统一使用数据库服务器时间；校验 Stream 冗余字段与事件载荷一致性，统一读取边界错误类型；补充两个真实 Dispatcher 并发回归
+- 测试与结果：新增用例先在旧实现稳定复现 5 个缺陷，修正后 93 个 Pytest 测试通过，分支覆盖率 91.37%；Ruff、Mypy、契约生成、TypeScript、锁文件与 Compose 配置全部通过；重新构建镜像后迁移容器退出码 0，Dispatcher 正常运行，PostgreSQL/Redis healthy
+- 问题：Review 所述 Artifact 初始 `current_version_id` 临时 NULL 已由同一事务和循环外键决定且已有说明；`verify()` 只接受 canonical 引用，返回值不存在非规范化路径；可恢复 Redis 故障维持无限次、有上限间隔的重试，避免可靠 Outbox 静默漏投
+- 阻碍点：无
+- 决策：补充 ADR-012 的版本指针语义和 ADR-013 的单条事务、数据库时钟及传输重试语义
+- 下一步：认领 T06，实现 Worker 消费循环、Job 租约领取/续约/接管、成功结果幂等登记、pending message 回收和 Worker dead-letter
 
 ### 2026-09-07：完成 T05 Redis Streams 与 Outbox Dispatcher
 
@@ -184,6 +196,7 @@
 | 2026-09-07 | T04 内容寻址工件库 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages` | 67 个测试通过，分支覆盖率 96.29%；流式哈希、原子发布、去重、边界拒绝、完整性校验、谱系和 PostgreSQL 登记均通过 | 未实现未引用对象 GC 与 MinIO 后端；不影响首版本地存储验收 |
 | 2026-09-07 | T05 队列与 Dispatcher | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages apps` | 87 个测试通过，分支覆盖率 91.17%；真实 PostgreSQL/Redis 覆盖发布、去重、read/ack、退避、dead-letter、重放与行锁领取 | Worker pending 接管、租约和执行结果幂等属于 T06 |
 | 2026-09-07 | T05 容器交付 | Compose 配置解析、`docker compose ... build dispatcher`、`up -d dispatcher`、日志及 `docker inspect` | 通过；迁移退出码 0，Dispatcher 运行中；用户为 `vulnweaver`、根文件系统只读、capabilities 全部移除、无宿主绑定挂载 | 未执行生产部署或多主机故障演练 |
+| 2026-09-07 | T04/T05 Review 回归 | 先运行新增缺陷用例复现，再执行 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check`、Compose 构建/启动/状态检查 | 93 个测试通过，分支覆盖率 91.37%；双 Dispatcher 在一个实例阻塞时可并发处理另一事件；迁移退出 0、服务健康且安全配置未回退 | 单条发布仍在事务中持有一条行锁和一个连接；高吞吐场景若需把网络 IO 移出事务，应另增带所有者令牌的 Outbox 领取租约 |
 
 ## 10. 下一步
 

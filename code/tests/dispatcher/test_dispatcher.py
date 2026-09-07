@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from redis.asyncio import Redis
@@ -80,35 +80,77 @@ def test_dispatcher_records_retryable_and_terminal_failures(
 ) -> None:
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
-        timestamp = datetime(2099, 9, 7, 12, 0, tzinfo=UTC)
         try:
             await _seed_outbox(database, "retry", "event:t05-retry")
+            before_retry = datetime.now(UTC)
             retry_dispatcher = OutboxDispatcher(
                 database,
                 _FailingPublisher(QueueUnavailable("redis is unavailable")),
                 DispatcherSettings(retry_base_seconds=2, retry_max_seconds=10),
-                clock=lambda: timestamp,
             )
             retry_report = await retry_dispatcher.dispatch_once()
+            after_retry = datetime.now(UTC)
             assert retry_report.failed == 1
             assert retry_report.dead_lettered == 0
             retry_row = await _outbox_row(database, "event:t05-retry")
             assert retry_row["publish_attempts"] == 1
-            assert retry_row["available_at"] == timestamp.replace(second=2)
+            assert before_retry + timedelta(seconds=2) <= retry_row["available_at"]
+            assert retry_row["available_at"] <= after_retry + timedelta(seconds=2)
             assert retry_row["last_error"]["code"] == "queue_unavailable"
 
             await _seed_outbox(database, "dead", "event:t05-dead")
             dead_dispatcher = OutboxDispatcher(
                 database,
                 _FailingPublisher(QueueMessageConflict("event ID conflict")),
-                clock=lambda: timestamp,
             )
             dead_report = await dead_dispatcher.dispatch_once()
             assert dead_report.dead_lettered == 1
             dead_row = await _outbox_row(database, "event:t05-dead")
-            assert dead_row["dead_lettered_at"] == timestamp
+            assert dead_row["dead_lettered_at"] is not None
             assert dead_row["dead_letter_reason"]["code"] == "queue_message_conflict"
         finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_concurrent_dispatchers_do_not_lock_an_entire_batch(
+    persistence_database_url: str,
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        first_queue = RedisStreamsClient(
+            QueueSettings(redis_url, namespace=redis_namespace)
+        )
+        second_queue = RedisStreamsClient(
+            QueueSettings(redis_url, namespace=redis_namespace)
+        )
+        blocking = _BlockingPublisher(first_queue)
+        first = OutboxDispatcher(database, blocking, DispatcherSettings(batch_size=2))
+        second = OutboxDispatcher(
+            database, second_queue, DispatcherSettings(batch_size=2)
+        )
+        first_task: asyncio.Task[object] | None = None
+        try:
+            await _seed_outbox(database, "concurrent-a", "event:t05-concurrent-a")
+            await _seed_outbox(database, "concurrent-b", "event:t05-concurrent-b")
+
+            first_task = asyncio.create_task(first.dispatch_once())
+            await asyncio.wait_for(blocking.started.wait(), timeout=2)
+            second_report = await asyncio.wait_for(second.dispatch_once(), timeout=2)
+            blocking.release.set()
+            first_report = await asyncio.wait_for(first_task, timeout=2)
+
+            assert second_report.published == 1
+            assert first_report.published == 1
+        finally:
+            blocking.release.set()
+            if first_task is not None and not first_task.done():
+                await first_task
+            await first_queue.close()
+            await second_queue.close()
             await database.dispose()
 
     asyncio.run(scenario())
@@ -153,6 +195,18 @@ class _FailingPublisher:
         if self._error is not None:
             raise self._error
         return PublishedMessage("unused", "0-0", str(event))
+
+
+class _BlockingPublisher:
+    def __init__(self, delegate: RedisStreamsClient) -> None:
+        self._delegate = delegate
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def publish(self, event: object) -> PublishedMessage:
+        self.started.set()
+        await self.release.wait()
+        return await self._delegate.publish(event)  # type: ignore[arg-type]
 
 
 async def _seed_outbox(database: Database, suffix: str, event_id: str) -> None:

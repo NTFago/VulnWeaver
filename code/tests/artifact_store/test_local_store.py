@@ -42,6 +42,25 @@ def test_same_content_is_published_once_and_can_be_verified(tmp_path: Path) -> N
     assert store.verify(first.object_ref).digest == first.digest
 
 
+def test_new_digest_directories_are_synced_from_parent_to_leaf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = LocalContentAddressedStore(tmp_path)
+    synced: list[Path] = []
+    monkeypatch.setattr(store, "_sync_directory", synced.append)
+    content = b"directory durability"
+    digest = hashlib.sha256(content).hexdigest()
+
+    store.put_stream(BytesIO(content), max_bytes=1024)
+
+    objects_root = tmp_path / "objects" / "sha256"
+    assert synced == [
+        objects_root,
+        objects_root / digest[:2],
+        objects_root / digest[:2] / digest[2:4],
+    ]
+
+
 def test_size_limit_rejects_content_and_cleans_staging(tmp_path: Path) -> None:
     store = LocalContentAddressedStore(tmp_path, chunk_size=4096)
 

@@ -79,8 +79,7 @@ class LocalContentAddressedStore:
                 os.fsync(temporary.fileno())
 
             target = self._path_for_digest(digest)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            self._assert_within_root(target.parent)
+            self._ensure_digest_directories(digest)
             try:
                 os.link(temporary_path, target)
                 created = True
@@ -155,6 +154,23 @@ class LocalContentAddressedStore:
 
     def _path_for_digest(self, digest: str) -> Path:
         return self._objects_root / digest[:2] / digest[2:4] / digest
+
+    def _ensure_digest_directories(self, digest: str) -> None:
+        parent = self._objects_root
+        for component in (digest[:2], digest[2:4]):
+            directory = parent / component
+            try:
+                directory.mkdir()
+            except FileExistsError:
+                if directory.is_symlink() or not directory.is_dir():
+                    raise ArtifactIntegrityError(
+                        "artifact digest directory is not a regular directory"
+                    ) from None
+            else:
+                # Persist each newly-created directory entry in its own parent.
+                self._sync_directory(parent)
+            self._assert_within_root(directory)
+            parent = directory
 
     def _existing_path(self, digest: str) -> Path:
         path = self._path_for_digest(digest)

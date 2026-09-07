@@ -95,7 +95,8 @@ class ArtifactRepository:
     async def add(self, artifact: Artifact) -> Artifact:
         validate_contract("Artifact", artifact)
         values = _artifact_values(artifact)
-        # The first version is registered separately in the same transaction.
+        # Break the cyclic FK only inside this transaction; add_version installs
+        # the contract's non-null current version before any other transaction can read it.
         values["current_version_id"] = None
         try:
             await self._connection.execute(insert(artifacts).values(values))
@@ -161,11 +162,12 @@ class ArtifactRepository:
             stored = version
             created = True
 
-        await self._connection.execute(
-            update(artifacts)
-            .where(artifacts.c.id == version["artifact_id"])
-            .values(current_version_id=stored["id"])
-        )
+        if created:
+            await self._connection.execute(
+                update(artifacts)
+                .where(artifacts.c.id == version["artifact_id"])
+                .values(current_version_id=stored["id"])
+            )
         return CreateResult(stored, created)
 
 
@@ -346,7 +348,7 @@ class OutboxRepository:
             for row in rows
         ]
 
-    async def mark_published(self, event_id: str, *, published_at: datetime) -> bool:
+    async def mark_published(self, event_id: str) -> bool:
         result = await self._connection.execute(
             update(outbox_events)
             .where(
@@ -354,7 +356,7 @@ class OutboxRepository:
                 outbox_events.c.published_at.is_(None),
                 outbox_events.c.dead_lettered_at.is_(None),
             )
-            .values(published_at=published_at)
+            .values(published_at=func.now())
         )
         return result.rowcount == 1
 
@@ -364,9 +366,7 @@ class OutboxRepository:
         *,
         error: dict[str, object],
         retry_after: timedelta,
-        failed_at: datetime | None = None,
     ) -> bool:
-        timestamp = failed_at or datetime.now(UTC)
         result = await self._connection.execute(
             update(outbox_events)
             .where(
@@ -377,7 +377,7 @@ class OutboxRepository:
             .values(
                 publish_attempts=outbox_events.c.publish_attempts + 1,
                 last_error=error,
-                available_at=timestamp + retry_after,
+                available_at=func.now() + retry_after,
             )
         )
         return result.rowcount == 1
@@ -387,7 +387,6 @@ class OutboxRepository:
         event_id: str,
         *,
         reason: dict[str, object],
-        dead_lettered_at: datetime,
     ) -> bool:
         result = await self._connection.execute(
             update(outbox_events)
@@ -397,7 +396,7 @@ class OutboxRepository:
                 outbox_events.c.dead_lettered_at.is_(None),
             )
             .values(
-                dead_lettered_at=dead_lettered_at,
+                dead_lettered_at=func.now(),
                 dead_letter_reason=reason,
                 last_error=reason,
             )
@@ -481,7 +480,7 @@ def _project_from_row(row: RowMapping) -> Project:
 def _artifact_values(artifact: Artifact) -> dict[str, object]:
     return {
         **artifact,
-        "kind": artifact["kind"].value,
+        "kind": str(artifact["kind"]),
         "created_at": _parse_datetime(artifact["created_at"]),
     }
 
