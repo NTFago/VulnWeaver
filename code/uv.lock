@@ -4,6 +4,7 @@ requires-python = "==3.12.*"
 
 [manifest]
 members = [
+    "vulnweaver-artifact-store",
     "vulnweaver-contracts",
     "vulnweaver-domain",
     "vulnweaver-persistence",
@@ -425,6 +426,21 @@ wheels = [
 ]
 
 [[package]]
+name = "vulnweaver-artifact-store"
+version = "0.1.0"
+source = { editable = "packages/artifact-store" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-persistence" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
+]
+
+[[package]]
 name = "vulnweaver-contracts"
 version = "0.1.0"
 source = { editable = "packages/contracts" }
@@ -470,6 +486,7 @@ name = "vulnweaver-workspace"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-persistence" },
@@ -486,6 +503,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },

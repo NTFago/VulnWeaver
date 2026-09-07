@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 from vulnweaver_contracts import (
     Artifact,
+    ArtifactKind,
     ArtifactVersion,
     Job,
     JobKind,
@@ -103,6 +104,31 @@ class ArtifactRepository:
                 "artifact identifier already exists", details={"artifact_id": artifact["id"]}
             ) from error
         return artifact
+
+    async def get(self, artifact_id: str) -> Artifact:
+        row = (
+            await self._connection.execute(
+                select(artifacts).where(artifacts.c.id == artifact_id)
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound(
+                "artifact not found", details={"artifact_id": artifact_id}
+            )
+        return _artifact_from_row(row)
+
+    async def get_version(self, version_id: str) -> ArtifactVersion:
+        row = (
+            await self._connection.execute(
+                select(artifact_versions).where(artifact_versions.c.id == version_id)
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound(
+                "artifact version not found",
+                details={"artifact_version_id": version_id},
+            )
+        return _artifact_version_from_row(row)
 
     async def add_version(self, version: ArtifactVersion) -> CreateResult[ArtifactVersion]:
         validate_contract("ArtifactVersion", version)
@@ -414,6 +440,17 @@ def _artifact_values(artifact: Artifact) -> dict[str, object]:
         "kind": artifact["kind"].value,
         "created_at": _parse_datetime(artifact["created_at"]),
     }
+
+
+def _artifact_from_row(row: RowMapping) -> Artifact:
+    return Artifact(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        project_id=row["project_id"],
+        kind=ArtifactKind(row["kind"]),
+        current_version_id=row["current_version_id"],
+        created_at=_format_datetime(row["created_at"]),
+    )
 
 
 def _artifact_version_values(version: ArtifactVersion) -> dict[str, object]:

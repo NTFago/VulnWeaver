@@ -5,6 +5,7 @@ description = "Evidence-driven agentic vulnerability discovery"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "vulnweaver-artifact-store",
     "vulnweaver-contracts",
     "vulnweaver-domain",
     "vulnweaver-persistence",
@@ -23,12 +24,18 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["packages/contracts", "packages/domain", "packages/persistence"]
+members = [
+    "packages/artifact-store",
+    "packages/contracts",
+    "packages/domain",
+    "packages/persistence",
+]
 
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-artifact-store = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -43,7 +50,12 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["vulnweaver_contracts", "vulnweaver_domain", "vulnweaver_persistence"]
+source_pkgs = [
+    "vulnweaver_artifact_store",
+    "vulnweaver_contracts",
+    "vulnweaver_domain",
+    "vulnweaver_persistence",
+]
 omit = [
     "*/vulnweaver_persistence/alembic/env.py",
     "*/vulnweaver_persistence/alembic/versions/*.py",

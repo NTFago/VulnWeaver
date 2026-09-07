@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T03 PostgreSQL 迁移与仓储已完成）
-- **总体状态**：PostgreSQL 控制面核心模型、迁移与事务仓储已就绪，可进入 T04 内容寻址工件库
+- **当前阶段**：P1 控制面最小闭环（T04 已完成，T05 Redis Streams 与 Dispatcher 进行中）
+- **总体状态**：本地内容寻址工件库已通过验收；正在接入 PostgreSQL Outbox 到 Redis Streams 的可靠投递
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前位于 `main`，T02/T03 已分别通过 PR #1/#2 合并，本地功能分支已清理
+- **版本管理**：Git；当前开发分支 `feat/t04-t05-artifacts-dispatcher`，基于含 T02/T03 合并结果的本地 `main`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配（下一任务待认领）
+- **当前负责人**：Codex（T05）
 
 ## 3. 开发进度
 
@@ -26,6 +26,8 @@
 | T01 工程工作区 | 已完成 | Codex | 命名为 VulnWeaver；初始化 uv、pnpm、质量工具、Dev Container、PostgreSQL/Redis Compose；配置国内依赖源 | 无 | 2026-09-07 |
 | T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
 | T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 新增 SQLAlchemy Core 模型、Alembic `0001` 迁移、异步事务仓储和结构化错误；覆盖 Project、Artifact/ArtifactVersion、Task、Job、Outbox、TaskEvent，保证 Job/Outbox 原子写入、请求指纹幂等、未发布事件重放和工件版本去重 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
+| T04 本地内容寻址工件库 | 已完成 | Codex | 新增后端无关接口与本地 CAS；实现流式 SHA-256、大小上限、staging 刷盘、排他硬链接原子发布、同内容去重、严格对象引用解析、读取校验和结构化错误；ArtifactRegistrationService 将对象与 ArtifactVersion、父版本、工具身份及生成配置登记到 PostgreSQL | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
+| T05 Redis Streams 与 Outbox Dispatcher | 进行中 | Codex | 已确认依赖 T03 Outbox 和 T04 工件引用，不承担 T06 Worker 租约/幂等执行职责 | 实现 Redis Streams 发布/消费基础、Outbox 行锁领取、投递确认、失败退避、恢复重放和重复投递测试 | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -68,10 +70,23 @@
 | ADR-009 | 使用不挂载 Docker Socket 的 Dev Container，动态样本另交 Sandbox Runner | 统一开发工具链，同时保持开发环境与不可信执行边界 | `code/docs/adr/009-containerized-development.md` |
 | ADR-010 | 使用根目录 Git 仓库进行版本管理，`main` 为集成基线 | 为多人和多 Agent 开发提供可审查、可追溯的版本历史 | `code/docs/adr/010-git-version-control.md` |
 | ADR-011 | PostgreSQL 持久化采用 SQLAlchemy Core 2.x、psycopg 3 与显式 Alembic 迁移 | 提供清晰的异步事务边界、可审查 DDL，并让 Job 与 Outbox 在同一事务登记 | `code/docs/adr/011-postgresql-persistence-toolkit.md` |
+| ADR-012 | 首版本地工件库采用 SHA-256 内容寻址、同文件系统 staging 与排他硬链接原子发布 | 保证同内容稳定引用、拒绝覆盖与调用方宿主路径，并保留 MinIO 后端替换能力 | `code/docs/adr/012-local-content-addressed-artifact-store.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T04 本地内容寻址工件库
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/artifact-store/`、`code/tests/artifact_store/`、`code/packages/persistence/`、`code/tests/conftest.py`、`code/pyproject.toml`、`code/uv.lock`、`code/docs/adr/012-local-content-addressed-artifact-store.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：实现后端无关 ArtifactStore 协议与本地 CAS；增量计算 SHA-256，以 canonical object ref 管理对象；使用同文件系统 staging、刷盘与排他硬链接发布；拒绝超限、非二进制流、非法引用、路径逃逸和损坏对象；实现 Artifact/ArtifactVersion 数据库读取及对象写入后登记服务，强制派生工件记录父版本、工具身份和生成配置
+- 测试与结果：67 个 Pytest 测试通过，分支覆盖率 96.29%；Ruff 与 Mypy 通过；真实 PostgreSQL 测试验证初始工件、内容去重、版本读取、当前版本和派生谱系
+- 问题：对象写入成功但数据库事务失败时可能留下安全的未引用对象；ADR-012 明确保留对象并由后续受控 GC 清理，避免误删并发复用内容
+- 阻碍点：无
+- 决策：ADR-012
+- 下一步：完成 T05 Redis Streams 客户端、消费者组基础与 Outbox Dispatcher，并验证投递失败、恢复和重复事件去重
 
 ### 2026-09-07：完成 T03 PostgreSQL 迁移与事务仓储
 
@@ -153,12 +168,13 @@
 | 2026-09-07 | T03 Python 回归与覆盖率 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90` | 55 个测试通过；分支覆盖率 97.59% | Alembic 环境引导与不可变历史迁移脚本不计逐行覆盖，由迁移集成测试验证 |
 | 2026-09-07 | T03 静态与跨语言检查 | `uv run --no-sync ruff check .`、`uv run --no-sync mypy packages`、契约生成脚本 `--check`、`pnpm run check` | 通过；20 个 Python 源文件无类型错误，契约生成物与 TypeScript 严格检查无回归 | 无 |
 | 2026-09-07 | T03 依赖与基础设施 | `uv lock --check`、`docker compose -f compose.yaml -f compose.dev.yaml config --quiet`、`docker compose ... ps` | 通过；锁文件有效，PostgreSQL 16 与 Redis 7 均 healthy | 未推送远程或执行生产部署 |
+| 2026-09-07 | T04 内容寻址工件库 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages` | 67 个测试通过，分支覆盖率 96.29%；流式哈希、原子发布、去重、边界拒绝、完整性校验、谱系和 PostgreSQL 登记均通过 | 未实现未引用对象 GC 与 MinIO 后端；不影响首版本地存储验收 |
 
 ## 10. 下一步
 
-1. 认领 T04，建立 `packages/artifact-store` 接口和本地内容寻址实现，默认只接受授权输入与受控派生产物。
-2. 为流式 SHA-256、原子落盘、同内容去重、覆盖拒绝、父工件谱系和路径逃逸拦截补齐单元/集成测试，并接入 T03 ArtifactVersion 仓储。
-3. T04 完成后认领 T05，基于 T03 Outbox 仓储实现 Redis Streams Dispatcher 的可靠投递与重复消息验证。
+1. 在 `packages/queue` 实现 Redis Streams 发布、稳定事件编码、重复 event ID 检测及消费者组 read/ack 基础。
+2. 在 `apps/dispatcher` 实现 Outbox 批量行锁领取、发布成功确认、结构化失败记录、指数退避和可停止轮询循环。
+3. 使用真实 PostgreSQL 16 与 Redis 7 验证多 Dispatcher 跳过锁定记录、故障恢复、重复投递不新增 Stream entry，完成后进入 T06 Worker 租约与幂等框架。
 
 ## 11. 每次工作结束时的更新模板
 

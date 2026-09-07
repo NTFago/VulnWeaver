@@ -11,7 +11,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from vulnweaver_persistence import downgrade_database, upgrade_database
 
-_SAFE_TEST_DATABASE = re.compile(r"^vulnweaver_t03_test_[0-9a-f]{12}$")
+_SAFE_TEST_DATABASE = re.compile(r"^vulnweaver_test_[0-9a-f]{12}$")
 
 
 @pytest.fixture(scope="session")
@@ -20,7 +20,7 @@ def persistence_database_url() -> Iterator[str]:
         "VULNWEAVER_TEST_ADMIN_DATABASE_URL",
         "postgresql+psycopg://vulnweaver:vulnweaver_dev_only@127.0.0.1:5432/postgres",
     )
-    database_name = f"vulnweaver_t03_test_{uuid.uuid4().hex[:12]}"
+    database_name = f"vulnweaver_test_{uuid.uuid4().hex[:12]}"
     assert _SAFE_TEST_DATABASE.fullmatch(database_name)
     admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
     try:
