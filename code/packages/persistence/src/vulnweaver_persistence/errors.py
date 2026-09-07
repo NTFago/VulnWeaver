@@ -37,3 +37,8 @@ class EntityNotFound(PersistenceError):
 
 class PersistenceInvariantError(PersistenceError):
     code = "persistence_invariant_violation"
+
+
+class JobLeaseConflict(PersistenceError):
+    code = "job_lease_conflict"
+    retryable = True

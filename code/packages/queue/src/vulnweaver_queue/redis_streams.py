@@ -93,6 +93,12 @@ class StreamMessage:
     event: QueueEvent
 
 
+@dataclass(frozen=True, slots=True)
+class StaleClaimBatch:
+    next_start_id: str
+    messages: tuple[StreamMessage, ...]
+
+
 class EventPublisher(Protocol):
     async def publish(self, event: QueueEvent) -> PublishedMessage: ...
 
@@ -228,6 +234,41 @@ class RedisStreamsClient:
             raise _unavailable("acknowledge", error) from error
         return int(acknowledged) == 1
 
+    async def claim_stale(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_milliseconds: int,
+        count: int = 10,
+        start_id: str = "0-0",
+    ) -> StaleClaimBatch:
+        """Transfer idle pending entries to a live consumer using XAUTOCLAIM."""
+
+        self._ensure_owned_stream(stream)
+        _validate_consumer_name(group, "group")
+        _validate_consumer_name(consumer, "consumer")
+        if min_idle_milliseconds < 1 or min_idle_milliseconds > 86_400_000:
+            raise QueueConfigurationError(
+                "minimum pending idle duration must be between 1 ms and 24 hours"
+            )
+        if count < 1 or count > 1000:
+            raise QueueConfigurationError("stale claim count must be between 1 and 1000")
+        try:
+            response = await self._client.xautoclaim(
+                name=stream,
+                groupname=group,
+                consumername=consumer,
+                min_idle_time=min_idle_milliseconds,
+                start_id=start_id,
+                count=count,
+                justid=False,
+            )
+        except RedisError as error:
+            raise _unavailable("claim_stale", error) from error
+        return _decode_stale_claim(stream, response)
+
     async def healthcheck(self) -> None:
         try:
             await self._client.ping()  # pyright: ignore[reportUnknownMemberType]
@@ -292,6 +333,19 @@ def _decode_stream_response(response: object) -> list[StreamMessage]:
     ) as error:
         raise MalformedQueueMessage("Redis Stream entry contains an invalid event") from error
     return messages
+
+
+def _decode_stale_claim(stream: str, response: object) -> StaleClaimBatch:
+    try:
+        values = cast(list[object], response)
+        if len(values) < 2:
+            raise ValueError("XAUTOCLAIM response is incomplete")
+        next_start_id = _string(values[0])
+        entries = cast(list[tuple[str, dict[str, str]]], values[1])
+        messages = _decode_stream_response([(stream, entries)])
+    except (TypeError, ValueError) as error:
+        raise MalformedQueueMessage("Redis XAUTOCLAIM response is invalid") from error
+    return StaleClaimBatch(next_start_id, tuple(messages))
 
 
 def _validate_consumer_name(value: str, field: str) -> None:

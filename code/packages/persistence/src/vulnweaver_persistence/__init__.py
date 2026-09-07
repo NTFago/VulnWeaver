@@ -5,6 +5,7 @@ from vulnweaver_persistence.errors import (
     EntityConflict,
     EntityNotFound,
     IdempotencyConflict,
+    JobLeaseConflict,
     PersistenceError,
     PersistenceInvariantError,
 )
@@ -13,6 +14,8 @@ from vulnweaver_persistence.models import metadata
 from vulnweaver_persistence.repositories import (
     CreateResult,
     JobEnqueueResult,
+    JobLeaseClaim,
+    JobLeaseClaimOutcome,
     OutboxMessage,
     Repositories,
 )
@@ -25,6 +28,9 @@ __all__ = [
     "EntityNotFound",
     "IdempotencyConflict",
     "JobEnqueueResult",
+    "JobLeaseClaim",
+    "JobLeaseClaimOutcome",
+    "JobLeaseConflict",
     "OutboxMessage",
     "PersistenceError",
     "PersistenceInvariantError",

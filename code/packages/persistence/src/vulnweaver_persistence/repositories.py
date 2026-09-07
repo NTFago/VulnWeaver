@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import cast
 
 from sqlalchemy import RowMapping, func, select, update
@@ -18,6 +19,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobRequestedEvent,
     JobStatus,
+    Lease,
     PermissionMode,
     Project,
     QueueEvent,
@@ -31,6 +33,7 @@ from vulnweaver_persistence.errors import (
     EntityConflict,
     EntityNotFound,
     IdempotencyConflict,
+    JobLeaseConflict,
     PersistenceInvariantError,
 )
 from vulnweaver_persistence.fingerprints import request_fingerprint
@@ -63,6 +66,20 @@ class OutboxMessage:
     event: QueueEvent
     publish_attempts: int
     available_at: datetime
+
+
+class JobLeaseClaimOutcome(StrEnum):
+    ACQUIRED = "acquired"
+    BUSY = "busy"
+    COMPLETED = "completed"
+    EXHAUSTED = "exhausted"
+    NOT_RUNNABLE = "not_runnable"
+
+
+@dataclass(frozen=True, slots=True)
+class JobLeaseClaim:
+    job: Job
+    outcome: JobLeaseClaimOutcome
 
 
 class ProjectRepository:
@@ -305,6 +322,135 @@ class JobRepository:
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         return _job_from_row(row)
+
+    async def claim_lease(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        lease_seconds: int,
+        heartbeat_interval_seconds: int,
+    ) -> JobLeaseClaim:
+        """Atomically claim queued work or take over an expired running Job."""
+
+        if heartbeat_interval_seconds < 1:
+            raise ValueError("heartbeat interval must be positive")
+        if lease_seconds <= heartbeat_interval_seconds:
+            raise ValueError("lease duration must exceed its heartbeat interval")
+
+        row, now = await self._locked_job_with_database_time(job_id)
+        current = _job_from_row(row)
+        status = current["status"]
+        if status is JobStatus.SUCCEEDED:
+            return JobLeaseClaim(current, JobLeaseClaimOutcome.COMPLETED)
+        if status not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}:
+            return JobLeaseClaim(current, JobLeaseClaimOutcome.NOT_RUNNABLE)
+
+        current_lease = current["lease"]
+        if status is JobStatus.RUNNING and current_lease is not None:
+            expires_at = _parse_datetime(current_lease["expires_at"])
+            if expires_at > now:
+                outcome = (
+                    JobLeaseClaimOutcome.ACQUIRED
+                    if current_lease["owner"] == owner
+                    else JobLeaseClaimOutcome.BUSY
+                )
+                return JobLeaseClaim(current, outcome)
+
+        if current["attempt"] >= current["retry_policy"]["max_attempts"]:
+            return JobLeaseClaim(current, JobLeaseClaimOutcome.EXHAUSTED)
+
+        lease = Lease(
+            owner=owner,
+            expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+        validate_contract("Lease", lease)
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.RUNNING.value,
+                attempt=jobs.c.attempt + 1,
+                lease=lease,
+                failure=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return JobLeaseClaim(await self.get(job_id), JobLeaseClaimOutcome.ACQUIRED)
+
+    async def renew_lease(self, job_id: str, *, owner: str, lease_seconds: int) -> Job:
+        """Extend an active lease only while its owner still holds it."""
+
+        row, now = await self._locked_job_with_database_time(job_id)
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if current["status"] is not JobStatus.RUNNING or lease is None:
+            raise JobLeaseConflict("job has no active lease", details={"job_id": job_id})
+        if lease["owner"] != owner or _parse_datetime(lease["expires_at"]) <= now:
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": job_id, "owner": owner},
+            )
+        if lease_seconds <= lease["heartbeat_interval_seconds"]:
+            raise ValueError("lease duration must exceed its heartbeat interval")
+
+        renewed = Lease(
+            owner=owner,
+            expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
+            heartbeat_interval_seconds=lease["heartbeat_interval_seconds"],
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                lease=renewed,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def release_lease(self, job_id: str, *, owner: str) -> Job:
+        """Return unfinished work to the queued state during retry or graceful stop."""
+
+        row, now = await self._locked_job_with_database_time(job_id)
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+        ):
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": job_id, "owner": owner},
+            )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.QUEUED.value,
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def _locked_job_with_database_time(
+        self, job_id: str
+    ) -> tuple[RowMapping, datetime]:
+        row = (
+            await self._connection.execute(
+                select(jobs).where(jobs.c.id == job_id).with_for_update()
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound("job not found", details={"job_id": job_id})
+        now = (await self._connection.execute(select(func.now()))).scalar_one()
+        return row, now
 
 
 class OutboxRepository:

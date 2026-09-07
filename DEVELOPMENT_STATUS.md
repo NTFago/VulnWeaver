@@ -9,11 +9,11 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（CI 质量门禁已完成，进入 T06）
-- **总体状态**：Ruff、Pyright、pytest 与覆盖率检查已固化为 GitHub Actions 必过门禁
+- **当前阶段**：P1 控制面最小闭环（T06 Worker 租约与幂等框架进行中）
+- **总体状态**：Job 租约与 Redis pending 接管原语已完成，正在进入幂等结果、心跳循环与 Worker dead-letter
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前开发分支 `chore/ci-quality-gate`（已推送至 `origin`，本地质量门复验通过），基于 T04/T05 Review 最新实现
+- **版本管理**：Git；CI 分支及已合并历史分支已在本地和远程清理；当前开发分支 `feat/t06-worker-reliability`，基于最新 `main`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：Codex
 
@@ -29,6 +29,7 @@
 | T04 本地内容寻址工件库 | 已完成 | Codex | 主体实现及 Review 修正完成：字符串 `derived` 输入无法绕过谱系约束，合法字符串枚举可持久化；重复旧摘要不回退 current version；新摘要目录逐级 fsync；首版本循环外键的事务内临时 NULL 语义已明确 | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
 | T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
+| T06 Worker 租约与幂等框架 | 进行中 | Codex | 已清理本地/远程已合并分支；实现数据库时钟与行锁保护的租约领取/续约/释放、尝试上限，以及 Redis `XAUTOCLAIM` pending 接管；98 个测试通过 | 实现幂等最终结果、心跳执行循环、ACK 时机、优雅停止和 Worker dead-letter | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -74,10 +75,23 @@
 | ADR-012 | 首版本地工件库采用 SHA-256 内容寻址、同文件系统 staging 与排他硬链接原子发布 | 保证同内容稳定引用、拒绝覆盖与调用方宿主路径，并保留 MinIO 后端替换能力 | `code/docs/adr/012-local-content-addressed-artifact-store.md` |
 | ADR-013 | PostgreSQL Outbox 到 Redis Streams 采用至少一次交付、稳定事件 ID 和 Redis 内短期原子去重 | 正确认知跨存储崩溃窗口，同时避免等价重试重复追加并要求 T06 保护持久化副作用 | `code/docs/adr/013-at-least-once-outbox-to-redis.md` |
 | ADR-014 | CI 使用 Ruff、Pyright 与 pytest 分层门禁，在 PR/`main` 推送/手动触发时以只读权限运行 | 分层覆盖规范、类型与运行行为，把质量检查固化为必过门禁 | `code/docs/adr/014-ci-quality-gate.md` |
+| ADR-015 | PostgreSQL Job 租约作为执行权事实来源，Redis pending 仅负责传输与超时接管 | 防止崩溃、ACK 丢失或重复消息造成同一 Job 并发执行 | `code/docs/adr/015-job-leases-and-pending-recovery.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T06 第一检查点——租约与 Pending 接管原语
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/`、`code/packages/queue/`、`code/tests/persistence/test_job_leases.py`、`code/tests/queue/test_redis_streams.py`、`code/docs/adr/015-job-leases-and-pending-recovery.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：将本地 `main` 快进到 PR #3 并删除本地/远程全部已合并任务分支；创建 `feat/t06-worker-reliability`；实现独占租约、同 owner 幂等领取、续约、释放、过期接管、尝试上限和 Redis `XAUTOCLAIM` pending 转移
+- 测试与结果：`pnpm run check` 通过；Ruff 0 问题、Pyright 0 错误、98 个 pytest 测试通过、分支覆盖率 90.61%、TypeScript 通过；定向 PostgreSQL/Redis 测试 17 个通过
+- 问题：无新增；Q-002、Q-003 保留
+- 阻碍点：无
+- 决策：ADR-015
+- 下一步：新增不可变 JobResult 并实现 Worker 心跳执行循环、持久化成功后 ACK、失败重试与幂等 dead-letter
 
 ### 2026-09-07：完成 T01.1 CI 质量门禁
 
@@ -188,20 +202,6 @@
 - 决策：ADR-007、ADR-008、ADR-009
 - 下一步：认领 T02，定义公共实体、状态机、事件信封、错误格式与 Schema 版本策略
 
-### 2026-09-07：建立稳定开发与交接规则
-
-- 新增根目录 `AGENTS.md`，统一代码边界、实现纪律、安全红线、验证标准和交接流程。
-- 将本文件调整为动态交接台账，移除重复的稳定规则。
-- 约定最近完成记录只保留最近 10 条，长期技术决策归档到 `code/docs/adr/`。
-- 本次仅修改项目文档，未修改业务代码。
-
-### 2026-09-07：完成实现规划
-
-- 根据架构设计拆分 M01-M17 实现模块。
-- 给出 P0-P5 交付阶段和 T01-T22 首版任务包。
-- 初始化 `DEVELOPMENT_STATUS.md` 开发上下文与 `code/` 目录。
-- 尚未编写业务代码或执行测试。
-
 ## 9. 验证记录
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
@@ -226,12 +226,13 @@
 | 2026-09-07 | T03 枚举兼容性回归 | 新增合法字符串枚举 PostgreSQL 集成测试后执行全量 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check` 与 Compose 配置检查 | 94 个测试通过，分支覆盖率 91.60%；Project/Artifact/Task/Job 字符串枚举写入并按生成枚举读回 | 无 |
 | 2026-09-07 | T01.1 CI 质量门禁 | `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript `tsc --noEmit`）、`uv lock --check`、`pnpm install --frozen-lockfile`；核对 `actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v6` 版本有效性与 `package-manager-cache` 输入 | 通过；Pyright 0 错误、94 个测试通过、分支覆盖率 91.60%、契约生成漂移检查经 pytest 通过、锁文件一致 | GitHub Actions 工作流尚未在远端 runner 实跑；平台层必需检查需仓库管理员配置 |
 | 2026-09-07 | T01.1 推送前复验与分支推送 | 确认 PostgreSQL/Redis healthy 后执行 `pnpm run check`、`uv lock --check`、`pnpm install --frozen-lockfile`，随后 `git push -u origin chore/ci-quality-gate` | 通过；结果与上一次记录一致（Ruff 0 问题、Pyright 0 错误、94 测试、覆盖率 91.60%、TypeScript 通过、锁文件一致）；分支已推送并建立上游跟踪 | GitHub Actions 仍需通过 PR 或手动触发才会实跑（推送非 `main` 分支不触发）；分支保护必需检查仍待平台配置 |
+| 2026-09-07 | T06 租约与 Pending 接管 | `pnpm run check`；定向执行 `pytest tests/persistence/test_job_leases.py tests/queue/test_redis_streams.py -q` | 通过；98 个全量测试、90.61% 分支覆盖率；数据库租约竞争/续约/释放/过期接管/尝试耗尽与 Redis `XAUTOCLAIM` 均通过 | 幂等 JobResult、Worker 心跳循环、最终 ACK 与 dead-letter 尚未实现 |
 
 ## 10. 下一步
 
-1. 认领 T06，在独立 Worker SDK 中实现消费者组循环、ACK 时机、优雅停止和统一结构化执行结果。
-2. 为 Job 增加租约领取、续约、释放和过期接管仓储，使用状态版本/条件更新保证单一有效执行者。
-3. 用故障注入验证 ACK 丢失、消息重复、Worker 崩溃、租约接管、超过重试上限进入 Worker dead-letter，以及成功结果只登记一次。
+1. 新增不可变 `JobResult` 持久化与唯一 Job 约束，确保相同结果幂等、冲突结果拒绝。
+2. 实现 Worker 消费/心跳循环：先取得数据库租约，持久化最终结果后 ACK；停止时不再领取并安全释放未完成租约。
+3. 实现可重试失败、尝试耗尽和 Redis dead-letter 原子转移，用故障注入验证 ACK 丢失、重复消息与 Worker 崩溃。
 
 ## 11. 每次工作结束时的更新模板
 

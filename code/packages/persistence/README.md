@@ -18,3 +18,8 @@ deployment migration job. The URL is injected at runtime and must use
 The initial revision covers Project, Artifact/ArtifactVersion, Task, Job, Outbox and
 TaskEvent. Finding/Evidence and PAIR tables are added by their owning task packages when
 those contracts acquire persistence behavior.
+
+T06 adds transaction-scoped Job lease primitives. `claim_lease()` locks the Job row and
+uses PostgreSQL server time to grant the first attempt or take over an expired lease;
+`renew_lease()` and `release_lease()` require the exact owner. The database lease is the
+execution authority even when Redis redelivers a pending message.

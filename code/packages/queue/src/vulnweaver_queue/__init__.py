@@ -12,6 +12,7 @@ from vulnweaver_queue.redis_streams import (
     PublishedMessage,
     QueueSettings,
     RedisStreamsClient,
+    StaleClaimBatch,
     StreamMessage,
     StreamNames,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "QueueSettings",
     "QueueUnavailable",
     "RedisStreamsClient",
+    "StaleClaimBatch",
     "StreamMessage",
     "StreamNames",
 ]

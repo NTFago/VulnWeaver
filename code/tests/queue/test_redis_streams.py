@@ -196,6 +196,43 @@ def test_stream_read_bounds_use_structured_configuration_errors(
     asyncio.run(scenario())
 
 
+def test_idle_pending_message_can_be_claimed_by_another_consumer(
+    redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        try:
+            event = job_event(job(), "event:t06-stale")
+            await client.publish(event)
+            await client.ensure_group(client.streams.jobs, "workers")
+            delivered = await client.read_group(
+                client.streams.jobs,
+                "workers",
+                "worker-dead",
+                block_milliseconds=10,
+            )
+            assert len(delivered) == 1
+            await asyncio.sleep(0.01)
+
+            claimed = await client.claim_stale(
+                client.streams.jobs,
+                "workers",
+                "worker-live",
+                min_idle_milliseconds=1,
+            )
+            assert claimed.messages == tuple(delivered)
+            assert claimed.next_start_id
+            assert await client.acknowledge(
+                client.streams.jobs,
+                "workers",
+                claimed.messages[0].message_id,
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_event_and_unavailable_redis_are_structured(
     redis_namespace: str,
 ) -> None:
