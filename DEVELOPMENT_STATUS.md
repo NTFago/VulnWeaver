@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P0 工程骨架与契约冻结（T01 已完成，下一任务 T02）
-- **总体状态**：开发环境与工程工作区已就绪，无当前阻碍
+- **当前阶段**：P0 工程骨架与契约冻结（T01、T02 已完成，下一任务 T03）
+- **总体状态**：公共契约与领域规则已冻结为 v1.0.0，无当前阻碍
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前分支 `main`，初始化基线已提交，Agent 自主维护日常分支与提交
+- **版本管理**：Git；当前开发分支 `feat/t02-contracts`，T02 变更已完成验证并按任务提交
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配（T02 待认领）
+- **当前负责人**：未分配（T03 待认领）
 
 ## 3. 开发进度
 
@@ -24,7 +24,7 @@
 | 架构设计 | 已完成 | 用户/设计阶段 | 系统目标、架构、安全、数据与技术选型已定义 | 实现中持续校验 | 2026-09-07 |
 | 实现模块拆分 | 已完成 | Agent | M01-M17、P0-P5、T01-T22 已拆分 | 随实现维护依赖变化 | 2026-09-07 |
 | T01 工程工作区 | 已完成 | Codex | 命名为 VulnWeaver；初始化 uv、pnpm、质量工具、Dev Container、PostgreSQL/Redis Compose；配置国内依赖源 | 无 | 2026-09-07 |
-| T02 公共契约 | 未开始 | 未分配 | 无 | 定义实体、状态机、Schema 和生成流程 | 2026-09-07 |
+| T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -33,6 +33,7 @@
 | ID | 问题 | 影响 | 临时处理 | 状态 | 负责人 |
 |---|---|---|---|---|---|
 | Q-002 | 首版开发环境是否必须同时支持 Windows Worker 未明确 | 影响 P4 的本机验收范围 | 先冻结跨平台消息协议，Windows 执行节点在 Linux MVP 后实现 | 待处理 | 未分配 |
+| Q-003 | Windows Python 3.12 在含中文的工作区路径中以 GBK 读取 uv editable `.pth`，会导致启动失败 | 影响 Windows 宿主直接使用默认 editable workspace；Dev Container/Linux 不受影响 | Windows 本机使用 `uv sync --no-editable`，验证命令使用 `uv run --no-sync`；等待 Python/uv 上游兼容或迁移到纯 ASCII 路径 | 待处理 | 未分配 |
 
 ## 5. 当前阻碍点
 
@@ -69,6 +70,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T02 公共契约与领域规则
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/contracts/`、`code/packages/domain/`、`code/tests/contracts/`、`code/tests/domain/`、`code/pyproject.toml`、`code/uv.lock`、`code/pnpm-lock.yaml`
+- 已完成：以 JSON Schema Draft 2020-12 冻结 v1.0.0 实体、API、队列、Worker、`ActionPlan`、`ToolSpec`、`CapabilityProfile` 和 `FindingPolicy`；从同一来源生成 Python/TypeScript 类型；实现运行时契约校验、Task/Job/Run/Poc/Finding 状态机、Task 聚合、证据确认、利用门禁及幂等键规则
+- 测试与结果：39 个 Pytest 测试通过，分支覆盖率 98.98%；Ruff、Mypy、JSON Schema 元校验、生成漂移检查和 TypeScript 严格检查通过
+- 问题：Q-003；已使用非 editable 安装完成 Windows 本机验证，不影响任务产物
+- 阻碍点：无
+- 决策：无新增重大架构决策；沿用 ADR-001、ADR-003、ADR-006、ADR-008
+- 下一步：认领 T03，依据 v1.0.0 契约建立 PostgreSQL 迁移、仓储与 Job/Outbox 原子事务
 
 ### 2026-09-07：明确 Agent 自主 Git 版本管理并建立初始化基线
 
@@ -119,13 +132,15 @@
 | 2026-09-07 | T01 依赖与质量工具 | `uv sync --frozen --refresh`、`pnpm install --frozen-lockfile`、`ruff check .`、`mypy --version`、`pytest --version`、`pnpm run check` | 通过；国内源生效 | 尚无 Python 源文件与 Node 子项目，因此没有业务测试 |
 | 2026-09-07 | T01 服务与安全边界 | `pg_isready`、`redis-cli ping`、检查 `/var/run/docker.sock` | 通过；数据库可连接、Redis 返回 PONG、开发容器未挂载 Docker Socket | Sandbox Runner 尚未实现 |
 | 2026-09-07 | Git 版本管理 | `git status --short --branch`、嵌套仓库检查、暂存差异与敏感信息检查 | 通过；当前为 `main`，首次初始化基线已提交 | 未配置或推送远程仓库 |
+| 2026-09-07 | T02 Python 单元/契约测试 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90` | 39 个测试通过；分支覆盖率 98.98% | 未包含数据库或跨服务集成，属于 T03+ 范围 |
+| 2026-09-07 | T02 Python 静态检查 | `uv run --no-sync ruff check .`、`uv run --no-sync mypy packages` | 通过；9 个源文件无类型错误 | 无 |
+| 2026-09-07 | T02 跨语言契约 | Pytest JSON Schema 元校验及生成 `--check`、`pnpm run check` | 通过；Python/TypeScript 生成文件与 v1.0.0 Schema 一致，TypeScript 严格检查通过 | 尚无 API/队列消费者，消费者契约测试从 T05/T07 开始 |
 
 ## 10. 下一步
 
-1. 认领 T02，在本文件将其状态更新为 `进行中` 并填写负责人；创建 `feat/t02-contracts` 分支。
-2. 建立公共契约包，优先冻结 ID、状态枚举、事件信封、错误格式和 Schema 版本字段。
-3. 为 Python 与 TypeScript 契约建立生成或一致性校验流程，并补充首批单元测试。
-4. 验证通过后由 Agent 自主提交 T02 的逻辑变更，并更新交接台账。
+1. 认领 T03，创建 `feat/t03-persistence` 分支，并阅读 M04、M08 的数据一致性约束。
+2. 根据 `vulnweaver_contracts` v1.0.0 建立 PostgreSQL 首批迁移与仓储接口，优先覆盖 Project、ArtifactVersion、Task、Job、Outbox。
+3. 用集成测试验证 Job 与 Outbox 同事务提交、幂等键唯一性和失败回滚；本机 Windows 若继续位于中文路径，使用 Q-003 中的非 editable 验证方式。
 
 ## 11. 每次工作结束时的更新模板
 

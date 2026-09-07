@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Evidence-driven agentic vulnerability discovery"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "vulnweaver-contracts",
+    "vulnweaver-domain",
+]
 
 [dependency-groups]
 dev = [
@@ -12,10 +15,18 @@ dev = [
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.11,<1",
+    "types-jsonschema>=4.23,<5",
 ]
 
 [tool.uv]
 package = false
+
+[tool.uv.workspace]
+members = ["packages/contracts", "packages/domain"]
+
+[tool.uv.sources]
+vulnweaver-contracts = { workspace = true }
+vulnweaver-domain = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -30,7 +41,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["apps", "packages"]
+source_pkgs = ["vulnweaver_contracts", "vulnweaver_domain"]
 
 [tool.mypy]
 python_version = "3.12"

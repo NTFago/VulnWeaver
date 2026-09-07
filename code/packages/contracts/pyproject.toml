@@ -1,0 +1,13 @@
+[project]
+name = "vulnweaver-contracts"
+version = "0.1.0"
+description = "Versioned public contracts for VulnWeaver"
+requires-python = ">=3.12,<3.13"
+dependencies = ["jsonschema>=4.23,<5"]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_contracts"

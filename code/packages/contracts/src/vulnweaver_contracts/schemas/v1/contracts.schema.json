@@ -1,0 +1,746 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.vulnweaver.local/v1/contracts.schema.json",
+  "title": "VulnWeaver public contracts",
+  "description": "Canonical source for persisted entities, API DTOs, plans and queue messages.",
+  "$defs": {
+    "SchemaVersion": {
+      "type": "string",
+      "enum": ["1.0.0"]
+    },
+    "PermissionMode": {
+      "type": "string",
+      "enum": ["request_permission", "full_access"]
+    },
+    "ArtifactKind": {
+      "type": "string",
+      "enum": ["source_archive", "source_repository", "elf", "pe", "derived"]
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": ["created", "validating", "analyzing", "reviewing", "verifying", "exploiting", "reporting", "completed", "failed", "cancelled"]
+    },
+    "TaskResult": {
+      "type": "string",
+      "enum": ["success", "partial", "no_findings"]
+    },
+    "JobStatus": {
+      "type": "string",
+      "enum": ["pending", "queued", "running", "waiting_permission", "succeeded", "failed", "cancelled"]
+    },
+    "JobKind": {
+      "type": "string",
+      "enum": ["validate", "import", "source_analysis", "binary_analysis", "review", "proof", "exploit", "report"]
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": ["created", "running", "succeeded", "failed", "cancelled"]
+    },
+    "FindingStatus": {
+      "type": "string",
+      "enum": ["candidate", "confirmed", "false_positive", "disputed", "unverifiable"]
+    },
+    "FindingCategory": {
+      "type": "string",
+      "enum": ["memory_corruption", "injection", "auth_or_business_logic", "static_only"]
+    },
+    "Severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+    "EvidenceType": {
+      "type": "string",
+      "enum": ["model_explanation", "tool_output", "code_snippet", "dataflow_path", "crash_record", "reproduction_result", "exploit_record", "review_conclusion", "human_confirmation"]
+    },
+    "EvidenceStrength": {
+      "type": "string",
+      "enum": ["contextual", "supporting", "strong"]
+    },
+    "EvidenceRelation": {
+      "type": "string",
+      "enum": ["supports", "contradicts", "contextual"]
+    },
+    "PocKind": {
+      "type": "string",
+      "enum": ["proof_of_concept", "exploit"]
+    },
+    "PocStatus": {
+      "type": "string",
+      "enum": ["created", "queued", "running", "completed", "failed", "cancelled"]
+    },
+    "PocResult": {
+      "type": "string",
+      "enum": ["exploitable", "not_exploitable_under_environment", "inconclusive", "tool_error", "environment_error", "timeout", "policy_denied"]
+    },
+    "FailureKind": {
+      "type": "string",
+      "enum": ["validation", "policy", "timeout", "tool", "environment", "dependency", "cancelled", "internal"]
+    },
+    "RiskLevel": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "NetworkAccess": {
+      "type": "string",
+      "enum": ["none", "allowlist"]
+    },
+    "CapabilityStatus": {
+      "type": "string",
+      "enum": ["available", "unavailable"]
+    },
+    "AnnotationTargetKind": {
+      "type": "string",
+      "enum": ["function", "finding"]
+    },
+    "Identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "Sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ObjectReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "IdempotencyKey": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+    },
+    "JsonObject": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "ResourceBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_model_tokens", "cpu_millis", "memory_bytes", "disk_bytes", "max_tool_concurrency", "max_dynamic_runs", "timeout_seconds"],
+      "properties": {
+        "max_model_tokens": {"type": "integer", "minimum": 0},
+        "cpu_millis": {"type": "integer", "minimum": 1},
+        "memory_bytes": {"type": "integer", "minimum": 1048576},
+        "disk_bytes": {"type": "integer", "minimum": 1048576},
+        "max_tool_concurrency": {"type": "integer", "minimum": 1},
+        "max_dynamic_runs": {"type": "integer", "minimum": 0},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_attempts", "backoff_seconds", "retryable_failure_kinds"],
+      "properties": {
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "backoff_seconds": {"type": "number", "minimum": 0},
+        "retryable_failure_kinds": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/FailureKind"}}
+      }
+    },
+    "Lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owner", "expires_at", "heartbeat_interval_seconds"],
+      "properties": {
+        "owner": {"$ref": "#/$defs/Identifier"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "heartbeat_interval_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "StructuredFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "kind", "message", "retryable", "details"],
+      "properties": {
+        "code": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/FailureKind"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "retryable": {"type": "boolean"},
+        "details": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "ToolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "image_digest"],
+      "properties": {
+        "name": {"$ref": "#/$defs/Identifier"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]}
+      }
+    },
+    "DecisionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequence", "decision", "reason", "created_at"],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0},
+        "decision": {"type": "string", "minLength": 1, "maxLength": 512},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "TokenUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0}
+      }
+    },
+    "SourceLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_version_id", "path", "start_line", "start_column", "end_line", "end_column"],
+      "properties": {
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "start_line": {"type": "integer", "minimum": 1},
+        "start_column": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "end_column": {"type": "integer", "minimum": 1}
+      }
+    },
+    "BinaryLocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_version_id", "virtual_address", "file_offset"],
+      "properties": {
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "image_base": {"type": "integer", "minimum": 0},
+        "virtual_address": {"type": "integer", "minimum": 0},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "instruction_end": {"type": "integer", "minimum": 0}
+      }
+    },
+    "FindingLocation": {
+      "oneOf": [
+        {"$ref": "#/$defs/SourceLocation"},
+        {"$ref": "#/$defs/BinaryLocation"}
+      ]
+    },
+    "DataflowStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pair_node_id", "label", "order"],
+      "properties": {
+        "pair_node_id": {"$ref": "#/$defs/Identifier"},
+        "label": {"type": "string", "minLength": 1, "maxLength": 512},
+        "order": {"type": "integer", "minimum": 0}
+      }
+    },
+    "NetworkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["access", "allowed_hosts"],
+      "properties": {
+        "access": {"$ref": "#/$defs/NetworkAccess"},
+        "allowed_hosts": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 253}}
+      }
+    },
+    "FilesystemPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_read_only", "isolated_output", "allow_host_paths"],
+      "properties": {
+        "input_read_only": {"type": "boolean", "const": true},
+        "isolated_output": {"type": "boolean", "const": true},
+        "allow_host_paths": {"type": "boolean", "const": false}
+      }
+    },
+    "Project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "name", "input_scope", "permission_mode", "exploit_validation_enabled", "resource_budget", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "input_scope": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "permission_mode": {"$ref": "#/$defs/PermissionMode"},
+        "exploit_validation_enabled": {"type": "boolean"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "project_id", "kind", "current_version_id", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "project_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/ArtifactKind"},
+        "current_version_id": {"$ref": "#/$defs/Identifier"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ArtifactVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_id", "digest", "object_ref", "generation_config", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_id": {"$ref": "#/$defs/Identifier"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "object_ref": {"$ref": "#/$defs/ObjectReference"},
+        "parent_version_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "produced_by": {"anyOf": [{"$ref": "#/$defs/ToolIdentity"}, {"type": "null"}]},
+        "generation_config": {"$ref": "#/$defs/JsonObject"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "project_id", "artifact_version_ids", "status", "result", "idempotency_key", "resource_budget", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "project_id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "status": {"$ref": "#/$defs/TaskStatus"},
+        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]},
+        "idempotency_key": {"$ref": "#/$defs/IdempotencyKey"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "kind", "input_refs", "status", "idempotency_key", "resource_budget", "retry_policy", "attempt", "lease", "failure", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/JobKind"},
+        "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
+        "status": {"$ref": "#/$defs/JobStatus"},
+        "idempotency_key": {"$ref": "#/$defs/IdempotencyKey"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "retry_policy": {"$ref": "#/$defs/RetryPolicy"},
+        "attempt": {"type": "integer", "minimum": 0},
+        "lease": {"anyOf": [{"$ref": "#/$defs/Lease"}, {"type": "null"}]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "AgentRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "status", "model", "prompt_hash", "input_refs", "decisions", "token_usage", "failure", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/RunStatus"},
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "prompt_hash": {"$ref": "#/$defs/Sha256Digest"},
+        "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
+        "decisions": {"type": "array", "items": {"$ref": "#/$defs/DecisionRecord"}},
+        "token_usage": {"$ref": "#/$defs/TokenUsage"},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ToolRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "job_id", "status", "tool", "input_refs", "command_hash", "exit_code", "failure", "created_at", "updated_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/RunStatus"},
+        "tool": {"$ref": "#/$defs/ToolIdentity"},
+        "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
+        "command_hash": {"$ref": "#/$defs/Sha256Digest"},
+        "exit_code": {"type": ["integer", "null"]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "category", "cwe_id", "title", "severity", "confidence", "location", "dataflow", "status", "evidence_ids", "review_ids", "poc_ids", "fix_suggestion", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "category": {"$ref": "#/$defs/FindingCategory"},
+        "cwe_id": {"type": "string", "pattern": "^CWE-[1-9][0-9]*$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 512},
+        "severity": {"$ref": "#/$defs/Severity"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "location": {"$ref": "#/$defs/FindingLocation"},
+        "dataflow": {"type": "array", "items": {"$ref": "#/$defs/DataflowStep"}},
+        "status": {"$ref": "#/$defs/FindingStatus"},
+        "evidence_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "review_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "poc_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "fix_suggestion": {"type": "string", "maxLength": 8192},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "type", "strength", "artifact_ref", "digest", "tool", "input_ref", "command_hash", "exit_code", "stdout_ref", "stderr_ref", "replay_recipe", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "type": {"$ref": "#/$defs/EvidenceType"},
+        "strength": {"$ref": "#/$defs/EvidenceStrength"},
+        "artifact_ref": {"$ref": "#/$defs/ObjectReference"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "tool": {"anyOf": [{"$ref": "#/$defs/ToolIdentity"}, {"type": "null"}]},
+        "input_ref": {"$ref": "#/$defs/ObjectReference"},
+        "command_hash": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "exit_code": {"type": ["integer", "null"]},
+        "stdout_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "stderr_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "replay_recipe": {"$ref": "#/$defs/JsonObject"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "FindingEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "finding_id", "evidence_id", "relation", "weight", "created_by", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
+        "evidence_id": {"$ref": "#/$defs/Identifier"},
+        "relation": {"$ref": "#/$defs/EvidenceRelation"},
+        "weight": {"type": "number", "minimum": 0, "maximum": 1},
+        "created_by": {"$ref": "#/$defs/Identifier"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Poc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "finding_id", "kind", "status", "result", "script_ref", "run_log_ref", "image_digest", "permission_mode", "resource_budget", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/PocKind"},
+        "status": {"$ref": "#/$defs/PocStatus"},
+        "result": {"anyOf": [{"$ref": "#/$defs/PocResult"}, {"type": "null"}]},
+        "script_ref": {"$ref": "#/$defs/ObjectReference"},
+        "run_log_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "image_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "permission_mode": {"$ref": "#/$defs/PermissionMode"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "finding_id", "outcome", "rationale", "model", "supersedes_review_id", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
+        "outcome": {"$ref": "#/$defs/FindingStatus"},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "model": {"type": "string", "minLength": 1, "maxLength": 256},
+        "supersedes_review_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "Annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "target_kind", "target_id", "labels", "note", "severity_override", "author_id", "supersedes_annotation_id", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "target_kind": {"$ref": "#/$defs/AnnotationTargetKind"},
+        "target_id": {"$ref": "#/$defs/Identifier"},
+        "labels": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "note": {"type": "string", "maxLength": 8192},
+        "severity_override": {"anyOf": [{"$ref": "#/$defs/Severity"}, {"type": "null"}]},
+        "author_id": {"$ref": "#/$defs/Identifier"},
+        "supersedes_annotation_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "FindingPolicyRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "required_facts", "require_strong_reproducible_evidence"],
+      "properties": {
+        "category": {"$ref": "#/$defs/FindingCategory"},
+        "required_facts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "require_strong_reproducible_evidence": {"type": "boolean", "const": true}
+      }
+    },
+    "FindingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "rules"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "rules": {"type": "array", "minItems": 4, "items": {"$ref": "#/$defs/FindingPolicyRule"}}
+      }
+    },
+    "ActionStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step_id", "tool_name", "tool_version", "input_refs", "arguments", "expected_output_types", "reason"],
+      "properties": {
+        "step_id": {"$ref": "#/$defs/Identifier"},
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
+        "arguments": {"$ref": "#/$defs/JsonObject"},
+        "expected_output_types": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/Identifier"}},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "ActionPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "task_id", "agent_run_id", "steps", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "agent_run_id": {"$ref": "#/$defs/Identifier"},
+        "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/ActionStep"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "ToolSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "name", "version", "image_digest", "risk_level", "accepted_artifacts", "command_schema", "output_schema", "network_policy", "filesystem_policy", "resource_limits", "approval_required", "timeout_seconds", "retry_policy"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "name": {"$ref": "#/$defs/Identifier"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "risk_level": {"$ref": "#/$defs/RiskLevel"},
+        "accepted_artifacts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/ArtifactKind"}},
+        "command_schema": {"$ref": "#/$defs/JsonObject"},
+        "output_schema": {"$ref": "#/$defs/JsonObject"},
+        "network_policy": {"$ref": "#/$defs/NetworkPolicy"},
+        "filesystem_policy": {"$ref": "#/$defs/FilesystemPolicy"},
+        "resource_limits": {"$ref": "#/$defs/ResourceBudget"},
+        "approval_required": {"type": "boolean"},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "retry_policy": {"$ref": "#/$defs/RetryPolicy"}
+      }
+    },
+    "Capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "tool_name", "reason"],
+      "properties": {
+        "name": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/CapabilityStatus"},
+        "tool_name": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "CapabilityProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "languages", "architectures", "build_systems", "capabilities", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "languages": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "architectures": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "build_systems": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "capabilities": {"type": "array", "items": {"$ref": "#/$defs/Capability"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "JobRequestedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "task_id", "job_kind", "attempt"],
+      "properties": {
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "job_kind": {"$ref": "#/$defs/JobKind"},
+        "attempt": {"type": "integer", "minimum": 0}
+      }
+    },
+    "JobStatusChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "previous_status", "status", "failure"],
+      "properties": {
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "previous_status": {"$ref": "#/$defs/JobStatus"},
+        "status": {"$ref": "#/$defs/JobStatus"},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
+      }
+    },
+    "TaskStatusChangedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "previous_status", "status", "result"],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "previous_status": {"$ref": "#/$defs/TaskStatus"},
+        "status": {"$ref": "#/$defs/TaskStatus"},
+        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]}
+      }
+    },
+    "JobRequestedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_id", "event_type", "aggregate_id", "sequence", "occurred_at", "correlation_id", "causation_id", "payload"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "event_id": {"$ref": "#/$defs/Identifier"},
+        "event_type": {"type": "string", "const": "job.requested"},
+        "aggregate_id": {"$ref": "#/$defs/Identifier"},
+        "sequence": {"type": "integer", "minimum": 0},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "causation_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "payload": {"$ref": "#/$defs/JobRequestedPayload"}
+      }
+    },
+    "JobStatusChangedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_id", "event_type", "aggregate_id", "sequence", "occurred_at", "correlation_id", "causation_id", "payload"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "event_id": {"$ref": "#/$defs/Identifier"},
+        "event_type": {"type": "string", "const": "job.status_changed"},
+        "aggregate_id": {"$ref": "#/$defs/Identifier"},
+        "sequence": {"type": "integer", "minimum": 0},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "causation_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "payload": {"$ref": "#/$defs/JobStatusChangedPayload"}
+      }
+    },
+    "TaskStatusChangedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_id", "event_type", "aggregate_id", "sequence", "occurred_at", "correlation_id", "causation_id", "payload"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "event_id": {"$ref": "#/$defs/Identifier"},
+        "event_type": {"type": "string", "const": "task.status_changed"},
+        "aggregate_id": {"$ref": "#/$defs/Identifier"},
+        "sequence": {"type": "integer", "minimum": 0},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "causation_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "payload": {"$ref": "#/$defs/TaskStatusChangedPayload"}
+      }
+    },
+    "QueueEvent": {
+      "oneOf": [
+        {"$ref": "#/$defs/JobRequestedEvent"},
+        {"$ref": "#/$defs/JobStatusChangedEvent"},
+        {"$ref": "#/$defs/TaskStatusChangedEvent"}
+      ]
+    },
+    "ErrorDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "reason"],
+      "properties": {
+        "field": {"type": "string", "minLength": 1, "maxLength": 512},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 2048}
+      }
+    },
+    "ErrorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "error_code", "message", "correlation_id", "retryable", "details"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "error_code": {"$ref": "#/$defs/Identifier"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "retryable": {"type": "boolean"},
+        "details": {"type": "array", "items": {"$ref": "#/$defs/ErrorDetail"}}
+      }
+    },
+    "CreateProjectRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "name", "input_scope", "permission_mode", "exploit_validation_enabled", "resource_budget"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "input_scope": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "permission_mode": {"$ref": "#/$defs/PermissionMode"},
+        "exploit_validation_enabled": {"type": "boolean"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"}
+      }
+    },
+    "CreateTaskRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_ids", "resource_budget"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"}
+      }
+    },
+    "WorkerRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event", "job", "capability_profile"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "event": {"$ref": "#/$defs/JobRequestedEvent"},
+        "job": {"$ref": "#/$defs/Job"},
+        "capability_profile": {"$ref": "#/$defs/CapabilityProfile"}
+      }
+    },
+    "WorkerResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "job_id", "status", "produced_artifact_version_ids", "evidence_ids", "failure"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/JobStatus"},
+        "produced_artifact_version_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "evidence_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
+      }
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/FindingPolicy"},
+    {"$ref": "#/$defs/ActionPlan"},
+    {"$ref": "#/$defs/ToolSpec"},
+    {"$ref": "#/$defs/CapabilityProfile"},
+    {"$ref": "#/$defs/QueueEvent"},
+    {"$ref": "#/$defs/ErrorResponse"},
+    {"$ref": "#/$defs/WorkerRequest"},
+    {"$ref": "#/$defs/WorkerResult"}
+  ]
+}
