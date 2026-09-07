@@ -3,10 +3,18 @@ from __future__ import annotations
 import asyncio
 import sys
 from datetime import timedelta
+from typing import cast
 
 import pytest
 from sqlalchemy import func, select
-from vulnweaver_contracts import JobKind
+from vulnweaver_contracts import (
+    ArtifactKind,
+    JobKind,
+    JobStatus,
+    PermissionMode,
+    TaskResult,
+    TaskStatus,
+)
 from vulnweaver_persistence import (
     Database,
     DatabaseSettings,
@@ -185,6 +193,73 @@ def test_task_idempotency_and_artifact_digest_deduplication(
                 version_result = await repositories.artifacts.add_version(duplicate_version)
                 assert not version_result.created
                 assert version_result.value["id"] == "artifact-version:t03"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_repositories_accept_schema_valid_string_enum_values(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        project_id = "project:t03-string-enums"
+        artifact_id = "artifact:t03-string-enums"
+        version_id = "artifact-version:t03-string-enums"
+        task_id = "task:t03-string-enums"
+        job_id = "job:t03-string-enums"
+
+        raw_project = project(project_id)
+        raw_project["permission_mode"] = cast(
+            PermissionMode, "request_permission"
+        )
+        raw_artifact = artifact(
+            artifact_id,
+            project_id=project_id,
+            current_version_id=version_id,
+        )
+        raw_artifact["kind"] = cast(ArtifactKind, "source_archive")
+        raw_task = task(
+            task_id,
+            project_id=project_id,
+            artifact_version_ids=[version_id],
+            idempotency_key="task:t03-string-enums-key",
+        )
+        raw_task["status"] = cast(TaskStatus, "completed")
+        raw_task["result"] = cast(TaskResult, "success")
+        raw_job = job(
+            job_id,
+            task_id=task_id,
+            idempotency_key="job:t03-string-enums-key",
+        )
+        raw_job["kind"] = cast(JobKind, "source_analysis")
+        raw_job["status"] = cast(JobStatus, "pending")
+
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(raw_project)
+                await repositories.artifacts.add(raw_artifact)
+                await repositories.artifacts.add_version(
+                    artifact_version(version_id, artifact_id=artifact_id)
+                )
+                await repositories.tasks.create(raw_task)
+                await repositories.jobs.enqueue_with_outbox(
+                    raw_job,
+                    job_event(raw_job, "event:t03-string-enums"),
+                )
+
+                stored_project = await repositories.projects.get(project_id)
+                stored_artifact = await repositories.artifacts.get(artifact_id)
+                stored_task = await repositories.tasks.get(task_id)
+                stored_job = await repositories.jobs.get(job_id)
+
+            assert stored_project["permission_mode"] is PermissionMode.REQUEST_PERMISSION
+            assert stored_artifact["kind"] is ArtifactKind.SOURCE_ARCHIVE
+            assert stored_task["status"] is TaskStatus.COMPLETED
+            assert stored_task["result"] is TaskResult.SUCCESS
+            assert stored_job["kind"] is JobKind.SOURCE_ANALYSIS
+            assert stored_job["status"] is JobStatus.PENDING
         finally:
             await database.dispose()
 

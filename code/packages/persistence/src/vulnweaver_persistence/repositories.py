@@ -459,7 +459,7 @@ class Repositories:
 def _project_values(project: Project) -> dict[str, object]:
     return {
         **project,
-        "permission_mode": project["permission_mode"].value,
+        "permission_mode": str(project["permission_mode"]),
         "created_at": _parse_datetime(project["created_at"]),
     }
 
@@ -534,8 +534,8 @@ def _task_fingerprint(task: Task) -> str:
 def _task_values(task: Task, fingerprint: str) -> dict[str, object]:
     return {
         **task,
-        "status": task["status"].value,
-        "result": task["result"].value if task["result"] is not None else None,
+        "status": str(task["status"]),
+        "result": str(task["result"]) if task["result"] is not None else None,
         "request_fingerprint": fingerprint,
         "created_at": _parse_datetime(task["created_at"]),
         "updated_at": _parse_datetime(task["updated_at"]),
@@ -573,8 +573,8 @@ def _job_fingerprint(job: Job) -> str:
 def _job_values(job: Job, fingerprint: str) -> dict[str, object]:
     return {
         **job,
-        "kind": job["kind"].value,
-        "status": job["status"].value,
+        "kind": str(job["kind"]),
+        "status": str(job["status"]),
         "request_fingerprint": fingerprint,
         "created_at": _parse_datetime(job["created_at"]),
         "updated_at": _parse_datetime(job["updated_at"]),

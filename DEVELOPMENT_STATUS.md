@@ -9,8 +9,8 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T04、T05 Review 修正已完成）
-- **总体状态**：T04/T05 已通过 Review 回归验证，可进入 T06 Worker 租约与幂等框架
+- **当前阶段**：P1 控制面最小闭环（T03-T05 Review 修正已完成）
+- **总体状态**：持久化仓储已统一兼容 StrEnum 与 Schema 合法字符串，可进入 T06 Worker 租约与幂等框架
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；当前开发分支 `fix/t04-t05-review`，基于 T04/T05 实现分支
@@ -25,7 +25,7 @@
 | 实现模块拆分 | 已完成 | Agent | M01-M17、P0-P5、T01-T22 已拆分 | 随实现维护依赖变化 | 2026-09-07 |
 | T01 工程工作区 | 已完成 | Codex | 命名为 VulnWeaver；初始化 uv、pnpm、质量工具、Dev Container、PostgreSQL/Redis Compose；配置国内依赖源 | 无 | 2026-09-07 |
 | T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
-| T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 新增 SQLAlchemy Core 模型、Alembic `0001` 迁移、异步事务仓储和结构化错误；覆盖 Project、Artifact/ArtifactVersion、Task、Job、Outbox、TaskEvent，保证 Job/Outbox 原子写入、请求指纹幂等、未发布事件重放和工件版本去重 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
+| T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 主体实现及 Review 修正完成；Project、Artifact、Task（含可选 result）和 Job 枚举字段统一通过 `str()` 序列化，仓储同时接受 StrEnum 与 Schema 合法字符串，真实 PostgreSQL 回归验证写入后按枚举读回 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
 | T04 本地内容寻址工件库 | 已完成 | Codex | 主体实现及 Review 修正完成：字符串 `derived` 输入无法绕过谱系约束，合法字符串枚举可持久化；重复旧摘要不回退 current version；新摘要目录逐级 fsync；首版本循环外键的事务内临时 NULL 语义已明确 | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
 
@@ -76,6 +76,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：统一持久化枚举序列化边界
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/persistence/src/vulnweaver_persistence/repositories.py`、`code/tests/persistence/test_repositories.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：将 Project、Task、Job 剩余枚举字段从仅支持 `.value` 的序列化改为 `str()`，与 Artifact 行为一致；覆盖 `permission_mode`、`kind`、Task `status/result` 和 Job `kind/status`，避免 T07 透传 Schema 合法字符串时触发 `AttributeError`
+- 测试与结果：新增真实 PostgreSQL 回归先在旧实现复现异常，修正后 94 个 Pytest 测试通过，分支覆盖率 91.60%；Ruff、Mypy、契约生成、TypeScript、锁文件与 Compose 配置检查通过
+- 问题：无
+- 阻碍点：无
+- 决策：仓储边界在契约校验后同时接受生成的 StrEnum 与对应合法字符串；无须修改 Schema 或数据库迁移
+- 下一步：认领 T06，实现 Worker 消费循环与 Job 租约/幂等框架
 
 ### 2026-09-07：完成 T04/T05 Codex Review 核查与修正
 
@@ -197,6 +209,7 @@
 | 2026-09-07 | T05 队列与 Dispatcher | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages apps` | 87 个测试通过，分支覆盖率 91.17%；真实 PostgreSQL/Redis 覆盖发布、去重、read/ack、退避、dead-letter、重放与行锁领取 | Worker pending 接管、租约和执行结果幂等属于 T06 |
 | 2026-09-07 | T05 容器交付 | Compose 配置解析、`docker compose ... build dispatcher`、`up -d dispatcher`、日志及 `docker inspect` | 通过；迁移退出码 0，Dispatcher 运行中；用户为 `vulnweaver`、根文件系统只读、capabilities 全部移除、无宿主绑定挂载 | 未执行生产部署或多主机故障演练 |
 | 2026-09-07 | T04/T05 Review 回归 | 先运行新增缺陷用例复现，再执行 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check`、Compose 构建/启动/状态检查 | 93 个测试通过，分支覆盖率 91.37%；双 Dispatcher 在一个实例阻塞时可并发处理另一事件；迁移退出 0、服务健康且安全配置未回退 | 单条发布仍在事务中持有一条行锁和一个连接；高吞吐场景若需把网络 IO 移出事务，应另增带所有者令牌的 Outbox 领取租约 |
+| 2026-09-07 | T03 枚举兼容性回归 | 新增合法字符串枚举 PostgreSQL 集成测试后执行全量 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check` 与 Compose 配置检查 | 94 个测试通过，分支覆盖率 91.60%；Project/Artifact/Task/Job 字符串枚举写入并按生成枚举读回 | 无 |
 
 ## 10. 下一步
 
