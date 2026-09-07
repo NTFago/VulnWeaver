@@ -1,0 +1,18 @@
+{
+  "name": "@vulnweaver/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "types": "./typescript/index.ts",
+  "exports": {
+    ".": {
+      "types": "./typescript/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}
