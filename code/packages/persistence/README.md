@@ -29,3 +29,8 @@ Terminal Worker results are stored in immutable `job_results` rows keyed by Job 
 an identical replay is idempotent even after the lease has been released, while a
 different result is rejected. `fail_exhausted()` is restricted to Jobs that have already
 consumed their configured attempts and have no active lease.
+
+Retryable execution failures are appended to `job_attempt_failures` before the lease is
+released. `record_attempt_failure()` validates the active owner, exact attempt, retryable
+flag, failure-kind allowlist and remaining attempt budget; identical writes are idempotent
+and conflicting writes are rejected.

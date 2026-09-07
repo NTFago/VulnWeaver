@@ -81,6 +81,7 @@ class ReliableWorker:
         stream = self._queue.streams.jobs
         await self._queue.ensure_group(stream, self._settings.consumer_group)
         running: set[asyncio.Task[None]] = set()
+        stale_cursor = "0-0"
         while not stop.is_set():
             running = {task for task in running if not task.done()}
             capacity = self._settings.concurrency - len(running)
@@ -98,9 +99,11 @@ class ReliableWorker:
                 self._settings.consumer_name,
                 min_idle_milliseconds=self._settings.pending_idle_milliseconds,
                 count=capacity,
+                start_id=stale_cursor,
             )
+            stale_cursor = claimed.next_start_id
             messages = list(claimed.messages)
-            if not messages:
+            if not messages and stale_cursor == "0-0":
                 messages = await self._queue.read_group(
                     stream,
                     self._settings.consumer_group,
@@ -133,6 +136,8 @@ class ReliableWorker:
                     heartbeat_interval_seconds=self._settings.heartbeat_interval_seconds,
                 )
             if claim.outcome is JobLeaseClaimOutcome.BUSY:
+                return
+            if claim.outcome is JobLeaseClaimOutcome.ALREADY_OWNED:
                 return
             if claim.outcome is JobLeaseClaimOutcome.COMPLETED:
                 await self._acknowledge(message)
@@ -179,6 +184,11 @@ class ReliableWorker:
             done, _ = await asyncio.wait(
                 {execution, heartbeat}, return_when=asyncio.FIRST_COMPLETED
             )
+            if execution in done:
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
+                return await execution
+
             if heartbeat in done:
                 execution.cancel()
                 await asyncio.gather(execution, return_exceptions=True)
@@ -188,9 +198,7 @@ class ReliableWorker:
                     raise _LeaseHeartbeatFailed from error
                 raise _LeaseHeartbeatFailed
 
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
-            return await execution
+            raise _LeaseHeartbeatFailed
         finally:
             for task in (execution, heartbeat):
                 if not task.done():
@@ -215,13 +223,24 @@ class ReliableWorker:
         stop: asyncio.Event,
     ) -> None:
         failure = result["failure"]
-        if (result["status"] is JobStatus.CANCELLED and stop.is_set()) or (
+        retry_allowed = (
             result["status"] is JobStatus.FAILED
             and failure is not None
             and failure["retryable"]
+            and failure["kind"] in job["retry_policy"]["retryable_failure_kinds"]
             and job["attempt"] < job["retry_policy"]["max_attempts"]
-        ):
+        )
+        if result["status"] is JobStatus.CANCELLED and stop.is_set():
             await self._release_if_owned(job["id"])
+            return
+        if retry_allowed and failure is not None:
+            async with self._database.transaction() as repositories:
+                await repositories.jobs.record_attempt_failure(
+                    job["id"],
+                    attempt=job["attempt"],
+                    owner=self._settings.consumer_name,
+                    failure=failure,
+                )
             return
 
         async with self._database.transaction() as repositories:

@@ -11,6 +11,7 @@ EXPECTED_TABLES = {
     "artifacts",
     "jobs",
     "job_results",
+    "job_attempt_failures",
     "outbox_events",
     "projects",
     "task_events",

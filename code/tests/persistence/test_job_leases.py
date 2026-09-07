@@ -107,7 +107,7 @@ def test_job_lease_claim_is_exclusive_and_same_owner_is_idempotent(
                     heartbeat_interval_seconds=10,
                 )
             assert busy.outcome is JobLeaseClaimOutcome.BUSY
-            assert repeated.outcome is JobLeaseClaimOutcome.ACQUIRED
+            assert repeated.outcome is JobLeaseClaimOutcome.ALREADY_OWNED
             assert repeated.job["attempt"] == 1
         finally:
             await database.dispose()

@@ -218,6 +218,25 @@ job_results = Table(
     ),
 )
 
+job_attempt_failures = Table(
+    "job_attempt_failures",
+    metadata,
+    Column(
+        "job_id",
+        IDENTIFIER,
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column("attempt", Integer, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("owner", IDENTIFIER, nullable=False),
+    Column("failure", JSONB, nullable=False),
+    Column("failure_fingerprint", String(64), nullable=False),
+    Column("recorded_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    _schema_constraint(),
+    CheckConstraint("attempt > 0", name="attempt_positive"),
+)
+
 outbox_events = Table(
     "outbox_events",
     metadata,

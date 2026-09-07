@@ -6,7 +6,13 @@ import sys
 
 import pytest
 from sqlalchemy import func, select
-from vulnweaver_contracts import JobStatus, SchemaVersion, WorkerResult
+from vulnweaver_contracts import (
+    FailureKind,
+    JobStatus,
+    SchemaVersion,
+    StructuredFailure,
+    WorkerResult,
+)
 from vulnweaver_persistence import (
     Database,
     DatabaseSettings,
@@ -75,11 +81,20 @@ def _worker_result(job_id: str, *, status: JobStatus = JobStatus.SUCCEEDED) -> W
     )
 
 
-async def _enqueue_and_claim(database: Database, job_id: str, owner: str) -> None:
+async def _enqueue_and_claim(
+    database: Database,
+    job_id: str,
+    owner: str,
+    *,
+    retryable_failure_kinds: list[FailureKind] | None = None,
+) -> None:
     value = job(
         job_id,
         task_id="task:t06-results",
         idempotency_key=f"{job_id}-key",
+    )
+    value["retry_policy"]["retryable_failure_kinds"] = (
+        [FailureKind.TOOL] if retryable_failure_kinds is None else retryable_failure_kinds
     )
     async with database.transaction() as repositories:
         await repositories.jobs.enqueue_with_outbox(
@@ -187,6 +202,100 @@ def test_worker_result_requires_terminal_status(result_database_url: str) -> Non
                         _worker_result("job:missing", status=JobStatus.RUNNING),
                         owner="worker:t06-a",
                     )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_retryable_attempt_failure_is_append_only_and_idempotent(
+    result_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(result_database_url))
+        job_id = "job:t06-attempt-failure"
+        failure = StructuredFailure(
+            code="test.retryable",
+            kind=FailureKind.TOOL,
+            message="safe retryable failure",
+            retryable=True,
+            details={"tool": "test-double"},
+        )
+        try:
+            await _enqueue_and_claim(database, job_id, "worker:t06-a")
+            async with database.transaction() as repositories:
+                released = await repositories.jobs.record_attempt_failure(
+                    job_id,
+                    attempt=1,
+                    owner="worker:t06-a",
+                    failure=failure,
+                )
+            assert released["status"] is JobStatus.QUEUED
+            assert released["lease"] is None
+
+            async with database.transaction() as repositories:
+                repeated = await repositories.jobs.record_attempt_failure(
+                    job_id,
+                    attempt=1,
+                    owner="worker:t06-a",
+                    failure=failure,
+                )
+                history = await repositories.jobs.attempt_failures(job_id)
+            assert repeated["status"] is JobStatus.QUEUED
+            assert len(history) == 1
+            assert history[0].attempt == 1
+            assert history[0].owner == "worker:t06-a"
+            assert history[0].failure == failure
+
+            conflicting = copy.deepcopy(failure)
+            conflicting["message"] = "different failure"
+            with pytest.raises(IdempotencyConflict):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.record_attempt_failure(
+                        job_id,
+                        attempt=1,
+                        owner="worker:t06-a",
+                        failure=conflicting,
+                    )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_attempt_failure_cannot_bypass_retry_kind_policy(
+    result_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(result_database_url))
+        job_id = "job:t06-attempt-policy"
+        failure = StructuredFailure(
+            code="test.retryable",
+            kind=FailureKind.TOOL,
+            message="safe retryable failure",
+            retryable=True,
+            details={},
+        )
+        try:
+            await _enqueue_and_claim(
+                database,
+                job_id,
+                "worker:t06-a",
+                retryable_failure_kinds=[],
+            )
+            with pytest.raises(PersistenceInvariantError):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.record_attempt_failure(
+                        job_id,
+                        attempt=1,
+                        owner="worker:t06-a",
+                        failure=failure,
+                    )
+            async with database.transaction() as repositories:
+                stored = await repositories.jobs.get(job_id)
+                history = await repositories.jobs.attempt_failures(job_id)
+            assert stored["status"] is JobStatus.RUNNING
+            assert history == []
         finally:
             await database.dispose()
 

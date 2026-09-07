@@ -23,6 +23,7 @@ from vulnweaver_contracts import (
     PermissionMode,
     Project,
     QueueEvent,
+    StructuredFailure,
     Task,
     TaskResult,
     TaskStatus,
@@ -41,6 +42,7 @@ from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_persistence.models import (
     artifact_versions,
     artifacts,
+    job_attempt_failures,
     job_results,
     jobs,
     outbox_events,
@@ -72,6 +74,7 @@ class OutboxMessage:
 
 class JobLeaseClaimOutcome(StrEnum):
     ACQUIRED = "acquired"
+    ALREADY_OWNED = "already_owned"
     BUSY = "busy"
     COMPLETED = "completed"
     EXHAUSTED = "exhausted"
@@ -89,6 +92,15 @@ class JobCompletionResult:
     job: Job
     result: WorkerResult
     created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class JobAttemptFailure:
+    job_id: str
+    attempt: int
+    owner: str
+    failure: StructuredFailure
+    recorded_at: datetime
 
 
 class ProjectRepository:
@@ -382,7 +394,7 @@ class JobRepository:
             expires_at = _parse_datetime(current_lease["expires_at"])
             if expires_at > now:
                 outcome = (
-                    JobLeaseClaimOutcome.ACQUIRED
+                    JobLeaseClaimOutcome.ALREADY_OWNED
                     if current_lease["owner"] == owner
                     else JobLeaseClaimOutcome.BUSY
                 )
@@ -491,6 +503,99 @@ class JobRepository:
             )
 
         return await self._persist_completion(row, now, result, fingerprint)
+
+    async def record_attempt_failure(
+        self,
+        job_id: str,
+        *,
+        attempt: int,
+        owner: str,
+        failure: StructuredFailure,
+    ) -> Job:
+        """Append one retryable failure and release that exact execution attempt."""
+
+        validate_contract("StructuredFailure", failure)
+        fingerprint = _structured_failure_fingerprint(failure)
+        row, now = await self._locked_job_with_database_time(job_id)
+        current = _job_from_row(row)
+        existing_row = (
+            (
+                await self._connection.execute(
+                    select(job_attempt_failures).where(
+                        job_attempt_failures.c.job_id == job_id,
+                        job_attempt_failures.c.attempt == attempt,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing_row is not None:
+            if existing_row["failure_fingerprint"] != fingerprint:
+                raise IdempotencyConflict(
+                    "job attempt already has a different failure",
+                    details={"job_id": job_id, "attempt": attempt},
+                )
+            return current
+
+        lease = current["lease"]
+        retry_policy = current["retry_policy"]
+        if (
+            not failure["retryable"]
+            or failure["kind"] not in retry_policy["retryable_failure_kinds"]
+            or attempt >= retry_policy["max_attempts"]
+        ):
+            raise PersistenceInvariantError(
+                "job failure is not eligible for another attempt",
+                details={"job_id": job_id, "attempt": attempt},
+            )
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or current["attempt"] != attempt
+            or lease is None
+            or lease["owner"] != owner
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job attempt is no longer owned by this worker",
+                details={"job_id": job_id, "attempt": attempt, "owner": owner},
+            )
+        await self._connection.execute(
+            insert(job_attempt_failures).values(
+                job_id=job_id,
+                attempt=attempt,
+                schema_version="1.0.0",
+                owner=owner,
+                failure=failure,
+                failure_fingerprint=fingerprint,
+                recorded_at=now,
+            )
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.QUEUED.value,
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def attempt_failures(self, job_id: str) -> list[JobAttemptFailure]:
+        rows = (
+            (
+                await self._connection.execute(
+                    select(job_attempt_failures)
+                    .where(job_attempt_failures.c.job_id == job_id)
+                    .order_by(job_attempt_failures.c.attempt)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_job_attempt_failure_from_row(row) for row in rows]
 
     async def fail_exhausted(self, result: WorkerResult) -> JobCompletionResult:
         """Persist an exhausted Job failure without granting another execution lease."""
@@ -901,6 +1006,28 @@ def _worker_result_fingerprint(result: WorkerResult) -> str:
             "evidence_ids": result["evidence_ids"],
             "failure": result["failure"],
         }
+    )
+
+
+def _structured_failure_fingerprint(failure: StructuredFailure) -> str:
+    return request_fingerprint(
+        {
+            "code": failure["code"],
+            "kind": failure["kind"],
+            "message": failure["message"],
+            "retryable": failure["retryable"],
+            "details": failure["details"],
+        }
+    )
+
+
+def _job_attempt_failure_from_row(row: RowMapping) -> JobAttemptFailure:
+    return JobAttemptFailure(
+        job_id=row["job_id"],
+        attempt=row["attempt"],
+        owner=row["owner"],
+        failure=row["failure"],
+        recorded_at=row["recorded_at"],
     )
 
 

@@ -22,6 +22,7 @@ from vulnweaver_queue import (
     DeadLetteredMessage,
     QueueSettings,
     RedisStreamsClient,
+    StaleClaimBatch,
     StreamMessage,
 )
 from vulnweaver_worker import ReliableWorker, WorkerSettings
@@ -153,6 +154,72 @@ class UncooperativeExecutor:
         raise AssertionError("unreachable")
 
 
+class BlockingExecutor:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute(self, value: Job, cancellation: asyncio.Event) -> WorkerResult:
+        self.calls += 1
+        self.started.set()
+        await self.release.wait()
+        return _success(value["id"])
+
+
+class GateExecutor:
+    def __init__(self, gate: asyncio.Event) -> None:
+        self.gate = gate
+
+    async def execute(self, value: Job, cancellation: asyncio.Event) -> WorkerResult:
+        await self.gate.wait()
+        return _success(value["id"])
+
+
+class SimultaneousHeartbeatWorker(ReliableWorker):
+    gate: asyncio.Event
+
+    async def _heartbeat(self, job_id: str) -> None:
+        await self.gate.wait()
+
+
+class CursorTrackingQueue(RedisStreamsClient):
+    def __init__(self, settings: QueueSettings, stop: asyncio.Event) -> None:
+        super().__init__(settings)
+        self.stop = stop
+        self.start_ids: list[str] = []
+
+    async def ensure_group(self, stream: str, group: str, *, start_id: str = "0-0") -> None:
+        return None
+
+    async def claim_stale(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_milliseconds: int,
+        count: int = 10,
+        start_id: str = "0-0",
+    ) -> StaleClaimBatch:
+        self.start_ids.append(start_id)
+        if len(self.start_ids) == 2:
+            self.stop.set()
+            return StaleClaimBatch("0-0", ())
+        return StaleClaimBatch("42-0", ())
+
+    async def read_group(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        count: int = 10,
+        block_milliseconds: int = 1000,
+    ) -> list[StreamMessage]:
+        return []
+
+
 class FlakyAckQueue(RedisStreamsClient):
     def __init__(self, settings: QueueSettings) -> None:
         super().__init__(settings)
@@ -191,12 +258,19 @@ class FlakyDeadLetterQueue(RedisStreamsClient):
         )
 
 
-async def _enqueue(database: Database, queue: RedisStreamsClient, job_id: str) -> None:
+async def _enqueue(
+    database: Database,
+    queue: RedisStreamsClient,
+    job_id: str,
+    *,
+    retryable_failure_kinds: list[FailureKind] | None = None,
+) -> None:
     value = job(
         job_id,
         task_id="task:t06-worker",
         idempotency_key=f"{job_id}-key",
     )
+    value["retry_policy"]["retryable_failure_kinds"] = retryable_failure_kinds or []
     event = job_event(value, f"event:{job_id}")
     async with database.transaction() as repositories:
         await repositories.jobs.enqueue_with_outbox(value, event)
@@ -316,7 +390,12 @@ def test_retryable_failure_retries_then_succeeds_or_dead_letters(
         suffix = "exhausted" if always_fail else "retry-success"
         worker = ReliableWorker(database, queue, executor, _worker_settings(f"worker-{suffix}"))
         try:
-            await _enqueue(database, queue, f"job:t06-worker-{suffix}")
+            await _enqueue(
+                database,
+                queue,
+                f"job:t06-worker-{suffix}",
+                retryable_failure_kinds=[FailureKind.TOOL],
+            )
             running = asyncio.create_task(worker.run(stop))
             stored = await _wait_for_status(database, f"job:t06-worker-{suffix}", expected_status)
             stop.set()
@@ -324,8 +403,155 @@ def test_retryable_failure_retries_then_succeeds_or_dead_letters(
             assert executor.calls == expected_calls
             assert stored["attempt"] == 2
             assert await raw.xlen(queue.streams.dead_letters) == dead_letter_count
+            async with database.transaction() as repositories:
+                history = await repositories.jobs.attempt_failures(f"job:t06-worker-{suffix}")
+            assert len(history) == 1
+            assert history[0].attempt == 1
+            assert history[0].failure["code"] == "test.retryable"
         finally:
             await raw.aclose()
+            await queue.close()
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_retryable_flag_does_not_override_empty_retry_kind_allowlist(
+    worker_database_url: str, redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(worker_database_url))
+        queue = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        executor = RetryThenSucceedExecutor()
+        stop = asyncio.Event()
+        worker = ReliableWorker(
+            database, queue, executor, _worker_settings("worker-empty-retry-policy")
+        )
+        try:
+            job_id = "job:t06-worker-empty-retry-policy"
+            await _enqueue(database, queue, job_id)
+            running = asyncio.create_task(worker.run(stop))
+            stored = await _wait_for_status(database, job_id, JobStatus.FAILED)
+            stop.set()
+            await asyncio.wait_for(running, 2)
+            assert executor.calls == 1
+            assert stored["attempt"] == 1
+            async with database.transaction() as repositories:
+                history = await repositories.jobs.attempt_failures(job_id)
+            assert history == []
+        finally:
+            await queue.close()
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_same_owner_reclaim_does_not_start_a_second_execution(
+    worker_database_url: str, redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(worker_database_url))
+        queue = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        executor = BlockingExecutor()
+        stop = asyncio.Event()
+        worker = ReliableWorker(database, queue, executor, _worker_settings("worker-owner-a"))
+        first_processing: asyncio.Task[None] | None = None
+        repeated_processing: asyncio.Task[None] | None = None
+        try:
+            job_id = "job:t06-worker-same-owner-reclaim"
+            await _enqueue(database, queue, job_id)
+            await queue.ensure_group(queue.streams.jobs, "workers")
+            delivered = await queue.read_group(
+                queue.streams.jobs,
+                "workers",
+                "worker-owner-a",
+                block_milliseconds=10,
+            )
+            first_processing = asyncio.create_task(worker._process(delivered[0], stop))
+            await asyncio.wait_for(executor.started.wait(), 2)
+
+            await asyncio.sleep(0.01)
+            claimed_by_b = await queue.claim_stale(
+                queue.streams.jobs,
+                "workers",
+                "worker-owner-b",
+                min_idle_milliseconds=1,
+            )
+            assert len(claimed_by_b.messages) == 1
+            await asyncio.sleep(0.01)
+            claimed_back_by_a = await queue.claim_stale(
+                queue.streams.jobs,
+                "workers",
+                "worker-owner-a",
+                min_idle_milliseconds=1,
+            )
+            assert len(claimed_back_by_a.messages) == 1
+            repeated_processing = asyncio.create_task(
+                worker._process(claimed_back_by_a.messages[0], stop)
+            )
+            await asyncio.sleep(0.05)
+            assert executor.calls == 1
+        finally:
+            executor.release.set()
+            tasks = [item for item in (first_processing, repeated_processing) if item is not None]
+            if tasks:
+                await asyncio.gather(*tasks)
+            await queue.close()
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_executor_result_wins_when_heartbeat_completes_in_same_tick(
+    worker_database_url: str, redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(worker_database_url))
+        queue = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        gate = asyncio.Event()
+        worker = SimultaneousHeartbeatWorker(
+            database,
+            queue,
+            GateExecutor(gate),
+            _worker_settings("worker-simultaneous"),
+        )
+        worker.gate = gate
+        try:
+            execution = asyncio.create_task(
+                worker._execute_with_heartbeat(
+                    job(
+                        "job:t06-simultaneous",
+                        task_id="task:t06-worker",
+                        idempotency_key="job:t06-simultaneous-key",
+                    ),
+                    asyncio.Event(),
+                )
+            )
+            await asyncio.sleep(0)
+            gate.set()
+            result = await asyncio.wait_for(execution, 2)
+            assert result["status"] is JobStatus.SUCCEEDED
+        finally:
+            await queue.close()
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_stale_claim_cursor_advances_between_scans(
+    worker_database_url: str, redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        stop = asyncio.Event()
+        database = Database(DatabaseSettings(worker_database_url))
+        queue = CursorTrackingQueue(QueueSettings(redis_url, namespace=redis_namespace), stop)
+        worker = ReliableWorker(
+            database, queue, SuccessExecutor(), _worker_settings("worker-cursor")
+        )
+        try:
+            await asyncio.wait_for(worker.run(stop), 2)
+            assert queue.start_ids == ["0-0", "42-0"]
+        finally:
             await queue.close()
             await database.dispose()
 
@@ -450,7 +676,7 @@ def test_dead_letter_write_loss_recovers_from_persisted_failure(
             await asyncio.wait_for(dead_lettered(), 3)
             stop.set()
             await asyncio.wait_for(running, 2)
-            assert executor.calls == 2
+            assert executor.calls == 1
             assert queue.dead_letters == 2
             assert (await raw.xpending(queue.streams.jobs, "workers"))["pending"] == 0
         finally:
