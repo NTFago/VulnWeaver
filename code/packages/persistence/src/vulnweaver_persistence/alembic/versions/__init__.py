@@ -1,0 +1,1 @@
+"""Immutable VulnWeaver database revisions."""

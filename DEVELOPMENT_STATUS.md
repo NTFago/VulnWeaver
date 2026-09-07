@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P0 工程骨架与契约冻结（T01、T02 已完成，下一任务 T03）
-- **总体状态**：公共契约与领域规则已冻结为 v1.0.0，无当前阻碍
+- **当前阶段**：P1 控制面最小闭环（T03 PostgreSQL 迁移与仓储已完成）
+- **总体状态**：PostgreSQL 控制面核心模型、迁移与事务仓储已就绪，可进入 T04 内容寻址工件库
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前开发分支 `feat/t02-contracts`，T02 变更已完成验证并按任务提交
+- **版本管理**：Git；当前开发分支 `feat/t03-persistence`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配（T03 待认领）
+- **当前负责人**：未分配（下一任务待认领）
 
 ## 3. 开发进度
 
@@ -25,6 +25,7 @@
 | 实现模块拆分 | 已完成 | Agent | M01-M17、P0-P5、T01-T22 已拆分 | 随实现维护依赖变化 | 2026-09-07 |
 | T01 工程工作区 | 已完成 | Codex | 命名为 VulnWeaver；初始化 uv、pnpm、质量工具、Dev Container、PostgreSQL/Redis Compose；配置国内依赖源 | 无 | 2026-09-07 |
 | T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
+| T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 新增 SQLAlchemy Core 模型、Alembic `0001` 迁移、异步事务仓储和结构化错误；覆盖 Project、Artifact/ArtifactVersion、Task、Job、Outbox、TaskEvent，保证 Job/Outbox 原子写入、请求指纹幂等、未发布事件重放和工件版本去重 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -66,10 +67,23 @@
 | ADR-008 | Python 使用 uv，TypeScript 使用 pnpm；依赖安装默认使用国内源 | 获得可复现锁文件、工作区能力并改善国内网络下的安装稳定性 | `code/docs/adr/008-workspace-tooling.md` |
 | ADR-009 | 使用不挂载 Docker Socket 的 Dev Container，动态样本另交 Sandbox Runner | 统一开发工具链，同时保持开发环境与不可信执行边界 | `code/docs/adr/009-containerized-development.md` |
 | ADR-010 | 使用根目录 Git 仓库进行版本管理，`main` 为集成基线 | 为多人和多 Agent 开发提供可审查、可追溯的版本历史 | `code/docs/adr/010-git-version-control.md` |
+| ADR-011 | PostgreSQL 持久化采用 SQLAlchemy Core 2.x、psycopg 3 与显式 Alembic 迁移 | 提供清晰的异步事务边界、可审查 DDL，并让 Job 与 Outbox 在同一事务登记 | `code/docs/adr/011-postgresql-persistence-toolkit.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T03 PostgreSQL 迁移与事务仓储
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/persistence/`、`code/tests/persistence/`、`code/pyproject.toml`、`code/uv.lock`、`code/docs/adr/011-postgresql-persistence-toolkit.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：建立 PostgreSQL 控制面首批关系模型与可逆 Alembic 迁移；实现异步数据库生命周期、transaction-scoped repositories、结构化持久化错误、请求指纹幂等、Project/ArtifactVersion/Task/Job 仓储、Job/Outbox 原子登记、Outbox 重放状态和追加式 TaskEvent；用外键、唯一约束、状态 CHECK、摘要格式约束和当前工件版本引用保护数据一致性
+- 测试与结果：55 个 Pytest 测试通过，分支覆盖率 97.59%；其中 16 个 PostgreSQL 集成/配置测试在独立临时数据库完成 upgrade、Schema 漂移校验、仓储事务场景和 downgrade；Ruff、Mypy、契约生成漂移、TypeScript 严格检查、uv 锁文件和 Compose 配置检查通过
+- 问题：Q-003；继续使用 `uv sync --no-editable` 与 `uv run --no-sync` 完成 Windows 中文路径验证
+- 阻碍点：无
+- 决策：ADR-011
+- 下一步：认领 T04，实现本地内容寻址工件库，并把真实 SHA-256、不可变写入和父工件谱系接入 T03 仓储
 
 ### 2026-09-07：完成 T02 公共契约与领域规则
 
@@ -135,12 +149,16 @@
 | 2026-09-07 | T02 Python 单元/契约测试 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90` | 39 个测试通过；分支覆盖率 98.98% | 未包含数据库或跨服务集成，属于 T03+ 范围 |
 | 2026-09-07 | T02 Python 静态检查 | `uv run --no-sync ruff check .`、`uv run --no-sync mypy packages` | 通过；9 个源文件无类型错误 | 无 |
 | 2026-09-07 | T02 跨语言契约 | Pytest JSON Schema 元校验及生成 `--check`、`pnpm run check` | 通过；Python/TypeScript 生成文件与 v1.0.0 Schema 一致，TypeScript 严格检查通过 | 尚无 API/队列消费者，消费者契约测试从 T05/T07 开始 |
+| 2026-09-07 | T03 PostgreSQL 集成 | `uv run --no-sync pytest tests/persistence -q` | 16 个测试通过；真实 PostgreSQL 临时库完成 upgrade、模型迁移无漂移、事务/幂等/回滚/重放/追加约束和 downgrade | 未模拟 PostgreSQL 进程中断；恢复演练属于 T22 |
+| 2026-09-07 | T03 Python 回归与覆盖率 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90` | 55 个测试通过；分支覆盖率 97.59% | Alembic 环境引导与不可变历史迁移脚本不计逐行覆盖，由迁移集成测试验证 |
+| 2026-09-07 | T03 静态与跨语言检查 | `uv run --no-sync ruff check .`、`uv run --no-sync mypy packages`、契约生成脚本 `--check`、`pnpm run check` | 通过；20 个 Python 源文件无类型错误，契约生成物与 TypeScript 严格检查无回归 | 无 |
+| 2026-09-07 | T03 依赖与基础设施 | `uv lock --check`、`docker compose -f compose.yaml -f compose.dev.yaml config --quiet`、`docker compose ... ps` | 通过；锁文件有效，PostgreSQL 16 与 Redis 7 均 healthy | 未推送远程或执行生产部署 |
 
 ## 10. 下一步
 
-1. 认领 T03，创建 `feat/t03-persistence` 分支，并阅读 M04、M08 的数据一致性约束。
-2. 根据 `vulnweaver_contracts` v1.0.0 建立 PostgreSQL 首批迁移与仓储接口，优先覆盖 Project、ArtifactVersion、Task、Job、Outbox。
-3. 用集成测试验证 Job 与 Outbox 同事务提交、幂等键唯一性和失败回滚；本机 Windows 若继续位于中文路径，使用 Q-003 中的非 editable 验证方式。
+1. 认领 T04，建立 `packages/artifact-store` 接口和本地内容寻址实现，默认只接受授权输入与受控派生产物。
+2. 为流式 SHA-256、原子落盘、同内容去重、覆盖拒绝、父工件谱系和路径逃逸拦截补齐单元/集成测试，并接入 T03 ArtifactVersion 仓储。
+3. T04 完成后认领 T05，基于 T03 Outbox 仓储实现 Redis Streams Dispatcher 的可靠投递与重复消息验证。
 
 ## 11. 每次工作结束时的更新模板
 

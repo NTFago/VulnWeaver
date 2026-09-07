@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-domain",
+    "vulnweaver-persistence",
 ]
 
 [dependency-groups]
@@ -22,11 +23,12 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["packages/contracts", "packages/domain"]
+members = ["packages/contracts", "packages/domain", "packages/persistence"]
 
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
+vulnweaver-persistence = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -41,7 +43,11 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["vulnweaver_contracts", "vulnweaver_domain"]
+source_pkgs = ["vulnweaver_contracts", "vulnweaver_domain", "vulnweaver_persistence"]
+omit = [
+    "*/vulnweaver_persistence/alembic/env.py",
+    "*/vulnweaver_persistence/alembic/versions/*.py",
+]
 
 [tool.mypy]
 python_version = "3.12"
