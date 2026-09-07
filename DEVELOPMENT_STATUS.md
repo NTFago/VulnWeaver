@@ -13,7 +13,7 @@
 - **总体状态**：Ruff、Pyright、pytest 与覆盖率检查已固化为 GitHub Actions 必过门禁
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前开发分支 `chore/ci-quality-gate`，基于 T04/T05 Review 最新实现
+- **版本管理**：Git；当前开发分支 `chore/ci-quality-gate`（已推送至 `origin`，本地质量门复验通过），基于 T04/T05 Review 最新实现
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：Codex
 
@@ -225,6 +225,7 @@
 | 2026-09-07 | T04/T05 Review 回归 | 先运行新增缺陷用例复现，再执行 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check`、Compose 构建/启动/状态检查 | 93 个测试通过，分支覆盖率 91.37%；双 Dispatcher 在一个实例阻塞时可并发处理另一事件；迁移退出 0、服务健康且安全配置未回退 | 单条发布仍在事务中持有一条行锁和一个连接；高吞吐场景若需把网络 IO 移出事务，应另增带所有者令牌的 Outbox 领取租约 |
 | 2026-09-07 | T03 枚举兼容性回归 | 新增合法字符串枚举 PostgreSQL 集成测试后执行全量 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check` 与 Compose 配置检查 | 94 个测试通过，分支覆盖率 91.60%；Project/Artifact/Task/Job 字符串枚举写入并按生成枚举读回 | 无 |
 | 2026-09-07 | T01.1 CI 质量门禁 | `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript `tsc --noEmit`）、`uv lock --check`、`pnpm install --frozen-lockfile`；核对 `actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v6` 版本有效性与 `package-manager-cache` 输入 | 通过；Pyright 0 错误、94 个测试通过、分支覆盖率 91.60%、契约生成漂移检查经 pytest 通过、锁文件一致 | GitHub Actions 工作流尚未在远端 runner 实跑；平台层必需检查需仓库管理员配置 |
+| 2026-09-07 | T01.1 推送前复验与分支推送 | 确认 PostgreSQL/Redis healthy 后执行 `pnpm run check`、`uv lock --check`、`pnpm install --frozen-lockfile`，随后 `git push -u origin chore/ci-quality-gate` | 通过；结果与上一次记录一致（Ruff 0 问题、Pyright 0 错误、94 测试、覆盖率 91.60%、TypeScript 通过、锁文件一致）；分支已推送并建立上游跟踪 | GitHub Actions 仍需通过 PR 或手动触发才会实跑（推送非 `main` 分支不触发）；分支保护必需检查仍待平台配置 |
 
 ## 10. 下一步
 
