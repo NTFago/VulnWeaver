@@ -147,9 +147,7 @@ class LocalContentAddressedStore:
     def _parse_reference(self, object_ref: str) -> str:
         matched = _OBJECT_REFERENCE.fullmatch(object_ref)
         if matched is None:
-            raise InvalidObjectReference(
-                "object reference must use canonical cas://sha256 form"
-            )
+            raise InvalidObjectReference("object reference must use canonical cas://sha256 form")
         return matched.group(1)
 
     def _path_for_digest(self, digest: str) -> Path:

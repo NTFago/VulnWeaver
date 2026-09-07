@@ -25,9 +25,7 @@ class ContractValidationError(ValueError):
 
 @lru_cache(maxsize=1)
 def _bundle() -> dict[str, Any]:
-    schema_path = files("vulnweaver_contracts").joinpath(
-        "schemas", "v1", "contracts.schema.json"
-    )
+    schema_path = files("vulnweaver_contracts").joinpath("schemas", "v1", "contracts.schema.json")
     return cast(dict[str, Any], json.loads(schema_path.read_text(encoding="utf-8")))
 
 

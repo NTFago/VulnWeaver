@@ -53,9 +53,7 @@ class ArtifactRegistrationService:
     ) -> ArtifactRegistrationResult:
         validate_contract("Artifact", artifact)
         self._ensure_request_matches_artifact(artifact, version_request, initial=True)
-        stored_object = await asyncio.to_thread(
-            self._store.put_stream, source, max_bytes=max_bytes
-        )
+        stored_object = await asyncio.to_thread(self._store.put_stream, source, max_bytes=max_bytes)
         version = _build_version(version_request, stored_object)
         async with self._database.transaction() as repositories:
             await repositories.artifacts.add(artifact)
@@ -77,9 +75,7 @@ class ArtifactRegistrationService:
         async with self._database.transaction() as repositories:
             artifact = await repositories.artifacts.get(version_request.artifact_id)
         self._ensure_request_matches_artifact(artifact, version_request, initial=False)
-        stored_object = await asyncio.to_thread(
-            self._store.put_stream, source, max_bytes=max_bytes
-        )
+        stored_object = await asyncio.to_thread(self._store.put_stream, source, max_bytes=max_bytes)
         version = _build_version(version_request, stored_object)
         async with self._database.transaction() as repositories:
             result = await repositories.artifacts.add_version(version)
@@ -114,9 +110,7 @@ class ArtifactRegistrationService:
             )
 
 
-def _build_version(
-    request: ArtifactVersionRequest, stored_object: StoredObject
-) -> ArtifactVersion:
+def _build_version(request: ArtifactVersionRequest, stored_object: StoredObject) -> ArtifactVersion:
     version = ArtifactVersion(
         schema_version=SchemaVersion.VALUE_1_0_0,
         id=request.id,

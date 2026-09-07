@@ -31,9 +31,7 @@ def upgrade() -> None:
             "permission_mode IN ('request_permission', 'full_access')",
             name=op.f("ck_projects_permission_mode"),
         ),
-        sa.CheckConstraint(
-            "schema_version = '1.0.0'", name=op.f("ck_projects_schema_version_v1")
-        ),
+        sa.CheckConstraint("schema_version = '1.0.0'", name=op.f("ck_projects_schema_version_v1")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_projects")),
     )
     op.create_table(
@@ -48,9 +46,7 @@ def upgrade() -> None:
             "kind IN ('source_archive', 'source_repository', 'elf', 'pe', 'derived')",
             name=op.f("ck_artifacts_kind"),
         ),
-        sa.CheckConstraint(
-            "schema_version = '1.0.0'", name=op.f("ck_artifacts_schema_version_v1")
-        ),
+        sa.CheckConstraint("schema_version = '1.0.0'", name=op.f("ck_artifacts_schema_version_v1")),
         sa.ForeignKeyConstraint(
             ["project_id"],
             ["projects.id"],
@@ -91,9 +87,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_artifact_versions")),
-        sa.UniqueConstraint(
-            "artifact_id", "digest", name="uq_artifact_versions_artifact_digest"
-        ),
+        sa.UniqueConstraint("artifact_id", "digest", name="uq_artifact_versions_artifact_digest"),
     )
     op.create_foreign_key(
         "fk_artifacts_current_version_id_artifact_versions",
@@ -121,9 +115,7 @@ def upgrade() -> None:
             "result IN ('success', 'partial', 'no_findings')",
             name=op.f("ck_tasks_result"),
         ),
-        sa.CheckConstraint(
-            "schema_version = '1.0.0'", name=op.f("ck_tasks_schema_version_v1")
-        ),
+        sa.CheckConstraint("schema_version = '1.0.0'", name=op.f("ck_tasks_schema_version_v1")),
         sa.CheckConstraint(
             "status IN ('created', 'validating', 'analyzing', 'reviewing', "
             "'verifying', 'exploiting', 'reporting', 'completed', 'failed', 'cancelled')",
@@ -141,9 +133,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_tasks")),
-        sa.UniqueConstraint(
-            "project_id", "idempotency_key", name="uq_tasks_project_idempotency"
-        ),
+        sa.UniqueConstraint("project_id", "idempotency_key", name="uq_tasks_project_idempotency"),
     )
     op.create_table(
         "jobs",
@@ -174,9 +164,7 @@ def upgrade() -> None:
             "'review', 'proof', 'exploit', 'report')",
             name=op.f("ck_jobs_kind"),
         ),
-        sa.CheckConstraint(
-            "schema_version = '1.0.0'", name=op.f("ck_jobs_schema_version_v1")
-        ),
+        sa.CheckConstraint("schema_version = '1.0.0'", name=op.f("ck_jobs_schema_version_v1")),
         sa.CheckConstraint(
             "status IN ('pending', 'queued', 'running', 'waiting_permission', "
             "'succeeded', 'failed', 'cancelled')",
@@ -217,9 +205,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "schema_version = '1.0.0'", name=op.f("ck_outbox_events_schema_version_v1")
         ),
-        sa.CheckConstraint(
-            "sequence >= 0", name=op.f("ck_outbox_events_sequence_non_negative")
-        ),
+        sa.CheckConstraint("sequence >= 0", name=op.f("ck_outbox_events_sequence_non_negative")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_outbox_events")),
         sa.UniqueConstraint(
             "aggregate_type",
@@ -249,9 +235,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "schema_version = '1.0.0'", name=op.f("ck_task_events_schema_version_v1")
         ),
-        sa.CheckConstraint(
-            "sequence >= 0", name=op.f("ck_task_events_sequence_non_negative")
-        ),
+        sa.CheckConstraint("sequence >= 0", name=op.f("ck_task_events_sequence_non_negative")),
         sa.ForeignKeyConstraint(
             ["task_id"],
             ["tasks.id"],

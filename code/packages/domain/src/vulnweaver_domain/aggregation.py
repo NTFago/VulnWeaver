@@ -77,9 +77,7 @@ def aggregate_task(
         return TaskAggregate(phase, None)
 
     succeeded = sum(job.status is JobStatus.SUCCEEDED for job in jobs)
-    failed_or_cancelled = sum(
-        job.status in {JobStatus.FAILED, JobStatus.CANCELLED} for job in jobs
-    )
+    failed_or_cancelled = sum(job.status in {JobStatus.FAILED, JobStatus.CANCELLED} for job in jobs)
     if succeeded == 0 and failed_or_cancelled:
         return TaskAggregate(TaskStatus.FAILED, None)
 
