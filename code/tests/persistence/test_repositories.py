@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy import func, select
+from vulnweaver_contracts import JobKind
+from vulnweaver_persistence import (
+    Database,
+    DatabaseSettings,
+    EntityConflict,
+    EntityNotFound,
+    IdempotencyConflict,
+    PersistenceInvariantError,
+)
+from vulnweaver_persistence.models import jobs, outbox_events
+
+from tests.persistence.factories import (
+    artifact,
+    artifact_version,
+    job,
+    job_event,
+    project,
+    task,
+    task_event,
+)
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+@pytest.fixture(scope="module")
+def seeded_database_url(persistence_database_url: str) -> str:
+    async def seed() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project())
+                await repositories.artifacts.add(artifact())
+                await repositories.artifacts.add_version(artifact_version())
+                await repositories.tasks.create(task())
+                initial_job = job()
+                result = await repositories.jobs.enqueue_with_outbox(
+                    initial_job, job_event(initial_job)
+                )
+                assert result.created
+        finally:
+            await database.dispose()
+
+    asyncio.run(seed())
+    return persistence_database_url
+
+
+def test_job_and_outbox_commit_atomically_and_retry_idempotently(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            retry_job = job("job:t03-retry")
+            retry_event = job_event(retry_job, "event:t03-retry")
+            async with database.transaction() as repositories:
+                retry = await repositories.jobs.enqueue_with_outbox(retry_job, retry_event)
+                assert not retry.created
+                assert retry.job["id"] == "job:t03"
+                assert retry.event["event_id"] == "event:t03"
+                pending = await repositories.outbox.pending()
+                assert "event:t03" in {
+                    message.event["event_id"] for message in pending
+                }
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_idempotency_key_reuse_with_different_request_is_rejected(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            conflicting_job = job(
+                "job:t03-conflict",
+                idempotency_key="job:t03-key",
+                kind=JobKind.REVIEW,
+            )
+            with pytest.raises(IdempotencyConflict) as captured:
+                async with database.transaction() as repositories:
+                    await repositories.jobs.enqueue_with_outbox(
+                        conflicting_job,
+                        job_event(conflicting_job, "event:t03-conflict"),
+                    )
+            assert captured.value.code == "idempotency_conflict"
+            assert "idempotency_key" in captured.value.details
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_outbox_conflict_rolls_back_the_new_job(seeded_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            async with database.engine.connect() as connection:
+                jobs_before = await connection.scalar(select(func.count()).select_from(jobs))
+                events_before = await connection.scalar(
+                    select(func.count()).select_from(outbox_events)
+                )
+            second_job = job("job:t03-rollback", idempotency_key="job:t03-rollback-key")
+            duplicate_event = job_event(second_job, "event:t03")
+            with pytest.raises(EntityConflict):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.enqueue_with_outbox(second_job, duplicate_event)
+
+            async with database.transaction() as repositories:
+                with pytest.raises(EntityNotFound):
+                    await repositories.jobs.get(second_job["id"])
+            async with database.engine.connect() as connection:
+                job_count = await connection.scalar(select(func.count()).select_from(jobs))
+                event_count = await connection.scalar(
+                    select(func.count()).select_from(outbox_events)
+                )
+                assert job_count == jobs_before
+                assert event_count == events_before
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_unpublished_event_is_replayed_until_marked_published(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            now = datetime.now(UTC)
+            replay_job = job("job:t03-replay", idempotency_key="job:t03-replay-key")
+            replay_event = job_event(replay_job, "event:t03-replay")
+            async with database.transaction() as repositories:
+                await repositories.jobs.enqueue_with_outbox(replay_job, replay_event)
+                assert await repositories.outbox.mark_failed(
+                    "event:t03-replay",
+                    error={"code": "redis_unavailable", "retryable": True},
+                    retry_after=timedelta(0),
+                    failed_at=now,
+                )
+            async with database.transaction() as repositories:
+                pending = await repositories.outbox.pending()
+                replay = next(
+                    message
+                    for message in pending
+                    if message.event["event_id"] == "event:t03-replay"
+                )
+                assert replay.publish_attempts == 1
+                assert await repositories.outbox.mark_published(
+                    "event:t03-replay", published_at=now
+                )
+            async with database.transaction() as repositories:
+                pending_ids = {
+                    message.event["event_id"]
+                    for message in await repositories.outbox.pending()
+                }
+                assert "event:t03-replay" not in pending_ids
+                assert not await repositories.outbox.mark_published(
+                    "event:t03-replay", published_at=now
+                )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_task_idempotency_and_artifact_digest_deduplication(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            async with database.transaction() as repositories:
+                task_retry = task("task:t03-retry")
+                task_result = await repositories.tasks.create(task_retry)
+                assert not task_result.created
+                assert task_result.value["id"] == "task:t03"
+
+                duplicate_version = artifact_version("artifact-version:t03-retry")
+                version_result = await repositories.artifacts.add_version(duplicate_version)
+                assert not version_result.created
+                assert version_result.value["id"] == "artifact-version:t03"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_event_must_match_job_before_any_write(seeded_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            invalid_job = job("job:t03-invalid", idempotency_key="job:t03-invalid-key")
+            invalid_event = job_event(invalid_job, "event:t03-invalid")
+            invalid_event["payload"]["task_id"] = "task:other"
+            with pytest.raises(PersistenceInvariantError):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.enqueue_with_outbox(invalid_job, invalid_event)
+            async with database.transaction() as repositories:
+                with pytest.raises(EntityNotFound):
+                    await repositories.jobs.get(invalid_job["id"])
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_database_healthcheck(seeded_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            await database.healthcheck()
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_task_events_are_append_only_and_type_restricted(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            event = task_event()
+            async with database.transaction() as repositories:
+                await repositories.task_events.append(event)
+
+            duplicate_sequence = task_event(identifier="task-event:t03-duplicate")
+            with pytest.raises(EntityConflict):
+                async with database.transaction() as repositories:
+                    await repositories.task_events.append(duplicate_sequence)
+
+            with pytest.raises(ValueError, match="only accepts"):
+                async with database.transaction() as repositories:
+                    await repositories.task_events.append(job_event(job()))
+
+            mismatched = task_event(identifier="task-event:t03-mismatched", sequence=1)
+            mismatched["payload"]["task_id"] = "task:other"
+            with pytest.raises(PersistenceInvariantError):
+                async with database.transaction() as repositories:
+                    await repositories.task_events.append(mismatched)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_repository_conflicts_remain_structured(seeded_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            async with database.transaction() as repositories:
+                stored = await repositories.projects.get("project:t03")
+                assert stored["permission_mode"].value == "request_permission"
+                with pytest.raises(EntityNotFound):
+                    await repositories.tasks.get("task:missing")
+
+            with pytest.raises(EntityConflict) as duplicate_project:
+                async with database.transaction() as repositories:
+                    await repositories.projects.add(project())
+            assert duplicate_project.value.as_dict() == {
+                "code": "entity_conflict",
+                "message": "project identifier already exists",
+                "retryable": False,
+                "details": {"project_id": "project:t03"},
+            }
+
+            conflicting_task = task("task:t03-conflicting-request")
+            conflicting_task["artifact_version_ids"] = ["artifact-version:other"]
+            with pytest.raises(IdempotencyConflict):
+                async with database.transaction() as repositories:
+                    await repositories.tasks.create(conflicting_task)
+
+            conflicting_version = artifact_version(
+                "artifact-version:t03", digest_character="b"
+            )
+            with pytest.raises(EntityConflict):
+                async with database.transaction() as repositories:
+                    await repositories.artifacts.add_version(conflicting_version)
+
+            conflicting_job = job("job:t03", idempotency_key="job:t03-different-key")
+            with pytest.raises(EntityConflict):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.enqueue_with_outbox(
+                        conflicting_job,
+                        job_event(conflicting_job, "event:t03-different-key"),
+                    )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("limit", [0, 1001])
+def test_outbox_batch_size_has_a_safe_bound(
+    seeded_database_url: str, limit: int
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            with pytest.raises(ValueError, match="between 1 and 1000"):
+                async with database.transaction() as repositories:
+                    await repositories.outbox.pending(limit=limit)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

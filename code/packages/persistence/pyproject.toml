@@ -1,0 +1,21 @@
+[project]
+name = "vulnweaver-persistence"
+version = "0.1.0"
+description = "PostgreSQL schema, migrations and repositories for VulnWeaver"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "alembic>=1.16,<2",
+    "psycopg[binary]>=3.2,<4",
+    "sqlalchemy[asyncio]>=2.0,<2.2",
+    "vulnweaver-contracts",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-contracts = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_persistence"
