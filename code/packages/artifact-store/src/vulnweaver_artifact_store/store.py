@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +37,7 @@ class ArtifactStore(Protocol):
     def put_stream(self, source: BinaryIO, *, max_bytes: int) -> StoredObject: ...
 
     @contextmanager
-    def open(self, object_ref: str) -> Iterator[BinaryIO]: ...
+    def open(self, object_ref: str) -> Generator[BinaryIO, None, None]: ...
 
     def verify(self, object_ref: str) -> StoredObject: ...
 
@@ -103,7 +103,7 @@ class LocalContentAddressedStore:
                     temporary_path.unlink(missing_ok=True)
 
     @contextmanager
-    def open(self, object_ref: str) -> Iterator[BinaryIO]:
+    def open(self, object_ref: str) -> Generator[BinaryIO, None, None]:
         digest = self._parse_reference(object_ref)
         path = self._existing_path(digest)
         try:
@@ -129,7 +129,7 @@ class LocalContentAddressedStore:
         hasher = hashlib.sha256()
         size_bytes = 0
         while True:
-            chunk = source.read(self._chunk_size)
+            chunk = cast(object, source.read(self._chunk_size))
             if not isinstance(chunk, bytes):
                 raise ArtifactIntegrityError("artifact source must yield bytes")
             if not chunk:

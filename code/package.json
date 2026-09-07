@@ -5,10 +5,18 @@
   "description": "Evidence-driven agentic vulnerability discovery",
   "packageManager": "pnpm@11.10.0",
   "scripts": {
-    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "check": "pnpm run check:python && pnpm run check:typescript",
+    "check:python": "pnpm run check:ruff && pnpm run check:pyright && pnpm run check:pytest",
+    "check:ruff": "uv run --no-sync ruff check .",
+    "check:pyright": "pyright",
+    "check:pytest": "uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90",
+    "check:typescript": "pnpm run lint && pnpm run typecheck && pnpm run test",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "pyright": "^1.1.413"
   },
   "engines": {
     "node": ">=24 <25",

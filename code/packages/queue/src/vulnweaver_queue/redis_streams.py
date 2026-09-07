@@ -105,7 +105,7 @@ class RedisStreamsClient:
             jobs=f"{key_tag}:jobs",
             events=f"{key_tag}:events",
         )
-        self._client = client or Redis.from_url(
+        self._client = client or Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
             settings.url,
             decode_responses=True,
             socket_connect_timeout=settings.socket_timeout_seconds,
@@ -230,7 +230,7 @@ class RedisStreamsClient:
 
     async def healthcheck(self) -> None:
         try:
-            await self._client.ping()
+            await self._client.ping()  # pyright: ignore[reportUnknownMemberType]
         except RedisError as error:
             raise _unavailable("healthcheck", error) from error
 
@@ -262,9 +262,10 @@ def _decode_stream_response(response: object) -> list[StreamMessage]:
         for stream, entries in streams:
             for message_id, fields in entries:
                 encoded = fields["event"]
-                payload = json.loads(encoded)
-                if not isinstance(payload, dict):
+                decoded: object = json.loads(encoded)
+                if not isinstance(decoded, dict):
                     raise TypeError("event payload is not an object")
+                payload = cast(dict[str, object], decoded)
                 validate_contract("QueueEvent", payload)
                 for field in (
                     "event_id",

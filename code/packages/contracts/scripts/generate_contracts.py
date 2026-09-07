@@ -6,7 +6,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = (
@@ -36,10 +36,10 @@ def _python_type(schema: dict[str, Any]) -> str:
     if "enum" in schema:
         values = ", ".join(repr(value) for value in schema["enum"])
         return f"Literal[{values}]"
-    union = schema.get("oneOf") or schema.get("anyOf")
+    union = cast(list[dict[str, Any]] | None, schema.get("oneOf") or schema.get("anyOf"))
     if union:
         return " | ".join(_python_type(option) for option in union)
-    schema_type = schema.get("type")
+    schema_type = cast(str | list[str] | None, schema.get("type"))
     if isinstance(schema_type, list):
         return " | ".join(_python_type({"type": item}) for item in schema_type)
     if schema_type == "string":
@@ -57,7 +57,8 @@ def _python_type(schema: dict[str, Any]) -> str:
     if schema_type == "object":
         value_schema = schema.get("additionalProperties")
         if isinstance(value_schema, dict):
-            return f"dict[str, {_python_type(value_schema)}]"
+            additional = cast(dict[str, Any], value_schema)
+            return f"dict[str, {_python_type(additional)}]"
         return "dict[str, JsonValue]"
     return "JsonValue"
 
@@ -69,10 +70,10 @@ def _typescript_type(schema: dict[str, Any]) -> str:
         return json.dumps(schema["const"])
     if "enum" in schema:
         return " | ".join(json.dumps(value) for value in schema["enum"])
-    union = schema.get("oneOf") or schema.get("anyOf")
+    union = cast(list[dict[str, Any]] | None, schema.get("oneOf") or schema.get("anyOf"))
     if union:
         return " | ".join(_typescript_type(option) for option in union)
-    schema_type = schema.get("type")
+    schema_type = cast(str | list[str] | None, schema.get("type"))
     if isinstance(schema_type, list):
         return " | ".join(_typescript_type({"type": item}) for item in schema_type)
     if schema_type == "string":
@@ -88,7 +89,8 @@ def _typescript_type(schema: dict[str, Any]) -> str:
     if schema_type == "object":
         value_schema = schema.get("additionalProperties")
         if isinstance(value_schema, dict):
-            return f"Record<string, {_typescript_type(value_schema)}>"
+            additional = cast(dict[str, Any], value_schema)
+            return f"Record<string, {_typescript_type(additional)}>"
         return "Record<string, JsonValue>"
     return "JsonValue"
 

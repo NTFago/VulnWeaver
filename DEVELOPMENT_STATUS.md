@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T03-T05 Review 修正已完成）
-- **总体状态**：持久化仓储已统一兼容 StrEnum 与 Schema 合法字符串，可进入 T06 Worker 租约与幂等框架
+- **当前阶段**：P1 控制面最小闭环（CI 质量门禁已完成，进入 T06）
+- **总体状态**：Ruff、Pyright、pytest 与覆盖率检查已固化为 GitHub Actions 必过门禁
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；当前开发分支 `fix/t04-t05-review`，基于 T04/T05 实现分支
+- **版本管理**：Git；当前开发分支 `chore/ci-quality-gate`，基于 T04/T05 Review 最新实现
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配（下一任务待认领）
+- **当前负责人**：Codex
 
 ## 3. 开发进度
 
@@ -28,6 +28,7 @@
 | T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 主体实现及 Review 修正完成；Project、Artifact、Task（含可选 result）和 Job 枚举字段统一通过 `str()` 序列化，仓储同时接受 StrEnum 与 Schema 合法字符串，真实 PostgreSQL 回归验证写入后按枚举读回 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
 | T04 本地内容寻址工件库 | 已完成 | Codex | 主体实现及 Review 修正完成：字符串 `derived` 输入无法绕过谱系约束，合法字符串枚举可持久化；重复旧摘要不回退 current version；新摘要目录逐级 fsync；首版本循环外键的事务内临时 NULL 语义已明确 | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
+| T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -72,10 +73,23 @@
 | ADR-011 | PostgreSQL 持久化采用 SQLAlchemy Core 2.x、psycopg 3 与显式 Alembic 迁移 | 提供清晰的异步事务边界、可审查 DDL，并让 Job 与 Outbox 在同一事务登记 | `code/docs/adr/011-postgresql-persistence-toolkit.md` |
 | ADR-012 | 首版本地工件库采用 SHA-256 内容寻址、同文件系统 staging 与排他硬链接原子发布 | 保证同内容稳定引用、拒绝覆盖与调用方宿主路径，并保留 MinIO 后端替换能力 | `code/docs/adr/012-local-content-addressed-artifact-store.md` |
 | ADR-013 | PostgreSQL Outbox 到 Redis Streams 采用至少一次交付、稳定事件 ID 和 Redis 内短期原子去重 | 正确认知跨存储崩溃窗口，同时避免等价重试重复追加并要求 T06 保护持久化副作用 | `code/docs/adr/013-at-least-once-outbox-to-redis.md` |
+| ADR-014 | CI 使用 Ruff、Pyright 与 pytest 分层门禁，在 PR/`main` 推送/手动触发时以只读权限运行 | 分层覆盖规范、类型与运行行为，把质量检查固化为必过门禁 | `code/docs/adr/014-ci-quality-gate.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T01.1 CI 质量门禁
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`.github/workflows/quality-gate.yml`、`code/docs/adr/014-ci-quality-gate.md`、`code/pyproject.toml`、`code/package.json`、`code/pnpm-lock.yaml`、`code/uv.lock`、`code/.devcontainer/devcontainer.json`、`code/README.md`，以及为通过 Pyright strict 而修正的 `store.py`、`generate_contracts.py`、`validation.py`、`redis_streams.py`、`database.py`、`main.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：以 Ruff（代码规则与低级缺陷）、Pyright（strict、Linux/Python 3.12）、pytest（90% 分支覆盖率，含真实 PostgreSQL/Redis 集成与契约生成漂移检查）和 TypeScript（`tsc --noEmit`）建立分层质量门禁，统一为 `pnpm run check` 与 GitHub Actions 工作流；Mypy 切换为 Pyright 暴露的 6 处 strict 类型问题已以最小范围修正或对第三方 stub 作针对性忽略
+- 测试与结果：`pnpm run check` 全链路通过（Ruff 0 问题、Pyright 0 错误、94 个测试通过、分支覆盖率 91.60%、TypeScript 通过）；`uv lock --check` 与 `pnpm install --frozen-lockfile` 确认锁文件与清单一致；核对 `actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v6` 为有效版本且 `package-manager-cache` 输入受支持
+- 问题：无
+- 阻碍点：无
+- 决策：ADR-014
+- 下一步：认领 T06，实现 Worker 消费循环、Job 租约/幂等框架
 
 ### 2026-09-07：统一持久化枚举序列化边界
 
@@ -210,6 +224,7 @@
 | 2026-09-07 | T05 容器交付 | Compose 配置解析、`docker compose ... build dispatcher`、`up -d dispatcher`、日志及 `docker inspect` | 通过；迁移退出码 0，Dispatcher 运行中；用户为 `vulnweaver`、根文件系统只读、capabilities 全部移除、无宿主绑定挂载 | 未执行生产部署或多主机故障演练 |
 | 2026-09-07 | T04/T05 Review 回归 | 先运行新增缺陷用例复现，再执行 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check`、Compose 构建/启动/状态检查 | 93 个测试通过，分支覆盖率 91.37%；双 Dispatcher 在一个实例阻塞时可并发处理另一事件；迁移退出 0、服务健康且安全配置未回退 | 单条发布仍在事务中持有一条行锁和一个连接；高吞吐场景若需把网络 IO 移出事务，应另增带所有者令牌的 Outbox 领取租约 |
 | 2026-09-07 | T03 枚举兼容性回归 | 新增合法字符串枚举 PostgreSQL 集成测试后执行全量 `pytest --cov`、Ruff、Mypy、契约生成 `--check`、`uv lock --check`、`pnpm run check` 与 Compose 配置检查 | 94 个测试通过，分支覆盖率 91.60%；Project/Artifact/Task/Job 字符串枚举写入并按生成枚举读回 | 无 |
+| 2026-09-07 | T01.1 CI 质量门禁 | `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript `tsc --noEmit`）、`uv lock --check`、`pnpm install --frozen-lockfile`；核对 `actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v6` 版本有效性与 `package-manager-cache` 输入 | 通过；Pyright 0 错误、94 个测试通过、分支覆盖率 91.60%、契约生成漂移检查经 pytest 通过、锁文件一致 | GitHub Actions 工作流尚未在远端 runner 实跑；平台层必需检查需仓库管理员配置 |
 
 ## 10. 下一步
 

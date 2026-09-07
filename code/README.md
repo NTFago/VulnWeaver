@@ -43,4 +43,16 @@ Compose 会先运行一次 `vulnweaver-migrate`，迁移成功后再以非 root�
 Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`、`artifact-store`
 和 `queue`。
 
+## 质量门禁
+
+本地与 CI 使用同一组命令：
+
+```shell
+pnpm run check
+```
+
+门禁依次执行 Ruff 代码规则与低级缺陷检查、Pyright 严格类型检查、pytest 全量测试及 90%
+分支覆盖率阈值，随后验证 TypeScript 工作区。CI 在 Pull Request 和 `main` 分支推送时
+运行，并使用 PostgreSQL 16 与 Redis 7 服务执行真实集成测试。
+
 开发容器不挂载 Docker Socket，也不得用于直接运行未知样本、Poc 或利用脚本。

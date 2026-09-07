@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+from types import FrameType
 
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
@@ -84,8 +85,12 @@ def _environment_float(name: str, default: float) -> float:
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
     loop = asyncio.get_running_loop()
+
+    def fallback_handler(_signum: int, _frame: FrameType | None) -> None:
+        loop.call_soon_threadsafe(stop.set)
+
     for signal_name in (signal.SIGINT, signal.SIGTERM):
         try:
             loop.add_signal_handler(signal_name, stop.set)
         except NotImplementedError:
-            signal.signal(signal_name, lambda *_args: loop.call_soon_threadsafe(stop.set))
+            signal.signal(signal_name, fallback_handler)

@@ -15,7 +15,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "mypy>=1.15,<2",
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.11,<1",
@@ -50,6 +49,23 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.pyright]
+include = ["apps", "packages"]
+exclude = ["**/__pycache__", "**/.venv", "**/node_modules"]
+extraPaths = [
+    "apps/dispatcher/src",
+    "packages/artifact-store/src",
+    "packages/contracts/src",
+    "packages/domain/src",
+    "packages/persistence/src",
+    "packages/queue/src",
+]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+typeCheckingMode = "strict"
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
@@ -68,8 +84,3 @@ omit = [
     "*/vulnweaver_persistence/alembic/env.py",
     "*/vulnweaver_persistence/alembic/versions/*.py",
 ]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-warn_unreachable = true
