@@ -13,6 +13,7 @@ from vulnweaver_persistence.migrations import downgrade_database, upgrade_databa
 from vulnweaver_persistence.models import metadata
 from vulnweaver_persistence.repositories import (
     CreateResult,
+    JobCompletionResult,
     JobEnqueueResult,
     JobLeaseClaim,
     JobLeaseClaimOutcome,
@@ -28,6 +29,7 @@ __all__ = [
     "EntityNotFound",
     "IdempotencyConflict",
     "JobEnqueueResult",
+    "JobCompletionResult",
     "JobLeaseClaim",
     "JobLeaseClaimOutcome",
     "JobLeaseConflict",

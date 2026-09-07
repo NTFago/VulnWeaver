@@ -26,6 +26,7 @@ from vulnweaver_contracts import (
     Task,
     TaskResult,
     TaskStatus,
+    WorkerResult,
     validate_contract,
 )
 
@@ -40,6 +41,7 @@ from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_persistence.models import (
     artifact_versions,
     artifacts,
+    job_results,
     jobs,
     outbox_events,
     projects,
@@ -82,6 +84,13 @@ class JobLeaseClaim:
     outcome: JobLeaseClaimOutcome
 
 
+@dataclass(frozen=True, slots=True)
+class JobCompletionResult:
+    job: Job
+    result: WorkerResult
+    created: bool
+
+
 class ProjectRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -98,8 +107,10 @@ class ProjectRepository:
 
     async def get(self, project_id: str) -> Project:
         row = (
-            await self._connection.execute(select(projects).where(projects.c.id == project_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(projects).where(projects.c.id == project_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("project not found", details={"project_id": project_id})
         return _project_from_row(row)
@@ -125,22 +136,24 @@ class ArtifactRepository:
 
     async def get(self, artifact_id: str) -> Artifact:
         row = (
-            await self._connection.execute(
-                select(artifacts).where(artifacts.c.id == artifact_id)
-            )
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(artifacts).where(artifacts.c.id == artifact_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
-            raise EntityNotFound(
-                "artifact not found", details={"artifact_id": artifact_id}
-            )
+            raise EntityNotFound("artifact not found", details={"artifact_id": artifact_id})
         return _artifact_from_row(row)
 
     async def get_version(self, version_id: str) -> ArtifactVersion:
         row = (
-            await self._connection.execute(
-                select(artifact_versions).where(artifact_versions.c.id == version_id)
+            (
+                await self._connection.execute(
+                    select(artifact_versions).where(artifact_versions.c.id == version_id)
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound(
                 "artifact version not found",
@@ -166,13 +179,17 @@ class ArtifactRepository:
 
         if inserted_id is None:
             row = (
-                await self._connection.execute(
-                    select(artifact_versions).where(
-                        artifact_versions.c.artifact_id == version["artifact_id"],
-                        artifact_versions.c.digest == version["digest"],
+                (
+                    await self._connection.execute(
+                        select(artifact_versions).where(
+                            artifact_versions.c.artifact_id == version["artifact_id"],
+                            artifact_versions.c.digest == version["digest"],
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             stored = _artifact_version_from_row(row)
             created = False
         else:
@@ -211,13 +228,17 @@ class TaskRepository:
             return CreateResult(task, True)
 
         row = (
-            await self._connection.execute(
-                select(tasks).where(
-                    tasks.c.project_id == task["project_id"],
-                    tasks.c.idempotency_key == task["idempotency_key"],
+            (
+                await self._connection.execute(
+                    select(tasks).where(
+                        tasks.c.project_id == task["project_id"],
+                        tasks.c.idempotency_key == task["idempotency_key"],
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         if row["request_fingerprint"] != fingerprint:
             raise IdempotencyConflict(
                 "idempotency key was already used for a different task request",
@@ -230,8 +251,10 @@ class TaskRepository:
 
     async def get(self, task_id: str) -> Task:
         row = (
-            await self._connection.execute(select(tasks).where(tasks.c.id == task_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(tasks).where(tasks.c.id == task_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("task not found", details={"task_id": task_id})
         return _task_from_row(row)
@@ -241,9 +264,7 @@ class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
-    async def enqueue_with_outbox(
-        self, job: Job, event: JobRequestedEvent
-    ) -> JobEnqueueResult:
+    async def enqueue_with_outbox(self, job: Job, event: JobRequestedEvent) -> JobEnqueueResult:
         """Create a Job and its dispatch event in the caller's single transaction."""
 
         validate_contract("Job", job)
@@ -277,13 +298,17 @@ class JobRepository:
 
     async def _resolve_idempotent_retry(self, job: Job, fingerprint: str) -> JobEnqueueResult:
         row = (
-            await self._connection.execute(
-                select(jobs).where(
-                    jobs.c.task_id == job["task_id"],
-                    jobs.c.idempotency_key == job["idempotency_key"],
+            (
+                await self._connection.execute(
+                    select(jobs).where(
+                        jobs.c.task_id == job["task_id"],
+                        jobs.c.idempotency_key == job["idempotency_key"],
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         if row["request_fingerprint"] != fingerprint:
             raise IdempotencyConflict(
                 "idempotency key was already used for a different job request",
@@ -295,15 +320,19 @@ class JobRepository:
 
         stored_job = _job_from_row(row)
         event_row = (
-            await self._connection.execute(
-                select(outbox_events).where(
-                    outbox_events.c.aggregate_type == "job",
-                    outbox_events.c.aggregate_id == stored_job["id"],
-                    outbox_events.c.event_type == "job.requested",
-                    outbox_events.c.sequence == stored_job["attempt"],
+            (
+                await self._connection.execute(
+                    select(outbox_events).where(
+                        outbox_events.c.aggregate_type == "job",
+                        outbox_events.c.aggregate_id == stored_job["id"],
+                        outbox_events.c.event_type == "job.requested",
+                        outbox_events.c.sequence == stored_job["attempt"],
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if event_row is None:
             raise PersistenceInvariantError(
                 "idempotent job exists without its outbox event",
@@ -317,8 +346,10 @@ class JobRepository:
 
     async def get(self, job_id: str) -> Job:
         row = (
-            await self._connection.execute(select(jobs).where(jobs.c.id == job_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(jobs).where(jobs.c.id == job_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         return _job_from_row(row)
@@ -418,11 +449,7 @@ class JobRepository:
         row, now = await self._locked_job_with_database_time(job_id)
         current = _job_from_row(row)
         lease = current["lease"]
-        if (
-            current["status"] is not JobStatus.RUNNING
-            or lease is None
-            or lease["owner"] != owner
-        ):
+        if current["status"] is not JobStatus.RUNNING or lease is None or lease["owner"] != owner:
             raise JobLeaseConflict(
                 "job lease is no longer owned by this worker",
                 details={"job_id": job_id, "owner": owner},
@@ -439,14 +466,136 @@ class JobRepository:
         )
         return await self.get(job_id)
 
-    async def _locked_job_with_database_time(
-        self, job_id: str
-    ) -> tuple[RowMapping, datetime]:
-        row = (
-            await self._connection.execute(
-                select(jobs).where(jobs.c.id == job_id).with_for_update()
+    async def complete(self, result: WorkerResult, *, owner: str) -> JobCompletionResult:
+        """Persist one immutable terminal result and update its Job atomically."""
+
+        validate_contract("WorkerResult", result)
+        _ensure_terminal_worker_result(result)
+        fingerprint = _worker_result_fingerprint(result)
+        row, now = await self._locked_job_with_database_time(result["job_id"])
+        repeated = await self._existing_completion(row, result, fingerprint)
+        if repeated is not None:
+            return repeated
+
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": result["job_id"], "owner": owner},
             )
-        ).mappings().one_or_none()
+
+        return await self._persist_completion(row, now, result, fingerprint)
+
+    async def fail_exhausted(self, result: WorkerResult) -> JobCompletionResult:
+        """Persist an exhausted Job failure without granting another execution lease."""
+
+        validate_contract("WorkerResult", result)
+        _ensure_terminal_worker_result(result)
+        if result["status"] is not JobStatus.FAILED or result["failure"] is None:
+            raise PersistenceInvariantError(
+                "exhausted job result must be a structured failure",
+                details={"job_id": result["job_id"]},
+            )
+        fingerprint = _worker_result_fingerprint(result)
+        row, now = await self._locked_job_with_database_time(result["job_id"])
+        repeated = await self._existing_completion(row, result, fingerprint)
+        if repeated is not None:
+            return repeated
+
+        current = _job_from_row(row)
+        lease = current["lease"]
+        lease_is_active = (
+            current["status"] is JobStatus.RUNNING
+            and lease is not None
+            and _parse_datetime(lease["expires_at"]) > now
+        )
+        if (
+            current["status"] not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}
+            or current["attempt"] < current["retry_policy"]["max_attempts"]
+            or lease_is_active
+        ):
+            raise PersistenceInvariantError(
+                "job has not exhausted its permitted execution attempts",
+                details={"job_id": result["job_id"]},
+            )
+        return await self._persist_completion(row, now, result, fingerprint)
+
+    async def _existing_completion(
+        self, row: RowMapping, result: WorkerResult, fingerprint: str
+    ) -> JobCompletionResult | None:
+        existing_row = (
+            (
+                await self._connection.execute(
+                    select(job_results).where(job_results.c.job_id == result["job_id"])
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing_row is None:
+            return None
+        if existing_row["result_fingerprint"] != fingerprint:
+            raise IdempotencyConflict(
+                "job already has a different terminal result",
+                details={"job_id": result["job_id"]},
+            )
+        return JobCompletionResult(
+            _job_from_row(row),
+            _worker_result_from_row(existing_row),
+            False,
+        )
+
+    async def _persist_completion(
+        self,
+        row: RowMapping,
+        now: datetime,
+        result: WorkerResult,
+        fingerprint: str,
+    ) -> JobCompletionResult:
+        await self._connection.execute(
+            insert(job_results).values(
+                job_id=result["job_id"],
+                schema_version=result["schema_version"],
+                status=str(result["status"]),
+                produced_artifact_version_ids=result["produced_artifact_version_ids"],
+                evidence_ids=result["evidence_ids"],
+                failure=result["failure"],
+                result_fingerprint=fingerprint,
+                completed_at=now,
+            )
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(
+                jobs.c.id == result["job_id"],
+                jobs.c.state_version == row["state_version"],
+            )
+            .values(
+                status=str(result["status"]),
+                failure=result["failure"],
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return JobCompletionResult(await self.get(result["job_id"]), result, True)
+
+    async def _locked_job_with_database_time(self, job_id: str) -> tuple[RowMapping, datetime]:
+        row = (
+            (
+                await self._connection.execute(
+                    select(jobs).where(jobs.c.id == job_id).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         now = (await self._connection.execute(select(func.now()))).scalar_one()
@@ -465,9 +614,7 @@ class OutboxRepository:
 
         return await self._load_pending(limit=limit, lock=True)
 
-    async def _load_pending(
-        self, *, limit: int, lock: bool
-    ) -> list[OutboxMessage]:
+    async def _load_pending(self, *, limit: int, lock: bool) -> list[OutboxMessage]:
         if limit < 1 or limit > 1000:
             raise ValueError("outbox batch limit must be between 1 and 1000")
         statement = (
@@ -482,9 +629,7 @@ class OutboxRepository:
         )
         if lock:
             statement = statement.with_for_update(skip_locked=True)
-        rows = (
-            await self._connection.execute(statement)
-        ).mappings().all()
+        rows = (await self._connection.execute(statement)).mappings().all()
         return [
             OutboxMessage(
                 event=_event_from_row(row),
@@ -744,6 +889,47 @@ def _job_from_row(row: RowMapping) -> Job:
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
     )
+
+
+def _worker_result_fingerprint(result: WorkerResult) -> str:
+    return request_fingerprint(
+        {
+            "schema_version": result["schema_version"],
+            "job_id": result["job_id"],
+            "status": result["status"],
+            "produced_artifact_version_ids": result["produced_artifact_version_ids"],
+            "evidence_ids": result["evidence_ids"],
+            "failure": result["failure"],
+        }
+    )
+
+
+def _worker_result_from_row(row: RowMapping) -> WorkerResult:
+    return WorkerResult(
+        schema_version=row["schema_version"],
+        job_id=row["job_id"],
+        status=JobStatus(row["status"]),
+        produced_artifact_version_ids=row["produced_artifact_version_ids"],
+        evidence_ids=row["evidence_ids"],
+        failure=row["failure"],
+    )
+
+
+def _ensure_terminal_worker_result(result: WorkerResult) -> None:
+    if result["status"] not in {
+        JobStatus.SUCCEEDED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }:
+        raise PersistenceInvariantError(
+            "worker result must have a terminal status",
+            details={"job_id": result["job_id"], "status": result["status"]},
+        )
+    if (result["status"] is JobStatus.FAILED) != (result["failure"] is not None):
+        raise PersistenceInvariantError(
+            "worker result failure must match its terminal status",
+            details={"job_id": result["job_id"], "status": result["status"]},
+        )
 
 
 def _ensure_event_matches_job(job: Job, event: JobRequestedEvent) -> None:

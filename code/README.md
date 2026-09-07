@@ -40,8 +40,9 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d dispatcher
 ```
 
 Compose 会先运行一次 `vulnweaver-migrate`，迁移成功后再以非 root、只读根文件系统启动
-Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`、`artifact-store`
-和 `queue`。
+Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`、`artifact-store`、
+`queue` 和 `worker`；具体分析 Worker 应复用 `worker` 包提供的租约、心跳、重试、结算与
+优雅停止协议。
 
 ## 质量门禁
 

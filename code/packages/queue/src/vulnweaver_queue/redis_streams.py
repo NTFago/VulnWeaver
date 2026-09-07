@@ -10,7 +10,12 @@ from typing import Protocol, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
-from vulnweaver_contracts import ContractValidationError, QueueEvent, validate_contract
+from vulnweaver_contracts import (
+    ContractValidationError,
+    QueueEvent,
+    StructuredFailure,
+    validate_contract,
+)
 
 from vulnweaver_queue.errors import (
     MalformedQueueMessage,
@@ -21,6 +26,7 @@ from vulnweaver_queue.errors import (
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _EVENT_ID_CONFLICT = "EVENT_ID_CONFLICT"
+_DEAD_LETTER_CONFLICT = "DEAD_LETTER_CONFLICT"
 _PUBLISH_SCRIPT = """
 local existing_id = redis.call('HGET', KEYS[2], 'message_id')
 if existing_id then
@@ -50,6 +56,39 @@ redis.call(
 redis.call('EXPIRE', KEYS[2], ARGV[2])
 return message_id
 """
+_DEAD_LETTER_SCRIPT = """
+redis.call('XPENDING', KEYS[3], ARGV[4])
+
+local existing_id = redis.call('HGET', KEYS[2], 'message_id')
+if existing_id then
+    local existing_fingerprint = redis.call('HGET', KEYS[2], 'fingerprint')
+    if existing_fingerprint ~= ARGV[1] then
+        return redis.error_reply('DEAD_LETTER_CONFLICT')
+    end
+    local existing_entry = redis.call(
+        'XRANGE', KEYS[1], existing_id, existing_id, 'COUNT', 1
+    )
+    if #existing_entry > 0 then
+        redis.call('XACK', KEYS[3], ARGV[4], ARGV[5])
+        return existing_id
+    end
+end
+
+local message_id
+if ARGV[3] == '' then
+    message_id = redis.call('XADD', KEYS[1], '*', unpack(ARGV, 6))
+else
+    message_id = redis.call(
+        'XADD', KEYS[1], 'MAXLEN', '~', ARGV[3], '*', unpack(ARGV, 6)
+    )
+end
+redis.call(
+    'HSET', KEYS[2], 'message_id', message_id, 'fingerprint', ARGV[1]
+)
+redis.call('EXPIRE', KEYS[2], ARGV[2])
+redis.call('XACK', KEYS[3], ARGV[4], ARGV[5])
+return message_id
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +116,7 @@ class QueueSettings:
 class StreamNames:
     jobs: str
     events: str
+    dead_letters: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +139,13 @@ class StaleClaimBatch:
     messages: tuple[StreamMessage, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class DeadLetteredMessage:
+    stream: str
+    message_id: str
+    original_message_id: str
+
+
 class EventPublisher(Protocol):
     async def publish(self, event: QueueEvent) -> PublishedMessage: ...
 
@@ -110,6 +157,7 @@ class RedisStreamsClient:
         self.streams = StreamNames(
             jobs=f"{key_tag}:jobs",
             events=f"{key_tag}:events",
+            dead_letters=f"{key_tag}:dead-letters",
         )
         self._client = client or Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
             settings.url,
@@ -172,9 +220,7 @@ class RedisStreamsClient:
             event_id=event["event_id"],
         )
 
-    async def ensure_group(
-        self, stream: str, group: str, *, start_id: str = "0-0"
-    ) -> None:
+    async def ensure_group(self, stream: str, group: str, *, start_id: str = "0-0") -> None:
         self._ensure_owned_stream(stream)
         _validate_consumer_name(group, "group")
         try:
@@ -203,13 +249,9 @@ class RedisStreamsClient:
         _validate_consumer_name(group, "group")
         _validate_consumer_name(consumer, "consumer")
         if count < 1 or count > 1000:
-            raise QueueConfigurationError(
-                "stream read count must be between 1 and 1000"
-            )
+            raise QueueConfigurationError("stream read count must be between 1 and 1000")
         if block_milliseconds < 0 or block_milliseconds > 60_000:
-            raise QueueConfigurationError(
-                "stream block duration must be between 0 and 60000 ms"
-            )
+            raise QueueConfigurationError("stream block duration must be between 0 and 60000 ms")
         try:
             response = await self._client.xreadgroup(
                 groupname=group,
@@ -223,9 +265,7 @@ class RedisStreamsClient:
             raise _unavailable("read_group", error) from error
         return _decode_stream_response(response)
 
-    async def acknowledge(
-        self, stream: str, group: str, message_id: str
-    ) -> bool:
+    async def acknowledge(self, stream: str, group: str, message_id: str) -> bool:
         self._ensure_owned_stream(stream)
         _validate_consumer_name(group, "group")
         try:
@@ -233,6 +273,94 @@ class RedisStreamsClient:
         except RedisError as error:
             raise _unavailable("acknowledge", error) from error
         return int(acknowledged) == 1
+
+    async def dead_letter(
+        self,
+        stream: str,
+        group: str,
+        message: StreamMessage,
+        *,
+        failure: StructuredFailure,
+        attempt: int,
+    ) -> DeadLetteredMessage:
+        """Atomically preserve a terminal failure and ACK its pending entry."""
+
+        self._ensure_owned_stream(stream)
+        if stream == self.streams.dead_letters or message.stream != stream:
+            raise QueueConfigurationError("dead-letter source must match a configured work stream")
+        _validate_consumer_name(group, "group")
+        if attempt < 1:
+            raise QueueConfigurationError("dead-letter attempt must be positive")
+        try:
+            validate_contract("StructuredFailure", failure)
+        except ContractValidationError as error:
+            raise MalformedQueueMessage(
+                "dead-letter failure failed contract validation",
+                details={"definition": error.definition},
+            ) from error
+
+        encoded_event = _encode_event(message.event)
+        encoded_failure = json.dumps(
+            failure, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        )
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "stream": stream,
+                    "message_id": message.message_id,
+                    "event": message.event,
+                    "failure": failure,
+                    "attempt": attempt,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        deduplication_key = self._dead_letter_deduplication_key(stream, message.message_id)
+        fields = [
+            "event",
+            encoded_event,
+            "original_stream",
+            stream,
+            "original_message_id",
+            message.message_id,
+            "failure",
+            encoded_failure,
+            "attempt",
+            str(attempt),
+        ]
+        try:
+            response = await self._client.eval(
+                _DEAD_LETTER_SCRIPT,
+                3,
+                self.streams.dead_letters,
+                deduplication_key,
+                stream,
+                fingerprint,
+                self._settings.deduplication_ttl_seconds,
+                self._settings.stream_maxlen or "",
+                group,
+                message.message_id,
+                *fields,
+            )
+        except ResponseError as error:
+            if _DEAD_LETTER_CONFLICT in str(error):
+                raise QueueMessageConflict(
+                    "pending entry was already dead-lettered with different content",
+                    details={
+                        "stream": stream,
+                        "message_id": message.message_id,
+                    },
+                ) from error
+            raise _unavailable("dead_letter", error) from error
+        except RedisError as error:
+            raise _unavailable("dead_letter", error) from error
+        return DeadLetteredMessage(
+            stream=self.streams.dead_letters,
+            message_id=_string(response),
+            original_message_id=message.message_id,
+        )
 
     async def claim_stale(
         self,
@@ -287,8 +415,17 @@ class RedisStreamsClient:
         event_hash = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
         return f"{{{self._settings.namespace}}}:published:{event_hash}"
 
+    def _dead_letter_deduplication_key(self, stream: str, message_id: str) -> str:
+        identity = f"{stream}\0{message_id}"
+        message_hash = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        return f"{{{self._settings.namespace}}}:dead-lettered:{message_hash}"
+
     def _ensure_owned_stream(self, stream: str) -> None:
-        if stream not in (self.streams.jobs, self.streams.events):
+        if stream not in (
+            self.streams.jobs,
+            self.streams.events,
+            self.streams.dead_letters,
+        ):
             raise QueueConfigurationError("stream is outside the configured namespace")
 
 

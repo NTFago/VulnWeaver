@@ -10,3 +10,8 @@ stream. Consumer-group read and ACK primitives are provided for workers. T06 add
 `claim_stale()`, which uses Redis `XAUTOCLAIM` to transfer idle pending messages to a live
 consumer; PostgreSQL Job leases, rather than Redis ownership alone, remain authoritative
 for execution.
+
+`dead_letter()` uses a same-slot Lua transaction to append the original event, structured
+failure and attempt to the dead-letter Stream and ACK the source pending entry. Its bounded
+deduplication record makes response-loss retries idempotent and rejects conflicting retry
+content.

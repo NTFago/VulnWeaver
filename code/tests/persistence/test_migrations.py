@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "artifact_versions",
     "artifacts",
     "jobs",
+    "job_results",
     "outbox_events",
     "projects",
     "task_events",

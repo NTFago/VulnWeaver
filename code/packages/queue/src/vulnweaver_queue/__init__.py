@@ -8,6 +8,7 @@ from vulnweaver_queue.errors import (
     QueueUnavailable,
 )
 from vulnweaver_queue.redis_streams import (
+    DeadLetteredMessage,
     EventPublisher,
     PublishedMessage,
     QueueSettings,
@@ -18,6 +19,7 @@ from vulnweaver_queue.redis_streams import (
 )
 
 __all__ = [
+    "DeadLetteredMessage",
     "EventPublisher",
     "MalformedQueueMessage",
     "PublishedMessage",

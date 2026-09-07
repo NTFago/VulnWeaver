@@ -23,3 +23,9 @@ T06 adds transaction-scoped Job lease primitives. `claim_lease()` locks the Job 
 uses PostgreSQL server time to grant the first attempt or take over an expired lease;
 `renew_lease()` and `release_lease()` require the exact owner. The database lease is the
 execution authority even when Redis redelivers a pending message.
+
+Terminal Worker results are stored in immutable `job_results` rows keyed by Job ID.
+`complete()` inserts that result and updates the Job terminal state in one transaction;
+an identical replay is idempotent even after the lease has been released, while a
+different result is rejected. `fail_exhausted()` is restricted to Jobs that have already
+consumed their configured attempts and have no active lease.
