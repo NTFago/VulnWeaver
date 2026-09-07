@@ -1,0 +1,17 @@
+{
+  "name": "vulnweaver-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-driven agentic vulnerability discovery",
+  "packageManager": "pnpm@11.10.0",
+  "scripts": {
+    "check": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test"
+  },
+  "engines": {
+    "node": ">=24 <25",
+    "pnpm": ">=11 <12"
+  }
+}

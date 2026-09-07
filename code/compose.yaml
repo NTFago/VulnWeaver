@@ -1,0 +1,51 @@
+name: vulnweaver
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vulnweaver}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vulnweaver_dev_only}
+      POSTGRES_DB: ${POSTGRES_DB:-vulnweaver}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-vulnweaver} -d ${POSTGRES_DB:-vulnweaver}
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --save
+      - "60"
+      - "1"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    volumes:
+      - redis-data:/data
+    networks:
+      - control-plane
+    restart: unless-stopped
+
+networks:
+  control-plane:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:

@@ -1,0 +1,43 @@
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Node.js
+node_modules/
+.pnpm-store/
+.svelte-kit/
+coverage/
+
+# Logs, caches, and runtime artifacts
+*.log
+.cache/
+tmp/
+code/data/
+code/artifacts/
+
+# Generated reports and local test outputs
+code/reports/
+code/test-results/

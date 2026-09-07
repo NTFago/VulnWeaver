@@ -1,0 +1,32 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
+        NPM_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+    command: sleep infinity
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+      NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    volumes:
+      - ..:/workspace/vulnweaver
+    networks:
+      - control-plane
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    ports:
+      - 127.0.0.1:${POSTGRES_PORT:-5432}:5432
+
+  redis:
+    ports:
+      - 127.0.0.1:${REDIS_PORT:-6379}:6379
