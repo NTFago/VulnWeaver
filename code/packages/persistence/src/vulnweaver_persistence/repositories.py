@@ -310,18 +310,32 @@ class OutboxRepository:
         self._connection = connection
 
     async def pending(self, *, limit: int = 100) -> list[OutboxMessage]:
+        return await self._load_pending(limit=limit, lock=False)
+
+    async def claim_pending(self, *, limit: int = 100) -> list[OutboxMessage]:
+        """Lock one dispatch batch, skipping rows held by another dispatcher."""
+
+        return await self._load_pending(limit=limit, lock=True)
+
+    async def _load_pending(
+        self, *, limit: int, lock: bool
+    ) -> list[OutboxMessage]:
         if limit < 1 or limit > 1000:
             raise ValueError("outbox batch limit must be between 1 and 1000")
-        rows = (
-            await self._connection.execute(
-                select(outbox_events)
-                .where(
-                    outbox_events.c.published_at.is_(None),
-                    outbox_events.c.available_at <= func.now(),
-                )
-                .order_by(outbox_events.c.available_at, outbox_events.c.created_at)
-                .limit(limit)
+        statement = (
+            select(outbox_events)
+            .where(
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+                outbox_events.c.available_at <= func.now(),
             )
+            .order_by(outbox_events.c.available_at, outbox_events.c.created_at)
+            .limit(limit)
+        )
+        if lock:
+            statement = statement.with_for_update(skip_locked=True)
+        rows = (
+            await self._connection.execute(statement)
         ).mappings().all()
         return [
             OutboxMessage(
@@ -335,7 +349,11 @@ class OutboxRepository:
     async def mark_published(self, event_id: str, *, published_at: datetime) -> bool:
         result = await self._connection.execute(
             update(outbox_events)
-            .where(outbox_events.c.id == event_id, outbox_events.c.published_at.is_(None))
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
             .values(published_at=published_at)
         )
         return result.rowcount == 1
@@ -351,11 +369,37 @@ class OutboxRepository:
         timestamp = failed_at or datetime.now(UTC)
         result = await self._connection.execute(
             update(outbox_events)
-            .where(outbox_events.c.id == event_id, outbox_events.c.published_at.is_(None))
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
             .values(
                 publish_attempts=outbox_events.c.publish_attempts + 1,
                 last_error=error,
                 available_at=timestamp + retry_after,
+            )
+        )
+        return result.rowcount == 1
+
+    async def mark_dead_lettered(
+        self,
+        event_id: str,
+        *,
+        reason: dict[str, object],
+        dead_lettered_at: datetime,
+    ) -> bool:
+        result = await self._connection.execute(
+            update(outbox_events)
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
+            .values(
+                dead_lettered_at=dead_lettered_at,
+                dead_letter_reason=reason,
+                last_error=reason,
             )
         )
         return result.rowcount == 1

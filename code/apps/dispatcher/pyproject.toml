@@ -1,0 +1,24 @@
+[project]
+name = "vulnweaver-dispatcher"
+version = "0.1.0"
+description = "PostgreSQL Outbox to Redis Streams dispatcher"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vulnweaver-persistence",
+    "vulnweaver-queue",
+]
+
+[project.scripts]
+vulnweaver-dispatcher = "vulnweaver_dispatcher.main:main"
+vulnweaver-migrate = "vulnweaver_dispatcher.migrate:main"
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-persistence = { workspace = true }
+vulnweaver-queue = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_dispatcher"

@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T04 已完成，T05 Redis Streams 与 Dispatcher 进行中）
-- **总体状态**：本地内容寻址工件库已通过验收；正在接入 PostgreSQL Outbox 到 Redis Streams 的可靠投递
+- **当前阶段**：P1 控制面最小闭环（T04、T05 已完成）
+- **总体状态**：本地内容寻址工件库、Redis Streams 传输和 Outbox Dispatcher 已就绪，可进入 T06 Worker 租约与幂等框架
 - **最后更新**：2026-09-07
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；当前开发分支 `feat/t04-t05-artifacts-dispatcher`，基于含 T02/T03 合并结果的本地 `main`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex（T05）
+- **当前负责人**：未分配（下一任务待认领）
 
 ## 3. 开发进度
 
@@ -27,7 +27,7 @@
 | T02 公共契约 | 已完成 | Codex | 冻结 v1.0.0 JSON Schema；生成 Python/TypeScript 类型；实现状态迁移、Task 聚合、Finding 确认、利用门禁和幂等规则；补齐运行时校验与 39 个测试 | 无 | 2026-09-07 |
 | T03 PostgreSQL 迁移与仓储 | 已完成 | Codex | 新增 SQLAlchemy Core 模型、Alembic `0001` 迁移、异步事务仓储和结构化错误；覆盖 Project、Artifact/ArtifactVersion、Task、Job、Outbox、TaskEvent，保证 Job/Outbox 原子写入、请求指纹幂等、未发布事件重放和工件版本去重 | 无；Finding/Evidence、PAIR、运行记录和检查点由其后续任务包按职责追加迁移 | 2026-09-07 |
 | T04 本地内容寻址工件库 | 已完成 | Codex | 新增后端无关接口与本地 CAS；实现流式 SHA-256、大小上限、staging 刷盘、排他硬链接原子发布、同内容去重、严格对象引用解析、读取校验和结构化错误；ArtifactRegistrationService 将对象与 ArtifactVersion、父版本、工具身份及生成配置登记到 PostgreSQL | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
-| T05 Redis Streams 与 Outbox Dispatcher | 进行中 | Codex | 已确认依赖 T03 Outbox 和 T04 工件引用，不承担 T06 Worker 租约/幂等执行职责 | 实现 Redis Streams 发布/消费基础、Outbox 行锁领取、投递确认、失败退避、恢复重放和重复投递测试 | 2026-09-07 |
+| T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 新增 Redis Streams 客户端、稳定事件编码、Redis 7 Lua 原子去重、消费者组 read/ack；新增可运行 Dispatcher、Outbox `FOR UPDATE SKIP LOCKED` 批量领取、成功确认、结构化失败、指数退避和 dead-letter 终止态；Compose 以一次性迁移任务、非 root 用户、只读根文件系统和零能力集运行 | 无；Worker 租约、pending entry 接管、执行幂等和 Worker dead-letter 消费由 T06 实现 | 2026-09-07 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -71,10 +71,23 @@
 | ADR-010 | 使用根目录 Git 仓库进行版本管理，`main` 为集成基线 | 为多人和多 Agent 开发提供可审查、可追溯的版本历史 | `code/docs/adr/010-git-version-control.md` |
 | ADR-011 | PostgreSQL 持久化采用 SQLAlchemy Core 2.x、psycopg 3 与显式 Alembic 迁移 | 提供清晰的异步事务边界、可审查 DDL，并让 Job 与 Outbox 在同一事务登记 | `code/docs/adr/011-postgresql-persistence-toolkit.md` |
 | ADR-012 | 首版本地工件库采用 SHA-256 内容寻址、同文件系统 staging 与排他硬链接原子发布 | 保证同内容稳定引用、拒绝覆盖与调用方宿主路径，并保留 MinIO 后端替换能力 | `code/docs/adr/012-local-content-addressed-artifact-store.md` |
+| ADR-013 | PostgreSQL Outbox 到 Redis Streams 采用至少一次交付、稳定事件 ID 和 Redis 内短期原子去重 | 正确认知跨存储崩溃窗口，同时避免等价重试重复追加并要求 T06 保护持久化副作用 | `code/docs/adr/013-at-least-once-outbox-to-redis.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-07：完成 T05 Redis Streams 与 Outbox Dispatcher
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/queue/`、`code/apps/dispatcher/`、`code/packages/persistence/`、`code/tests/queue/`、`code/tests/dispatcher/`、`code/tests/persistence/`、`code/compose.yaml`、`code/.env.example`、`code/pyproject.toml`、`code/uv.lock`、`code/docs/adr/013-at-least-once-outbox-to-redis.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：实现 QueueEvent 到 jobs/events Stream 的版本化传输、Redis 7 Lua 原子 event ID 去重与内容冲突检测、消费者组创建/read/ack；扩展 Outbox 迁移以保存 dead-letter 终止态；实现多 Dispatcher 跳过锁行、发布确认、失败退避、恢复重放和可停止轮询；新增迁移与 Dispatcher 容器，按非 root、只读根文件系统、无 Linux capabilities 运行
+- 测试与结果：87 个 Pytest 测试通过，分支覆盖率 91.17%；真实 PostgreSQL 16 与 Redis 7 验证投递、ACK、重复发布、冲突、故障退避、dead-letter 和并发领取；Ruff、Mypy、契约生成、TypeScript、锁文件及 Compose 配置通过；Dispatcher 镜像构建成功，迁移容器退出码 0，Dispatcher 实际启动
+- 问题：PostgreSQL 与 Redis 无分布式事务，Redis 接收后数据库提交前崩溃仍可能触发重试；ADR-013 明确至少一次语义，Redis TTL 内抑制等价重复，T06 仍须按 Job 幂等键保护持久化副作用
+- 阻碍点：无
+- 决策：ADR-013
+- 下一步：认领 T06，实现 Worker 消费循环、Job 租约领取/续约/接管、成功结果幂等登记、pending message 回收和 Worker dead-letter
 
 ### 2026-09-07：完成 T04 本地内容寻址工件库
 
@@ -169,12 +182,14 @@
 | 2026-09-07 | T03 静态与跨语言检查 | `uv run --no-sync ruff check .`、`uv run --no-sync mypy packages`、契约生成脚本 `--check`、`pnpm run check` | 通过；20 个 Python 源文件无类型错误，契约生成物与 TypeScript 严格检查无回归 | 无 |
 | 2026-09-07 | T03 依赖与基础设施 | `uv lock --check`、`docker compose -f compose.yaml -f compose.dev.yaml config --quiet`、`docker compose ... ps` | 通过；锁文件有效，PostgreSQL 16 与 Redis 7 均 healthy | 未推送远程或执行生产部署 |
 | 2026-09-07 | T04 内容寻址工件库 | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages` | 67 个测试通过，分支覆盖率 96.29%；流式哈希、原子发布、去重、边界拒绝、完整性校验、谱系和 PostgreSQL 登记均通过 | 未实现未引用对象 GC 与 MinIO 后端；不影响首版本地存储验收 |
+| 2026-09-07 | T05 队列与 Dispatcher | `uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=90`、`ruff check .`、`mypy packages apps` | 87 个测试通过，分支覆盖率 91.17%；真实 PostgreSQL/Redis 覆盖发布、去重、read/ack、退避、dead-letter、重放与行锁领取 | Worker pending 接管、租约和执行结果幂等属于 T06 |
+| 2026-09-07 | T05 容器交付 | Compose 配置解析、`docker compose ... build dispatcher`、`up -d dispatcher`、日志及 `docker inspect` | 通过；迁移退出码 0，Dispatcher 运行中；用户为 `vulnweaver`、根文件系统只读、capabilities 全部移除、无宿主绑定挂载 | 未执行生产部署或多主机故障演练 |
 
 ## 10. 下一步
 
-1. 在 `packages/queue` 实现 Redis Streams 发布、稳定事件编码、重复 event ID 检测及消费者组 read/ack 基础。
-2. 在 `apps/dispatcher` 实现 Outbox 批量行锁领取、发布成功确认、结构化失败记录、指数退避和可停止轮询循环。
-3. 使用真实 PostgreSQL 16 与 Redis 7 验证多 Dispatcher 跳过锁定记录、故障恢复、重复投递不新增 Stream entry，完成后进入 T06 Worker 租约与幂等框架。
+1. 认领 T06，在独立 Worker SDK 中实现消费者组循环、ACK 时机、优雅停止和统一结构化执行结果。
+2. 为 Job 增加租约领取、续约、释放和过期接管仓储，使用状态版本/条件更新保证单一有效执行者。
+3. 用故障注入验证 ACK 丢失、消息重复、Worker 崩溃、租约接管、超过重试上限进入 Worker dead-letter，以及成功结果只登记一次。
 
 ## 11. 每次工作结束时的更新模板
 

@@ -42,6 +42,61 @@ services:
       - control-plane
     restart: unless-stopped
 
+  migrate:
+    image: vulnweaver-dispatcher:dev
+    build:
+      context: .
+      dockerfile: apps/dispatcher/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    command: ["vulnweaver-migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
+  dispatcher:
+    image: vulnweaver-dispatcher:dev
+    build:
+      context: .
+      dockerfile: apps/dispatcher/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_STREAM_NAMESPACE: ${REDIS_STREAM_NAMESPACE:-vulnweaver}
+      DISPATCHER_BATCH_SIZE: ${DISPATCHER_BATCH_SIZE:-100}
+      DISPATCHER_POLL_INTERVAL_SECONDS: ${DISPATCHER_POLL_INTERVAL_SECONDS:-0.5}
+      DISPATCHER_RETRY_BASE_SECONDS: ${DISPATCHER_RETRY_BASE_SECONDS:-1.0}
+      DISPATCHER_RETRY_MAX_SECONDS: ${DISPATCHER_RETRY_MAX_SECONDS:-300.0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
 networks:
   control-plane:
     driver: bridge

@@ -317,3 +317,33 @@ def test_outbox_batch_size_has_a_safe_bound(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_outbox_claim_skips_rows_locked_by_another_dispatcher(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            claimed_job = job(
+                "job:t05-claim", idempotency_key="job:t05-claim-key"
+            )
+            async with database.transaction() as repositories:
+                await repositories.jobs.enqueue_with_outbox(
+                    claimed_job, job_event(claimed_job, "event:t05-claim")
+                )
+
+            async with database.transaction() as first:
+                first_batch = await first.outbox.claim_pending(limit=1000)
+                first_ids = {message.event["event_id"] for message in first_batch}
+                assert "event:t05-claim" in first_ids
+                async with database.transaction() as second:
+                    second_batch = await second.outbox.claim_pending(limit=1000)
+                    second_ids = {
+                        message.event["event_id"] for message in second_batch
+                    }
+                    assert first_ids.isdisjoint(second_ids)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

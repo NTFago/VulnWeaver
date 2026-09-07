@@ -6,6 +6,8 @@ import uuid
 from collections.abc import Iterator
 
 import pytest
+from redis import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
@@ -48,3 +50,27 @@ def persistence_database_url() -> Iterator[str]:
             )
             connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{database_name}"')
         admin_engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def redis_url() -> Iterator[str]:
+    url = os.environ.get("VULNWEAVER_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
+    client = Redis.from_url(url, decode_responses=True, socket_timeout=1)
+    try:
+        client.ping()
+    except RedisError as error:
+        client.close()
+        pytest.skip(f"Redis integration environment is unavailable: {error}")
+    client.close()
+    yield url
+
+
+@pytest.fixture
+def redis_namespace(redis_url: str) -> Iterator[str]:
+    namespace = f"vulnweaver_test_{uuid.uuid4().hex[:12]}"
+    yield namespace
+    client = Redis.from_url(redis_url, decode_responses=True, socket_timeout=1)
+    keys = list(client.scan_iter(match=f"{{{namespace}}}:*", count=100))
+    if keys:
+        client.delete(*keys)
+    client.close()

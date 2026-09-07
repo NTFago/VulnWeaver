@@ -33,4 +33,14 @@ uv sync --frozen
 pnpm install --frozen-lockfile
 ```
 
+启动 PostgreSQL 迁移任务和 Outbox Dispatcher：
+
+```shell
+docker compose -f compose.yaml -f compose.dev.yaml up -d dispatcher
+```
+
+Compose 会先运行一次 `vulnweaver-migrate`，迁移成功后再以非 root、只读根文件系统启动
+Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`、`artifact-store`
+和 `queue`。
+
 开发容器不挂载 Docker Socket，也不得用于直接运行未知样本、Poc 或利用脚本。

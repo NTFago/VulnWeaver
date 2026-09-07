@@ -7,8 +7,10 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
+    "vulnweaver-dispatcher",
     "vulnweaver-domain",
     "vulnweaver-persistence",
+    "vulnweaver-queue",
 ]
 
 [dependency-groups]
@@ -25,10 +27,12 @@ package = false
 
 [tool.uv.workspace]
 members = [
+    "apps/dispatcher",
     "packages/artifact-store",
     "packages/contracts",
     "packages/domain",
     "packages/persistence",
+    "packages/queue",
 ]
 
 [tool.uv.sources]
@@ -36,6 +40,8 @@ vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
+vulnweaver-dispatcher = { workspace = true }
+vulnweaver-queue = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -53,8 +59,10 @@ branch = true
 source_pkgs = [
     "vulnweaver_artifact_store",
     "vulnweaver_contracts",
+    "vulnweaver_dispatcher",
     "vulnweaver_domain",
     "vulnweaver_persistence",
+    "vulnweaver_queue",
 ]
 omit = [
     "*/vulnweaver_persistence/alembic/env.py",

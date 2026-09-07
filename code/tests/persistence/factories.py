@@ -46,24 +46,32 @@ def project(identifier: str = "project:t03") -> Project:
     )
 
 
-def artifact(identifier: str = "artifact:t03") -> Artifact:
+def artifact(
+    identifier: str = "artifact:t03",
+    *,
+    project_id: str = "project:t03",
+    current_version_id: str = "artifact-version:t03",
+) -> Artifact:
     return Artifact(
         schema_version="1.0.0",
         id=identifier,
-        project_id="project:t03",
+        project_id=project_id,
         kind=ArtifactKind.SOURCE_ARCHIVE,
-        current_version_id="artifact-version:t03",
+        current_version_id=current_version_id,
         created_at=TIMESTAMP,
     )
 
 
 def artifact_version(
-    identifier: str = "artifact-version:t03", *, digest_character: str = "a"
+    identifier: str = "artifact-version:t03",
+    *,
+    artifact_id: str = "artifact:t03",
+    digest_character: str = "a",
 ) -> ArtifactVersion:
     return ArtifactVersion(
         schema_version="1.0.0",
         id=identifier,
-        artifact_id="artifact:t03",
+        artifact_id=artifact_id,
         digest="sha256:" + digest_character * 64,
         object_ref=f"cas://sha256/{digest_character * 64}",
         generation_config={},
@@ -71,12 +79,18 @@ def artifact_version(
     )
 
 
-def task(identifier: str = "task:t03", *, idempotency_key: str = "task:t03-key") -> Task:
+def task(
+    identifier: str = "task:t03",
+    *,
+    project_id: str = "project:t03",
+    artifact_version_ids: list[str] | None = None,
+    idempotency_key: str = "task:t03-key",
+) -> Task:
     return Task(
         schema_version="1.0.0",
         id=identifier,
-        project_id="project:t03",
-        artifact_version_ids=["artifact-version:t03"],
+        project_id=project_id,
+        artifact_version_ids=artifact_version_ids or ["artifact-version:t03"],
         status=TaskStatus.CREATED,
         result=None,
         idempotency_key=idempotency_key,
@@ -89,13 +103,14 @@ def task(identifier: str = "task:t03", *, idempotency_key: str = "task:t03-key")
 def job(
     identifier: str = "job:t03",
     *,
+    task_id: str = "task:t03",
     idempotency_key: str = "job:t03-key",
     kind: JobKind = JobKind.SOURCE_ANALYSIS,
 ) -> Job:
     return Job(
         schema_version="1.0.0",
         id=identifier,
-        task_id="task:t03",
+        task_id=task_id,
         kind=kind,
         input_refs=["cas://sha256/" + "a" * 64],
         status=JobStatus.PENDING,
