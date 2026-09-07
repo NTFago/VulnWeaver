@@ -8,15 +8,18 @@ from vulnweaver_queue.errors import (
     QueueUnavailable,
 )
 from vulnweaver_queue.redis_streams import (
+    DeadLetteredMessage,
     EventPublisher,
     PublishedMessage,
     QueueSettings,
     RedisStreamsClient,
+    StaleClaimBatch,
     StreamMessage,
     StreamNames,
 )
 
 __all__ = [
+    "DeadLetteredMessage",
     "EventPublisher",
     "MalformedQueueMessage",
     "PublishedMessage",
@@ -26,6 +29,7 @@ __all__ = [
     "QueueSettings",
     "QueueUnavailable",
     "RedisStreamsClient",
+    "StaleClaimBatch",
     "StreamMessage",
     "StreamNames",
 ]

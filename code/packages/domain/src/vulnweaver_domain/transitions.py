@@ -88,9 +88,7 @@ JOB_TRANSITIONS: Mapping[JobStatus, frozenset[JobStatus]] = {
 
 RUN_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
     RunStatus.CREATED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
-    RunStatus.RUNNING: frozenset(
-        {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}
-    ),
+    RunStatus.RUNNING: frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELLED}),
     RunStatus.SUCCEEDED: frozenset(),
     RunStatus.FAILED: frozenset(),
     RunStatus.CANCELLED: frozenset(),
@@ -99,9 +97,7 @@ RUN_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
 POC_TRANSITIONS: Mapping[PocStatus, frozenset[PocStatus]] = {
     PocStatus.CREATED: frozenset({PocStatus.QUEUED, PocStatus.CANCELLED}),
     PocStatus.QUEUED: frozenset({PocStatus.RUNNING, PocStatus.CANCELLED}),
-    PocStatus.RUNNING: frozenset(
-        {PocStatus.COMPLETED, PocStatus.FAILED, PocStatus.CANCELLED}
-    ),
+    PocStatus.RUNNING: frozenset({PocStatus.COMPLETED, PocStatus.FAILED, PocStatus.CANCELLED}),
     PocStatus.COMPLETED: frozenset(),
     PocStatus.FAILED: frozenset({PocStatus.QUEUED}),
     PocStatus.CANCELLED: frozenset(),

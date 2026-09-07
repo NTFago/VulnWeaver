@@ -181,6 +181,7 @@ class RetryPolicy(TypedDict):
 
 class Lease(TypedDict):
     owner: Identifier
+    fencing_token: NotRequired[Identifier]
     expires_at: str
     heartbeat_interval_seconds: int
 

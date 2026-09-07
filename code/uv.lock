@@ -10,6 +10,7 @@ members = [
     "vulnweaver-domain",
     "vulnweaver-persistence",
     "vulnweaver-queue",
+    "vulnweaver-worker",
     "vulnweaver-workspace",
 ]
 
@@ -460,6 +461,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-worker"
+version = "0.1.0"
+source = { editable = "packages/worker" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-queue" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-queue", editable = "packages/queue" },
+]
+
+[[package]]
 name = "vulnweaver-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -470,6 +488,7 @@ dependencies = [
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
+    { name = "vulnweaver-worker" },
 ]
 
 [package.dev-dependencies]
@@ -488,6 +507,7 @@ requires-dist = [
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
+    { name = "vulnweaver-worker", editable = "packages/worker" },
 ]
 
 [package.metadata.requires-dev]

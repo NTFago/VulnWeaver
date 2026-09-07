@@ -8,7 +8,7 @@ from typing import cast
 
 import pytest
 from redis.asyncio import Redis
-from vulnweaver_contracts import QueueEvent
+from vulnweaver_contracts import FailureKind, QueueEvent, StructuredFailure
 from vulnweaver_queue import (
     MalformedQueueMessage,
     QueueConfigurationError,
@@ -47,9 +47,7 @@ def test_publish_is_idempotent_and_consumer_group_requires_ack(
             )
             assert len(messages) == 1
             assert messages[0].event == event
-            assert await client.acknowledge(
-                client.streams.jobs, "workers", messages[0].message_id
-            )
+            assert await client.acknowledge(client.streams.jobs, "workers", messages[0].message_id)
             assert not await client.acknowledge(
                 client.streams.jobs, "workers", messages[0].message_id
             )
@@ -112,14 +110,10 @@ def test_status_events_use_the_events_stream(redis_url: str, redis_namespace: st
     asyncio.run(scenario())
 
 
-def test_malformed_stream_entry_is_not_acknowledged(
-    redis_url: str, redis_namespace: str
-) -> None:
+def test_malformed_stream_entry_is_not_acknowledged(redis_url: str, redis_namespace: str) -> None:
     async def scenario() -> None:
         raw = Redis.from_url(redis_url, decode_responses=True)
-        client = RedisStreamsClient(
-            QueueSettings(redis_url, namespace=redis_namespace), client=raw
-        )
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace), client=raw)
         try:
             await raw.xadd(client.streams.events, {"event": "not-json"})
             await client.ensure_group(client.streams.events, "api-events")
@@ -196,6 +190,108 @@ def test_stream_read_bounds_use_structured_configuration_errors(
     asyncio.run(scenario())
 
 
+def test_idle_pending_message_can_be_claimed_by_another_consumer(
+    redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        try:
+            event = job_event(job(), "event:t06-stale")
+            await client.publish(event)
+            await client.ensure_group(client.streams.jobs, "workers")
+            delivered = await client.read_group(
+                client.streams.jobs,
+                "workers",
+                "worker-dead",
+                block_milliseconds=10,
+            )
+            assert len(delivered) == 1
+            await asyncio.sleep(0.01)
+
+            claimed = await client.claim_stale(
+                client.streams.jobs,
+                "workers",
+                "worker-live",
+                min_idle_milliseconds=1,
+            )
+            assert claimed.messages == tuple(delivered)
+            assert claimed.next_start_id
+            assert await client.acknowledge(
+                client.streams.jobs,
+                "workers",
+                claimed.messages[0].message_id,
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
+def test_dead_letter_is_idempotent_and_acknowledges_pending_message(
+    redis_url: str, redis_namespace: str
+) -> None:
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        raw = Redis.from_url(redis_url, decode_responses=True)
+        failure = StructuredFailure(
+            code="worker.attempts_exhausted",
+            kind=FailureKind.TOOL,
+            message="configured attempts were exhausted",
+            retryable=False,
+            details={"tool": "safe-test-double"},
+        )
+        try:
+            await client.publish(job_event(job(), "event:t06-dead-letter"))
+            await client.ensure_group(client.streams.jobs, "workers")
+            delivered = await client.read_group(
+                client.streams.jobs,
+                "workers",
+                "worker-t06",
+                block_milliseconds=10,
+            )
+            assert len(delivered) == 1
+
+            first = await client.dead_letter(
+                client.streams.jobs,
+                "workers",
+                delivered[0],
+                failure=failure,
+                attempt=2,
+            )
+            repeated = await client.dead_letter(
+                client.streams.jobs,
+                "workers",
+                delivered[0],
+                failure=failure,
+                attempt=2,
+            )
+            assert repeated == first
+            assert await raw.xlen(client.streams.dead_letters) == 1
+            assert (await raw.xpending(client.streams.jobs, "workers"))["pending"] == 0
+            stored = (await raw.xrange(client.streams.dead_letters))[0][1]
+            assert stored["original_stream"] == client.streams.jobs
+            assert stored["original_message_id"] == delivered[0].message_id
+            assert json.loads(stored["event"]) == delivered[0].event
+            assert json.loads(stored["failure"]) == failure
+            assert stored["attempt"] == "2"
+
+            conflicting = copy.deepcopy(failure)
+            conflicting["message"] = "different terminal reason"
+            with pytest.raises(QueueMessageConflict):
+                await client.dead_letter(
+                    client.streams.jobs,
+                    "workers",
+                    delivered[0],
+                    failure=conflicting,
+                    attempt=2,
+                )
+        finally:
+            await raw.aclose()
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_event_and_unavailable_redis_are_structured(
     redis_namespace: str,
 ) -> None:
@@ -212,9 +308,7 @@ def test_invalid_event_and_unavailable_redis_are_structured(
         )
         try:
             with pytest.raises(MalformedQueueMessage):
-                await invalid_client.publish(
-                    cast(QueueEvent, {"schema_version": "1.0.0"})
-                )
+                await invalid_client.publish(cast(QueueEvent, {"schema_version": "1.0.0"}))
             with pytest.raises(QueueUnavailable) as captured:
                 await unavailable_client.publish(job_event(job(), "event:t05-down"))
             assert captured.value.retryable

@@ -173,6 +173,7 @@ jobs = Table(
     Column("resource_budget", JSONB, nullable=False),
     Column("retry_policy", JSONB, nullable=False),
     Column("attempt", Integer, nullable=False),
+    Column("retry_not_before", TIMESTAMP, nullable=True),
     Column("lease", JSONB(none_as_null=True), nullable=True),
     Column("failure", JSONB(none_as_null=True), nullable=True),
     Column("created_at", TIMESTAMP, nullable=False),
@@ -183,13 +184,59 @@ jobs = Table(
     _enum_constraint("status", JobStatus, "status"),
     CheckConstraint("attempt >= 0", name="attempt_non_negative"),
     CheckConstraint(
-        "(status = 'failed' AND failure IS NOT NULL) OR "
-        "(status <> 'failed' AND failure IS NULL)",
+        "(status = 'failed' AND failure IS NOT NULL) OR (status <> 'failed' AND failure IS NULL)",
         name="failure_matches_status",
     ),
     UniqueConstraint("task_id", "idempotency_key", name="uq_jobs_task_idempotency"),
 )
 Index("ix_jobs_task_status", jobs.c.task_id, jobs.c.status)
+
+job_results = Table(
+    "job_results",
+    metadata,
+    Column(
+        "job_id",
+        IDENTIFIER,
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("produced_artifact_version_ids", JSONB, nullable=False),
+    Column("evidence_ids", JSONB, nullable=False),
+    Column("failure", JSONB(none_as_null=True), nullable=True),
+    Column("result_fingerprint", String(64), nullable=False),
+    Column("completed_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    _schema_constraint(),
+    _enum_constraint("status", JobStatus, "status"),
+    CheckConstraint(
+        "status IN ('succeeded', 'failed', 'cancelled')",
+        name="terminal_status",
+    ),
+    CheckConstraint(
+        "(status = 'failed' AND failure IS NOT NULL) OR (status <> 'failed' AND failure IS NULL)",
+        name="failure_matches_status",
+    ),
+)
+
+job_attempt_failures = Table(
+    "job_attempt_failures",
+    metadata,
+    Column(
+        "job_id",
+        IDENTIFIER,
+        ForeignKey("jobs.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column("attempt", Integer, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("owner", IDENTIFIER, nullable=False),
+    Column("failure", JSONB, nullable=False),
+    Column("failure_fingerprint", String(64), nullable=False),
+    Column("recorded_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    _schema_constraint(),
+    CheckConstraint("attempt > 0", name="attempt_positive"),
+)
 
 outbox_events = Table(
     "outbox_events",
@@ -230,8 +277,7 @@ Index(
     outbox_events.c.available_at,
     outbox_events.c.created_at,
     postgresql_where=(
-        outbox_events.c.published_at.is_(None)
-        & outbox_events.c.dead_lettered_at.is_(None)
+        outbox_events.c.published_at.is_(None) & outbox_events.c.dead_lettered_at.is_(None)
     ),
 )
 

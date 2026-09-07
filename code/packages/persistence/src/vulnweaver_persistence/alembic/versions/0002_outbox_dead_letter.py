@@ -40,9 +40,7 @@ def upgrade() -> None:
         "outbox_events",
         ["available_at", "created_at"],
         unique=False,
-        postgresql_where=sa.text(
-            "published_at IS NULL AND dead_lettered_at IS NULL"
-        ),
+        postgresql_where=sa.text("published_at IS NULL AND dead_lettered_at IS NULL"),
     )
 
 

@@ -1,0 +1,22 @@
+[project]
+name = "vulnweaver-worker"
+version = "0.1.0"
+description = "Reliable consumer, lease and result lifecycle for VulnWeaver workers"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vulnweaver-contracts",
+    "vulnweaver-persistence",
+    "vulnweaver-queue",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-contracts = { workspace = true }
+vulnweaver-persistence = { workspace = true }
+vulnweaver-queue = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_worker"

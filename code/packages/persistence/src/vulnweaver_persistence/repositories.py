@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import cast
+from uuid import uuid4
 
 from sqlalchemy import RowMapping, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -18,12 +20,15 @@ from vulnweaver_contracts import (
     JobKind,
     JobRequestedEvent,
     JobStatus,
+    Lease,
     PermissionMode,
     Project,
     QueueEvent,
+    StructuredFailure,
     Task,
     TaskResult,
     TaskStatus,
+    WorkerResult,
     validate_contract,
 )
 
@@ -31,12 +36,15 @@ from vulnweaver_persistence.errors import (
     EntityConflict,
     EntityNotFound,
     IdempotencyConflict,
+    JobLeaseConflict,
     PersistenceInvariantError,
 )
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_persistence.models import (
     artifact_versions,
     artifacts,
+    job_attempt_failures,
+    job_results,
     jobs,
     outbox_events,
     projects,
@@ -65,6 +73,39 @@ class OutboxMessage:
     available_at: datetime
 
 
+class JobLeaseClaimOutcome(StrEnum):
+    ACQUIRED = "acquired"
+    ALREADY_OWNED = "already_owned"
+    BUSY = "busy"
+    COMPLETED = "completed"
+    EXHAUSTED = "exhausted"
+    BACKING_OFF = "backing_off"
+    NOT_RUNNABLE = "not_runnable"
+
+
+@dataclass(frozen=True, slots=True)
+class JobLeaseClaim:
+    job: Job
+    outcome: JobLeaseClaimOutcome
+    retry_after_seconds: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class JobCompletionResult:
+    job: Job
+    result: WorkerResult
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class JobAttemptFailure:
+    job_id: str
+    attempt: int
+    owner: str
+    failure: StructuredFailure
+    recorded_at: datetime
+
+
 class ProjectRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -81,8 +122,10 @@ class ProjectRepository:
 
     async def get(self, project_id: str) -> Project:
         row = (
-            await self._connection.execute(select(projects).where(projects.c.id == project_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(projects).where(projects.c.id == project_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("project not found", details={"project_id": project_id})
         return _project_from_row(row)
@@ -108,22 +151,24 @@ class ArtifactRepository:
 
     async def get(self, artifact_id: str) -> Artifact:
         row = (
-            await self._connection.execute(
-                select(artifacts).where(artifacts.c.id == artifact_id)
-            )
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(artifacts).where(artifacts.c.id == artifact_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
-            raise EntityNotFound(
-                "artifact not found", details={"artifact_id": artifact_id}
-            )
+            raise EntityNotFound("artifact not found", details={"artifact_id": artifact_id})
         return _artifact_from_row(row)
 
     async def get_version(self, version_id: str) -> ArtifactVersion:
         row = (
-            await self._connection.execute(
-                select(artifact_versions).where(artifact_versions.c.id == version_id)
+            (
+                await self._connection.execute(
+                    select(artifact_versions).where(artifact_versions.c.id == version_id)
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound(
                 "artifact version not found",
@@ -149,13 +194,17 @@ class ArtifactRepository:
 
         if inserted_id is None:
             row = (
-                await self._connection.execute(
-                    select(artifact_versions).where(
-                        artifact_versions.c.artifact_id == version["artifact_id"],
-                        artifact_versions.c.digest == version["digest"],
+                (
+                    await self._connection.execute(
+                        select(artifact_versions).where(
+                            artifact_versions.c.artifact_id == version["artifact_id"],
+                            artifact_versions.c.digest == version["digest"],
+                        )
                     )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             stored = _artifact_version_from_row(row)
             created = False
         else:
@@ -194,13 +243,17 @@ class TaskRepository:
             return CreateResult(task, True)
 
         row = (
-            await self._connection.execute(
-                select(tasks).where(
-                    tasks.c.project_id == task["project_id"],
-                    tasks.c.idempotency_key == task["idempotency_key"],
+            (
+                await self._connection.execute(
+                    select(tasks).where(
+                        tasks.c.project_id == task["project_id"],
+                        tasks.c.idempotency_key == task["idempotency_key"],
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         if row["request_fingerprint"] != fingerprint:
             raise IdempotencyConflict(
                 "idempotency key was already used for a different task request",
@@ -213,8 +266,10 @@ class TaskRepository:
 
     async def get(self, task_id: str) -> Task:
         row = (
-            await self._connection.execute(select(tasks).where(tasks.c.id == task_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(tasks).where(tasks.c.id == task_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("task not found", details={"task_id": task_id})
         return _task_from_row(row)
@@ -224,9 +279,7 @@ class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
-    async def enqueue_with_outbox(
-        self, job: Job, event: JobRequestedEvent
-    ) -> JobEnqueueResult:
+    async def enqueue_with_outbox(self, job: Job, event: JobRequestedEvent) -> JobEnqueueResult:
         """Create a Job and its dispatch event in the caller's single transaction."""
 
         validate_contract("Job", job)
@@ -260,13 +313,17 @@ class JobRepository:
 
     async def _resolve_idempotent_retry(self, job: Job, fingerprint: str) -> JobEnqueueResult:
         row = (
-            await self._connection.execute(
-                select(jobs).where(
-                    jobs.c.task_id == job["task_id"],
-                    jobs.c.idempotency_key == job["idempotency_key"],
+            (
+                await self._connection.execute(
+                    select(jobs).where(
+                        jobs.c.task_id == job["task_id"],
+                        jobs.c.idempotency_key == job["idempotency_key"],
+                    )
                 )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         if row["request_fingerprint"] != fingerprint:
             raise IdempotencyConflict(
                 "idempotency key was already used for a different job request",
@@ -278,15 +335,19 @@ class JobRepository:
 
         stored_job = _job_from_row(row)
         event_row = (
-            await self._connection.execute(
-                select(outbox_events).where(
-                    outbox_events.c.aggregate_type == "job",
-                    outbox_events.c.aggregate_id == stored_job["id"],
-                    outbox_events.c.event_type == "job.requested",
-                    outbox_events.c.sequence == stored_job["attempt"],
+            (
+                await self._connection.execute(
+                    select(outbox_events).where(
+                        outbox_events.c.aggregate_type == "job",
+                        outbox_events.c.aggregate_id == stored_job["id"],
+                        outbox_events.c.event_type == "job.requested",
+                        outbox_events.c.sequence == stored_job["attempt"],
+                    )
                 )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if event_row is None:
             raise PersistenceInvariantError(
                 "idempotent job exists without its outbox event",
@@ -300,11 +361,379 @@ class JobRepository:
 
     async def get(self, job_id: str) -> Job:
         row = (
-            await self._connection.execute(select(jobs).where(jobs.c.id == job_id))
-        ).mappings().one_or_none()
+            (await self._connection.execute(select(jobs).where(jobs.c.id == job_id)))
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         return _job_from_row(row)
+
+    async def claim_lease(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        lease_seconds: int,
+        heartbeat_interval_seconds: int,
+    ) -> JobLeaseClaim:
+        """Atomically claim queued work or take over an expired running Job."""
+
+        if heartbeat_interval_seconds < 1:
+            raise ValueError("heartbeat interval must be positive")
+        if lease_seconds <= heartbeat_interval_seconds:
+            raise ValueError("lease duration must exceed its heartbeat interval")
+
+        row, now = await self._job_with_database_time(job_id, lock=False)
+        current = _job_from_row(row)
+        read_only = _read_only_claim_outcome(row, current, now, owner)
+        if read_only is not None:
+            return read_only
+
+        # Only mutation candidates take a row lock. Re-check after locking because
+        # another claimant may have changed the Job between the two reads.
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        read_only = _read_only_claim_outcome(row, current, now, owner)
+        if read_only is not None:
+            return read_only
+
+        exhausted = current["attempt"] >= current["retry_policy"]["max_attempts"]
+        fencing_token = uuid4().hex
+
+        lease = Lease(
+            owner=owner,
+            fencing_token=fencing_token,
+            expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+        validate_contract("Lease", lease)
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.RUNNING.value,
+                attempt=jobs.c.attempt if exhausted else jobs.c.attempt + 1,
+                retry_not_before=None,
+                lease=lease,
+                failure=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        outcome = JobLeaseClaimOutcome.EXHAUSTED if exhausted else JobLeaseClaimOutcome.ACQUIRED
+        return JobLeaseClaim(await self.get(job_id), outcome)
+
+    async def renew_lease(
+        self, job_id: str, *, owner: str, fencing_token: str, lease_seconds: int
+    ) -> Job:
+        """Extend an active lease only while its owner still holds it."""
+
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if current["status"] is not JobStatus.RUNNING or lease is None:
+            raise JobLeaseConflict("job has no active lease", details={"job_id": job_id})
+        if (
+            lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": job_id, "owner": owner},
+            )
+        if lease_seconds <= lease["heartbeat_interval_seconds"]:
+            raise ValueError("lease duration must exceed its heartbeat interval")
+
+        renewed = Lease(
+            owner=owner,
+            fencing_token=fencing_token,
+            expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
+            heartbeat_interval_seconds=lease["heartbeat_interval_seconds"],
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                lease=renewed,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def release_lease(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        fencing_token: str,
+        refund_attempt: bool = True,
+    ) -> Job:
+        """Return unfinished work to the queued state during retry or graceful stop."""
+
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+        ):
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": job_id, "owner": owner},
+            )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.QUEUED.value,
+                attempt=jobs.c.attempt - 1 if refund_attempt else jobs.c.attempt,
+                retry_not_before=None,
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def complete(
+        self, result: WorkerResult, *, owner: str, fencing_token: str
+    ) -> JobCompletionResult:
+        """Persist one immutable terminal result and update its Job atomically."""
+
+        validate_contract("WorkerResult", result)
+        _ensure_terminal_worker_result(result)
+        fingerprint = _worker_result_fingerprint(result)
+        row, now = await self._job_with_database_time(result["job_id"], lock=True)
+        repeated = await self._existing_completion(row, result, fingerprint)
+        if repeated is not None:
+            return repeated
+
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job lease is no longer owned by this worker",
+                details={"job_id": result["job_id"], "owner": owner},
+            )
+
+        return await self._persist_completion(row, now, result, fingerprint)
+
+    async def record_attempt_failure(
+        self,
+        job_id: str,
+        *,
+        attempt: int,
+        owner: str,
+        fencing_token: str,
+        failure: StructuredFailure,
+    ) -> Job:
+        """Append one retryable failure and release that exact execution attempt."""
+
+        validate_contract("StructuredFailure", failure)
+        fingerprint = _structured_failure_fingerprint(failure)
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        existing_row = (
+            (
+                await self._connection.execute(
+                    select(job_attempt_failures).where(
+                        job_attempt_failures.c.job_id == job_id,
+                        job_attempt_failures.c.attempt == attempt,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing_row is not None:
+            if existing_row["failure_fingerprint"] != fingerprint:
+                raise IdempotencyConflict(
+                    "job attempt already has a different failure",
+                    details={"job_id": job_id, "attempt": attempt},
+                )
+            return current
+
+        lease = current["lease"]
+        retry_policy = current["retry_policy"]
+        if (
+            not failure["retryable"]
+            or failure["kind"] not in retry_policy["retryable_failure_kinds"]
+            or attempt >= retry_policy["max_attempts"]
+        ):
+            raise PersistenceInvariantError(
+                "job failure is not eligible for another attempt",
+                details={"job_id": job_id, "attempt": attempt},
+            )
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or current["attempt"] != attempt
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job attempt is no longer owned by this worker",
+                details={"job_id": job_id, "attempt": attempt, "owner": owner},
+            )
+        await self._connection.execute(
+            insert(job_attempt_failures).values(
+                job_id=job_id,
+                attempt=attempt,
+                schema_version="1.0.0",
+                owner=owner,
+                failure=failure,
+                failure_fingerprint=fingerprint,
+                recorded_at=now,
+            )
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
+            .values(
+                status=JobStatus.QUEUED.value,
+                retry_not_before=(now + timedelta(seconds=retry_policy["backoff_seconds"])),
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return await self.get(job_id)
+
+    async def attempt_failures(self, job_id: str) -> list[JobAttemptFailure]:
+        rows = (
+            (
+                await self._connection.execute(
+                    select(job_attempt_failures)
+                    .where(job_attempt_failures.c.job_id == job_id)
+                    .order_by(job_attempt_failures.c.attempt)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_job_attempt_failure_from_row(row) for row in rows]
+
+    async def fail_exhausted(
+        self, result: WorkerResult, *, owner: str, fencing_token: str
+    ) -> JobCompletionResult:
+        """Persist an exhausted Job failure without granting another execution lease."""
+
+        validate_contract("WorkerResult", result)
+        _ensure_terminal_worker_result(result)
+        if result["status"] is not JobStatus.FAILED or result["failure"] is None:
+            raise PersistenceInvariantError(
+                "exhausted job result must be a structured failure",
+                details={"job_id": result["job_id"]},
+            )
+        fingerprint = _worker_result_fingerprint(result)
+        row, now = await self._job_with_database_time(result["job_id"], lock=True)
+        repeated = await self._existing_completion(row, result, fingerprint)
+        if repeated is not None:
+            return repeated
+
+        current = _job_from_row(row)
+        lease = current["lease"]
+        if current["attempt"] < current["retry_policy"]["max_attempts"]:
+            raise PersistenceInvariantError(
+                "job has not exhausted its permitted execution attempts",
+                details={"job_id": result["job_id"]},
+            )
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job exhaustion settlement lease is no longer owned by this worker",
+                details={"job_id": result["job_id"], "owner": owner},
+            )
+        return await self._persist_completion(row, now, result, fingerprint)
+
+    async def _existing_completion(
+        self, row: RowMapping, result: WorkerResult, fingerprint: str
+    ) -> JobCompletionResult | None:
+        existing_row = (
+            (
+                await self._connection.execute(
+                    select(job_results).where(job_results.c.job_id == result["job_id"])
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing_row is None:
+            return None
+        if existing_row["result_fingerprint"] != fingerprint:
+            raise IdempotencyConflict(
+                "job already has a different terminal result",
+                details={"job_id": result["job_id"]},
+            )
+        return JobCompletionResult(
+            _job_from_row(row),
+            _worker_result_from_row(existing_row),
+            False,
+        )
+
+    async def _persist_completion(
+        self,
+        row: RowMapping,
+        now: datetime,
+        result: WorkerResult,
+        fingerprint: str,
+    ) -> JobCompletionResult:
+        await self._connection.execute(
+            insert(job_results).values(
+                job_id=result["job_id"],
+                schema_version=result["schema_version"],
+                status=str(result["status"]),
+                produced_artifact_version_ids=result["produced_artifact_version_ids"],
+                evidence_ids=result["evidence_ids"],
+                failure=result["failure"],
+                result_fingerprint=fingerprint,
+                completed_at=now,
+            )
+        )
+        await self._connection.execute(
+            update(jobs)
+            .where(
+                jobs.c.id == result["job_id"],
+                jobs.c.state_version == row["state_version"],
+            )
+            .values(
+                status=str(result["status"]),
+                failure=result["failure"],
+                retry_not_before=None,
+                lease=None,
+                updated_at=now,
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return JobCompletionResult(await self.get(result["job_id"]), result, True)
+
+    async def _job_with_database_time(
+        self, job_id: str, *, lock: bool
+    ) -> tuple[RowMapping, datetime]:
+        statement = select(*jobs.c, func.now().label("_database_now")).where(jobs.c.id == job_id)
+        if lock:
+            statement = statement.with_for_update()
+        row = (await self._connection.execute(statement)).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound("job not found", details={"job_id": job_id})
+        return row, row["_database_now"]
 
 
 class OutboxRepository:
@@ -319,9 +748,7 @@ class OutboxRepository:
 
         return await self._load_pending(limit=limit, lock=True)
 
-    async def _load_pending(
-        self, *, limit: int, lock: bool
-    ) -> list[OutboxMessage]:
+    async def _load_pending(self, *, limit: int, lock: bool) -> list[OutboxMessage]:
         if limit < 1 or limit > 1000:
             raise ValueError("outbox batch limit must be between 1 and 1000")
         statement = (
@@ -336,9 +763,7 @@ class OutboxRepository:
         )
         if lock:
             statement = statement.with_for_update(skip_locked=True)
-        rows = (
-            await self._connection.execute(statement)
-        ).mappings().all()
+        rows = (await self._connection.execute(statement)).mappings().all()
         return [
             OutboxMessage(
                 event=_event_from_row(row),
@@ -598,6 +1023,104 @@ def _job_from_row(row: RowMapping) -> Job:
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
     )
+
+
+def _worker_result_fingerprint(result: WorkerResult) -> str:
+    return request_fingerprint(
+        {
+            "schema_version": result["schema_version"],
+            "job_id": result["job_id"],
+            "status": result["status"],
+            "produced_artifact_version_ids": sorted(result["produced_artifact_version_ids"]),
+            "evidence_ids": sorted(result["evidence_ids"]),
+            "failure": result["failure"],
+        }
+    )
+
+
+def _read_only_claim_outcome(
+    row: RowMapping,
+    current: Job,
+    now: datetime,
+    owner: str,
+) -> JobLeaseClaim | None:
+    status = current["status"]
+    if status is JobStatus.SUCCEEDED:
+        return JobLeaseClaim(current, JobLeaseClaimOutcome.COMPLETED)
+    if status not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}:
+        return JobLeaseClaim(current, JobLeaseClaimOutcome.NOT_RUNNABLE)
+
+    lease = current["lease"]
+    if (
+        status is JobStatus.RUNNING
+        and lease is not None
+        and _parse_datetime(lease["expires_at"]) > now
+    ):
+        outcome = (
+            JobLeaseClaimOutcome.ALREADY_OWNED
+            if lease["owner"] == owner
+            else JobLeaseClaimOutcome.BUSY
+        )
+        return JobLeaseClaim(current, outcome)
+
+    retry_not_before = row["retry_not_before"]
+    if status is JobStatus.QUEUED and retry_not_before is not None and retry_not_before > now:
+        return JobLeaseClaim(
+            current,
+            JobLeaseClaimOutcome.BACKING_OFF,
+            retry_after_seconds=(retry_not_before - now).total_seconds(),
+        )
+    return None
+
+
+def _structured_failure_fingerprint(failure: StructuredFailure) -> str:
+    return request_fingerprint(
+        {
+            "code": failure["code"],
+            "kind": failure["kind"],
+            "message": failure["message"],
+            "retryable": failure["retryable"],
+            "details": failure["details"],
+        }
+    )
+
+
+def _job_attempt_failure_from_row(row: RowMapping) -> JobAttemptFailure:
+    return JobAttemptFailure(
+        job_id=row["job_id"],
+        attempt=row["attempt"],
+        owner=row["owner"],
+        failure=row["failure"],
+        recorded_at=row["recorded_at"],
+    )
+
+
+def _worker_result_from_row(row: RowMapping) -> WorkerResult:
+    return WorkerResult(
+        schema_version=row["schema_version"],
+        job_id=row["job_id"],
+        status=JobStatus(row["status"]),
+        produced_artifact_version_ids=row["produced_artifact_version_ids"],
+        evidence_ids=row["evidence_ids"],
+        failure=row["failure"],
+    )
+
+
+def _ensure_terminal_worker_result(result: WorkerResult) -> None:
+    if result["status"] not in {
+        JobStatus.SUCCEEDED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }:
+        raise PersistenceInvariantError(
+            "worker result must have a terminal status",
+            details={"job_id": result["job_id"], "status": result["status"]},
+        )
+    if (result["status"] is JobStatus.FAILED) != (result["failure"] is not None):
+        raise PersistenceInvariantError(
+            "worker result failure must match its terminal status",
+            details={"job_id": result["job_id"], "status": result["status"]},
+        )
 
 
 def _ensure_event_matches_job(job: Job, event: JobRequestedEvent) -> None:

@@ -10,12 +10,7 @@ from typing import Any, cast
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_PATH = (
-    PACKAGE_ROOT
-    / "src"
-    / "vulnweaver_contracts"
-    / "schemas"
-    / "v1"
-    / "contracts.schema.json"
+    PACKAGE_ROOT / "src" / "vulnweaver_contracts" / "schemas" / "v1" / "contracts.schema.json"
 )
 PYTHON_OUTPUT = PACKAGE_ROOT / "src" / "vulnweaver_contracts" / "generated.py"
 TYPESCRIPT_OUTPUT = PACKAGE_ROOT / "typescript" / "index.ts"
@@ -166,9 +161,7 @@ def render_typescript(bundle: dict[str, Any]) -> str:
             required = set(schema.get("required", []))
             for property_name, property_schema in schema["properties"].items():
                 optional = "" if property_name in required else "?"
-                lines.append(
-                    f"  {property_name}{optional}: {_typescript_type(property_schema)};"
-                )
+                lines.append(f"  {property_name}{optional}: {_typescript_type(property_schema)};")
             lines.append("}")
         else:
             lines.append(f"export type {name} = {_typescript_type(schema)};")
