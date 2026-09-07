@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
+from typing import cast
 
 import pytest
 from sqlalchemy import func, select
-from vulnweaver_contracts import JobKind
+from vulnweaver_contracts import (
+    ArtifactKind,
+    JobKind,
+    JobStatus,
+    PermissionMode,
+    TaskResult,
+    TaskStatus,
+)
 from vulnweaver_persistence import (
     Database,
     DatabaseSettings,
@@ -138,7 +146,6 @@ def test_unpublished_event_is_replayed_until_marked_published(
     async def scenario() -> None:
         database = Database(DatabaseSettings(seeded_database_url))
         try:
-            now = datetime.now(UTC)
             replay_job = job("job:t03-replay", idempotency_key="job:t03-replay-key")
             replay_event = job_event(replay_job, "event:t03-replay")
             async with database.transaction() as repositories:
@@ -147,7 +154,6 @@ def test_unpublished_event_is_replayed_until_marked_published(
                     "event:t03-replay",
                     error={"code": "redis_unavailable", "retryable": True},
                     retry_after=timedelta(0),
-                    failed_at=now,
                 )
             async with database.transaction() as repositories:
                 pending = await repositories.outbox.pending()
@@ -157,18 +163,14 @@ def test_unpublished_event_is_replayed_until_marked_published(
                     if message.event["event_id"] == "event:t03-replay"
                 )
                 assert replay.publish_attempts == 1
-                assert await repositories.outbox.mark_published(
-                    "event:t03-replay", published_at=now
-                )
+                assert await repositories.outbox.mark_published("event:t03-replay")
             async with database.transaction() as repositories:
                 pending_ids = {
                     message.event["event_id"]
                     for message in await repositories.outbox.pending()
                 }
                 assert "event:t03-replay" not in pending_ids
-                assert not await repositories.outbox.mark_published(
-                    "event:t03-replay", published_at=now
-                )
+                assert not await repositories.outbox.mark_published("event:t03-replay")
         finally:
             await database.dispose()
 
@@ -191,6 +193,119 @@ def test_task_idempotency_and_artifact_digest_deduplication(
                 version_result = await repositories.artifacts.add_version(duplicate_version)
                 assert not version_result.created
                 assert version_result.value["id"] == "artifact-version:t03"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_repositories_accept_schema_valid_string_enum_values(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        project_id = "project:t03-string-enums"
+        artifact_id = "artifact:t03-string-enums"
+        version_id = "artifact-version:t03-string-enums"
+        task_id = "task:t03-string-enums"
+        job_id = "job:t03-string-enums"
+
+        raw_project = project(project_id)
+        raw_project["permission_mode"] = cast(
+            PermissionMode, "request_permission"
+        )
+        raw_artifact = artifact(
+            artifact_id,
+            project_id=project_id,
+            current_version_id=version_id,
+        )
+        raw_artifact["kind"] = cast(ArtifactKind, "source_archive")
+        raw_task = task(
+            task_id,
+            project_id=project_id,
+            artifact_version_ids=[version_id],
+            idempotency_key="task:t03-string-enums-key",
+        )
+        raw_task["status"] = cast(TaskStatus, "completed")
+        raw_task["result"] = cast(TaskResult, "success")
+        raw_job = job(
+            job_id,
+            task_id=task_id,
+            idempotency_key="job:t03-string-enums-key",
+        )
+        raw_job["kind"] = cast(JobKind, "source_analysis")
+        raw_job["status"] = cast(JobStatus, "pending")
+
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(raw_project)
+                await repositories.artifacts.add(raw_artifact)
+                await repositories.artifacts.add_version(
+                    artifact_version(version_id, artifact_id=artifact_id)
+                )
+                await repositories.tasks.create(raw_task)
+                await repositories.jobs.enqueue_with_outbox(
+                    raw_job,
+                    job_event(raw_job, "event:t03-string-enums"),
+                )
+
+                stored_project = await repositories.projects.get(project_id)
+                stored_artifact = await repositories.artifacts.get(artifact_id)
+                stored_task = await repositories.tasks.get(task_id)
+                stored_job = await repositories.jobs.get(job_id)
+
+            assert stored_project["permission_mode"] is PermissionMode.REQUEST_PERMISSION
+            assert stored_artifact["kind"] is ArtifactKind.SOURCE_ARCHIVE
+            assert stored_task["status"] is TaskStatus.COMPLETED
+            assert stored_task["result"] is TaskResult.SUCCESS
+            assert stored_job["kind"] is JobKind.SOURCE_ANALYSIS
+            assert stored_job["status"] is JobStatus.PENDING
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_old_content_does_not_move_current_version_backward(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        project_id = "project:t04-version-order"
+        artifact_id = "artifact:t04-version-order"
+        first_id = "artifact-version:t04-version-order-1"
+        second_id = "artifact-version:t04-version-order-2"
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project(project_id))
+                await repositories.artifacts.add(
+                    artifact(
+                        artifact_id,
+                        project_id=project_id,
+                        current_version_id=first_id,
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(first_id, artifact_id=artifact_id)
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        second_id,
+                        artifact_id=artifact_id,
+                        digest_character="b",
+                    )
+                )
+                duplicate = await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:t04-version-order-retry",
+                        artifact_id=artifact_id,
+                    )
+                )
+                stored_artifact = await repositories.artifacts.get(artifact_id)
+
+            assert not duplicate.created
+            assert duplicate.value["id"] == first_id
+            assert stored_artifact["current_version_id"] == second_id
         finally:
             await database.dispose()
 
@@ -313,6 +428,36 @@ def test_outbox_batch_size_has_a_safe_bound(
             with pytest.raises(ValueError, match="between 1 and 1000"):
                 async with database.transaction() as repositories:
                     await repositories.outbox.pending(limit=limit)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_outbox_claim_skips_rows_locked_by_another_dispatcher(
+    seeded_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            claimed_job = job(
+                "job:t05-claim", idempotency_key="job:t05-claim-key"
+            )
+            async with database.transaction() as repositories:
+                await repositories.jobs.enqueue_with_outbox(
+                    claimed_job, job_event(claimed_job, "event:t05-claim")
+                )
+
+            async with database.transaction() as first:
+                first_batch = await first.outbox.claim_pending(limit=1000)
+                first_ids = {message.event["event_id"] for message in first_batch}
+                assert "event:t05-claim" in first_ids
+                async with database.transaction() as second:
+                    second_batch = await second.outbox.claim_pending(limit=1000)
+                    second_ids = {
+                        message.event["event_id"] for message in second_batch
+                    }
+                    assert first_ids.isdisjoint(second_ids)
         finally:
             await database.dispose()
 

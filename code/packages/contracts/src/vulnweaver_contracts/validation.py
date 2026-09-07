@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from importlib.resources import files
 from typing import Any, cast
@@ -52,7 +52,11 @@ def validate_contract(definition: str, payload: Mapping[str, object]) -> None:
     validator = Draft202012Validator(
         get_contract_schema(definition), format_checker=FormatChecker()
     )
-    failures = sorted(validator.iter_errors(payload), key=_validation_error_key)
+    iter_errors = cast(
+        Callable[[object], Iterable[ValidationError]],
+        validator.iter_errors,  # pyright: ignore[reportUnknownMemberType]
+    )
+    failures = sorted(iter_errors(payload), key=_validation_error_key)
     if failures:
         raise ContractValidationError(
             definition,

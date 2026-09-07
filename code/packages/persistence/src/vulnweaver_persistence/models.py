@@ -206,12 +206,18 @@ outbox_events = Table(
     Column("payload", JSONB, nullable=False),
     Column("available_at", TIMESTAMP, nullable=False),
     Column("published_at", TIMESTAMP, nullable=True),
+    Column("dead_lettered_at", TIMESTAMP, nullable=True),
     Column("publish_attempts", Integer, nullable=False, server_default=text("0")),
     Column("last_error", JSONB(none_as_null=True), nullable=True),
+    Column("dead_letter_reason", JSONB(none_as_null=True), nullable=True),
     Column("created_at", TIMESTAMP, nullable=False, server_default=text("now()")),
     _schema_constraint(),
     CheckConstraint("sequence >= 0", name="sequence_non_negative"),
     CheckConstraint("publish_attempts >= 0", name="publish_attempts_non_negative"),
+    CheckConstraint(
+        "NOT (published_at IS NOT NULL AND dead_lettered_at IS NOT NULL)",
+        name="single_terminal_state",
+    ),
     UniqueConstraint(
         "aggregate_type",
         "aggregate_id",
@@ -223,7 +229,10 @@ Index(
     "ix_outbox_events_pending",
     outbox_events.c.available_at,
     outbox_events.c.created_at,
-    postgresql_where=outbox_events.c.published_at.is_(None),
+    postgresql_where=(
+        outbox_events.c.published_at.is_(None)
+        & outbox_events.c.dead_lettered_at.is_(None)
+    ),
 )
 
 task_events = Table(

@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 from vulnweaver_contracts import (
     Artifact,
+    ArtifactKind,
     ArtifactVersion,
     Job,
     JobKind,
@@ -94,7 +95,8 @@ class ArtifactRepository:
     async def add(self, artifact: Artifact) -> Artifact:
         validate_contract("Artifact", artifact)
         values = _artifact_values(artifact)
-        # The first version is registered separately in the same transaction.
+        # Break the cyclic FK only inside this transaction; add_version installs
+        # the contract's non-null current version before any other transaction can read it.
         values["current_version_id"] = None
         try:
             await self._connection.execute(insert(artifacts).values(values))
@@ -103,6 +105,31 @@ class ArtifactRepository:
                 "artifact identifier already exists", details={"artifact_id": artifact["id"]}
             ) from error
         return artifact
+
+    async def get(self, artifact_id: str) -> Artifact:
+        row = (
+            await self._connection.execute(
+                select(artifacts).where(artifacts.c.id == artifact_id)
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound(
+                "artifact not found", details={"artifact_id": artifact_id}
+            )
+        return _artifact_from_row(row)
+
+    async def get_version(self, version_id: str) -> ArtifactVersion:
+        row = (
+            await self._connection.execute(
+                select(artifact_versions).where(artifact_versions.c.id == version_id)
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise EntityNotFound(
+                "artifact version not found",
+                details={"artifact_version_id": version_id},
+            )
+        return _artifact_version_from_row(row)
 
     async def add_version(self, version: ArtifactVersion) -> CreateResult[ArtifactVersion]:
         validate_contract("ArtifactVersion", version)
@@ -135,11 +162,12 @@ class ArtifactRepository:
             stored = version
             created = True
 
-        await self._connection.execute(
-            update(artifacts)
-            .where(artifacts.c.id == version["artifact_id"])
-            .values(current_version_id=stored["id"])
-        )
+        if created:
+            await self._connection.execute(
+                update(artifacts)
+                .where(artifacts.c.id == version["artifact_id"])
+                .values(current_version_id=stored["id"])
+            )
         return CreateResult(stored, created)
 
 
@@ -284,18 +312,32 @@ class OutboxRepository:
         self._connection = connection
 
     async def pending(self, *, limit: int = 100) -> list[OutboxMessage]:
+        return await self._load_pending(limit=limit, lock=False)
+
+    async def claim_pending(self, *, limit: int = 100) -> list[OutboxMessage]:
+        """Lock one dispatch batch, skipping rows held by another dispatcher."""
+
+        return await self._load_pending(limit=limit, lock=True)
+
+    async def _load_pending(
+        self, *, limit: int, lock: bool
+    ) -> list[OutboxMessage]:
         if limit < 1 or limit > 1000:
             raise ValueError("outbox batch limit must be between 1 and 1000")
-        rows = (
-            await self._connection.execute(
-                select(outbox_events)
-                .where(
-                    outbox_events.c.published_at.is_(None),
-                    outbox_events.c.available_at <= func.now(),
-                )
-                .order_by(outbox_events.c.available_at, outbox_events.c.created_at)
-                .limit(limit)
+        statement = (
+            select(outbox_events)
+            .where(
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+                outbox_events.c.available_at <= func.now(),
             )
+            .order_by(outbox_events.c.available_at, outbox_events.c.created_at)
+            .limit(limit)
+        )
+        if lock:
+            statement = statement.with_for_update(skip_locked=True)
+        rows = (
+            await self._connection.execute(statement)
         ).mappings().all()
         return [
             OutboxMessage(
@@ -306,11 +348,15 @@ class OutboxRepository:
             for row in rows
         ]
 
-    async def mark_published(self, event_id: str, *, published_at: datetime) -> bool:
+    async def mark_published(self, event_id: str) -> bool:
         result = await self._connection.execute(
             update(outbox_events)
-            .where(outbox_events.c.id == event_id, outbox_events.c.published_at.is_(None))
-            .values(published_at=published_at)
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
+            .values(published_at=func.now())
         )
         return result.rowcount == 1
 
@@ -320,16 +366,39 @@ class OutboxRepository:
         *,
         error: dict[str, object],
         retry_after: timedelta,
-        failed_at: datetime | None = None,
     ) -> bool:
-        timestamp = failed_at or datetime.now(UTC)
         result = await self._connection.execute(
             update(outbox_events)
-            .where(outbox_events.c.id == event_id, outbox_events.c.published_at.is_(None))
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
             .values(
                 publish_attempts=outbox_events.c.publish_attempts + 1,
                 last_error=error,
-                available_at=timestamp + retry_after,
+                available_at=func.now() + retry_after,
+            )
+        )
+        return result.rowcount == 1
+
+    async def mark_dead_lettered(
+        self,
+        event_id: str,
+        *,
+        reason: dict[str, object],
+    ) -> bool:
+        result = await self._connection.execute(
+            update(outbox_events)
+            .where(
+                outbox_events.c.id == event_id,
+                outbox_events.c.published_at.is_(None),
+                outbox_events.c.dead_lettered_at.is_(None),
+            )
+            .values(
+                dead_lettered_at=func.now(),
+                dead_letter_reason=reason,
+                last_error=reason,
             )
         )
         return result.rowcount == 1
@@ -390,7 +459,7 @@ class Repositories:
 def _project_values(project: Project) -> dict[str, object]:
     return {
         **project,
-        "permission_mode": project["permission_mode"].value,
+        "permission_mode": str(project["permission_mode"]),
         "created_at": _parse_datetime(project["created_at"]),
     }
 
@@ -411,9 +480,20 @@ def _project_from_row(row: RowMapping) -> Project:
 def _artifact_values(artifact: Artifact) -> dict[str, object]:
     return {
         **artifact,
-        "kind": artifact["kind"].value,
+        "kind": str(artifact["kind"]),
         "created_at": _parse_datetime(artifact["created_at"]),
     }
+
+
+def _artifact_from_row(row: RowMapping) -> Artifact:
+    return Artifact(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        project_id=row["project_id"],
+        kind=ArtifactKind(row["kind"]),
+        current_version_id=row["current_version_id"],
+        created_at=_format_datetime(row["created_at"]),
+    )
 
 
 def _artifact_version_values(version: ArtifactVersion) -> dict[str, object]:
@@ -454,8 +534,8 @@ def _task_fingerprint(task: Task) -> str:
 def _task_values(task: Task, fingerprint: str) -> dict[str, object]:
     return {
         **task,
-        "status": task["status"].value,
-        "result": task["result"].value if task["result"] is not None else None,
+        "status": str(task["status"]),
+        "result": str(task["result"]) if task["result"] is not None else None,
         "request_fingerprint": fingerprint,
         "created_at": _parse_datetime(task["created_at"]),
         "updated_at": _parse_datetime(task["updated_at"]),
@@ -493,8 +573,8 @@ def _job_fingerprint(job: Job) -> str:
 def _job_values(job: Job, fingerprint: str) -> dict[str, object]:
     return {
         **job,
-        "kind": job["kind"].value,
-        "status": job["status"].value,
+        "kind": str(job["kind"]),
+        "status": str(job["status"]),
         "request_fingerprint": fingerprint,
         "created_at": _parse_datetime(job["created_at"]),
         "updated_at": _parse_datetime(job["updated_at"]),

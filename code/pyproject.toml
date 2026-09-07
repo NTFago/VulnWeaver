@@ -5,14 +5,16 @@ description = "Evidence-driven agentic vulnerability discovery"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "vulnweaver-artifact-store",
     "vulnweaver-contracts",
+    "vulnweaver-dispatcher",
     "vulnweaver-domain",
     "vulnweaver-persistence",
+    "vulnweaver-queue",
 ]
 
 [dependency-groups]
 dev = [
-    "mypy>=1.15,<2",
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.11,<1",
@@ -23,12 +25,22 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-members = ["packages/contracts", "packages/domain", "packages/persistence"]
+members = [
+    "apps/dispatcher",
+    "packages/artifact-store",
+    "packages/contracts",
+    "packages/domain",
+    "packages/persistence",
+    "packages/queue",
+]
 
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-artifact-store = { workspace = true }
+vulnweaver-dispatcher = { workspace = true }
+vulnweaver-queue = { workspace = true }
 
 [tool.ruff]
 line-length = 100
@@ -37,19 +49,38 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.pyright]
+include = ["apps", "packages"]
+exclude = ["**/__pycache__", "**/.venv", "**/node_modules"]
+extraPaths = [
+    "apps/dispatcher/src",
+    "packages/artifact-store/src",
+    "packages/contracts/src",
+    "packages/domain/src",
+    "packages/persistence/src",
+    "packages/queue/src",
+]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+typeCheckingMode = "strict"
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source_pkgs = ["vulnweaver_contracts", "vulnweaver_domain", "vulnweaver_persistence"]
+source_pkgs = [
+    "vulnweaver_artifact_store",
+    "vulnweaver_contracts",
+    "vulnweaver_dispatcher",
+    "vulnweaver_domain",
+    "vulnweaver_persistence",
+    "vulnweaver_queue",
+]
 omit = [
     "*/vulnweaver_persistence/alembic/env.py",
     "*/vulnweaver_persistence/alembic/versions/*.py",
 ]
-
-[tool.mypy]
-python_version = "3.12"
-strict = true
-warn_unreachable = true

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -39,7 +39,7 @@ class Database:
         )
 
     @asynccontextmanager
-    async def transaction(self) -> AsyncIterator[Repositories]:
+    async def transaction(self) -> AsyncGenerator[Repositories, None]:
         """Yield repositories sharing one connection and one commit boundary."""
 
         async with self.engine.begin() as connection:
