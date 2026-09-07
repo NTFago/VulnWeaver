@@ -92,6 +92,7 @@ def test_job_lease_claim_is_exclusive_and_same_owner_is_idempotent(
             assert first.job["attempt"] == 1
             assert first.job["lease"] is not None
             assert first.job["lease"]["owner"] == "worker:t06-a"
+            assert first.job["lease"]["fencing_token"]
 
             async with database.transaction() as repositories:
                 busy = await repositories.jobs.claim_lease(
@@ -115,34 +116,47 @@ def test_job_lease_claim_is_exclusive_and_same_owner_is_idempotent(
     asyncio.run(scenario())
 
 
-def test_job_lease_renew_release_and_attempt_limit(lease_database_url: str) -> None:
+def test_job_lease_renew_and_graceful_release_refunds_attempt(
+    lease_database_url: str,
+) -> None:
     async def scenario() -> None:
         database = Database(DatabaseSettings(lease_database_url))
         try:
             await _enqueue(database, "job:t06-retry")
             async with database.transaction() as repositories:
-                await repositories.jobs.claim_lease(
+                first = await repositories.jobs.claim_lease(
                     "job:t06-retry",
                     owner="worker:t06-a",
                     lease_seconds=60,
                     heartbeat_interval_seconds=10,
                 )
+            assert first.job["lease"] is not None
+            first_token = first.job["lease"]["fencing_token"]
             async with database.transaction() as repositories:
                 renewed = await repositories.jobs.renew_lease(
-                    "job:t06-retry", owner="worker:t06-a", lease_seconds=120
+                    "job:t06-retry",
+                    owner="worker:t06-a",
+                    fencing_token=first_token,
+                    lease_seconds=120,
                 )
                 assert renewed["lease"] is not None
                 with pytest.raises(JobLeaseConflict):
                     await repositories.jobs.renew_lease(
-                        "job:t06-retry", owner="worker:t06-other", lease_seconds=120
+                        "job:t06-retry",
+                        owner="worker:t06-other",
+                        fencing_token=first_token,
+                        lease_seconds=120,
                     )
 
             async with database.transaction() as repositories:
                 released = await repositories.jobs.release_lease(
-                    "job:t06-retry", owner="worker:t06-a"
+                    "job:t06-retry",
+                    owner="worker:t06-a",
+                    fencing_token=first_token,
                 )
             assert released["status"] is JobStatus.QUEUED
             assert released["lease"] is None
+            assert released["attempt"] == 0
 
             async with database.transaction() as repositories:
                 second = await repositories.jobs.claim_lease(
@@ -151,21 +165,9 @@ def test_job_lease_renew_release_and_attempt_limit(lease_database_url: str) -> N
                     lease_seconds=60,
                     heartbeat_interval_seconds=10,
                 )
-                await repositories.jobs.release_lease(
-                    "job:t06-retry", owner="worker:t06-b"
-                )
-            assert second.job["attempt"] == 2
-
-            async with database.transaction() as repositories:
-                exhausted = await repositories.jobs.claim_lease(
-                    "job:t06-retry",
-                    owner="worker:t06-c",
-                    lease_seconds=60,
-                    heartbeat_interval_seconds=10,
-                )
-            assert exhausted.outcome is JobLeaseClaimOutcome.EXHAUSTED
-            assert exhausted.job["attempt"] == 2
-            assert exhausted.job["status"] is JobStatus.QUEUED
+            assert second.job["attempt"] == 1
+            assert second.job["lease"] is not None
+            assert second.job["lease"]["fencing_token"] != first_token
         finally:
             await database.dispose()
 
@@ -178,12 +180,14 @@ def test_expired_job_lease_can_be_taken_over(lease_database_url: str) -> None:
         try:
             await _enqueue(database, "job:t06-takeover")
             async with database.transaction() as repositories:
-                await repositories.jobs.claim_lease(
+                original = await repositories.jobs.claim_lease(
                     "job:t06-takeover",
                     owner="worker:t06-dead",
                     lease_seconds=60,
                     heartbeat_interval_seconds=10,
                 )
+            assert original.job["lease"] is not None
+            original_token = original.job["lease"]["fencing_token"]
             async with database.engine.begin() as connection:
                 await connection.execute(
                     update(jobs)
@@ -191,6 +195,7 @@ def test_expired_job_lease_can_be_taken_over(lease_database_url: str) -> None:
                     .values(
                         lease={
                             "owner": "worker:t06-dead",
+                            "fencing_token": original_token,
                             "expires_at": datetime(2020, 1, 1, tzinfo=UTC).isoformat(),
                             "heartbeat_interval_seconds": 10,
                         }
@@ -207,6 +212,16 @@ def test_expired_job_lease_can_be_taken_over(lease_database_url: str) -> None:
             assert takeover.job["attempt"] == 2
             assert takeover.job["lease"] is not None
             assert takeover.job["lease"]["owner"] == "worker:t06-live"
+            takeover_token = takeover.job["lease"]["fencing_token"]
+            assert takeover_token != original_token
+            with pytest.raises(JobLeaseConflict):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.renew_lease(
+                        "job:t06-takeover",
+                        owner="worker:t06-dead",
+                        fencing_token=original_token,
+                        lease_seconds=60,
+                    )
         finally:
             await database.dispose()
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import cast
+from uuid import uuid4
 
 from sqlalchemy import RowMapping, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -78,6 +79,7 @@ class JobLeaseClaimOutcome(StrEnum):
     BUSY = "busy"
     COMPLETED = "completed"
     EXHAUSTED = "exhausted"
+    BACKING_OFF = "backing_off"
     NOT_RUNNABLE = "not_runnable"
 
 
@@ -85,6 +87,7 @@ class JobLeaseClaimOutcome(StrEnum):
 class JobLeaseClaim:
     job: Job
     outcome: JobLeaseClaimOutcome
+    retry_after_seconds: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,30 +384,26 @@ class JobRepository:
         if lease_seconds <= heartbeat_interval_seconds:
             raise ValueError("lease duration must exceed its heartbeat interval")
 
-        row, now = await self._locked_job_with_database_time(job_id)
+        row, now = await self._job_with_database_time(job_id, lock=False)
         current = _job_from_row(row)
-        status = current["status"]
-        if status is JobStatus.SUCCEEDED:
-            return JobLeaseClaim(current, JobLeaseClaimOutcome.COMPLETED)
-        if status not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}:
-            return JobLeaseClaim(current, JobLeaseClaimOutcome.NOT_RUNNABLE)
+        read_only = _read_only_claim_outcome(row, current, now, owner)
+        if read_only is not None:
+            return read_only
 
-        current_lease = current["lease"]
-        if status is JobStatus.RUNNING and current_lease is not None:
-            expires_at = _parse_datetime(current_lease["expires_at"])
-            if expires_at > now:
-                outcome = (
-                    JobLeaseClaimOutcome.ALREADY_OWNED
-                    if current_lease["owner"] == owner
-                    else JobLeaseClaimOutcome.BUSY
-                )
-                return JobLeaseClaim(current, outcome)
+        # Only mutation candidates take a row lock. Re-check after locking because
+        # another claimant may have changed the Job between the two reads.
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        read_only = _read_only_claim_outcome(row, current, now, owner)
+        if read_only is not None:
+            return read_only
 
-        if current["attempt"] >= current["retry_policy"]["max_attempts"]:
-            return JobLeaseClaim(current, JobLeaseClaimOutcome.EXHAUSTED)
+        exhausted = current["attempt"] >= current["retry_policy"]["max_attempts"]
+        fencing_token = uuid4().hex
 
         lease = Lease(
             owner=owner,
+            fencing_token=fencing_token,
             expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
             heartbeat_interval_seconds=heartbeat_interval_seconds,
         )
@@ -414,24 +413,32 @@ class JobRepository:
             .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
             .values(
                 status=JobStatus.RUNNING.value,
-                attempt=jobs.c.attempt + 1,
+                attempt=jobs.c.attempt if exhausted else jobs.c.attempt + 1,
+                retry_not_before=None,
                 lease=lease,
                 failure=None,
                 updated_at=now,
                 state_version=jobs.c.state_version + 1,
             )
         )
-        return JobLeaseClaim(await self.get(job_id), JobLeaseClaimOutcome.ACQUIRED)
+        outcome = JobLeaseClaimOutcome.EXHAUSTED if exhausted else JobLeaseClaimOutcome.ACQUIRED
+        return JobLeaseClaim(await self.get(job_id), outcome)
 
-    async def renew_lease(self, job_id: str, *, owner: str, lease_seconds: int) -> Job:
+    async def renew_lease(
+        self, job_id: str, *, owner: str, fencing_token: str, lease_seconds: int
+    ) -> Job:
         """Extend an active lease only while its owner still holds it."""
 
-        row, now = await self._locked_job_with_database_time(job_id)
+        row, now = await self._job_with_database_time(job_id, lock=True)
         current = _job_from_row(row)
         lease = current["lease"]
         if current["status"] is not JobStatus.RUNNING or lease is None:
             raise JobLeaseConflict("job has no active lease", details={"job_id": job_id})
-        if lease["owner"] != owner or _parse_datetime(lease["expires_at"]) <= now:
+        if (
+            lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
             raise JobLeaseConflict(
                 "job lease is no longer owned by this worker",
                 details={"job_id": job_id, "owner": owner},
@@ -441,6 +448,7 @@ class JobRepository:
 
         renewed = Lease(
             owner=owner,
+            fencing_token=fencing_token,
             expires_at=_format_datetime(now + timedelta(seconds=lease_seconds)),
             heartbeat_interval_seconds=lease["heartbeat_interval_seconds"],
         )
@@ -455,13 +463,25 @@ class JobRepository:
         )
         return await self.get(job_id)
 
-    async def release_lease(self, job_id: str, *, owner: str) -> Job:
+    async def release_lease(
+        self,
+        job_id: str,
+        *,
+        owner: str,
+        fencing_token: str,
+        refund_attempt: bool = True,
+    ) -> Job:
         """Return unfinished work to the queued state during retry or graceful stop."""
 
-        row, now = await self._locked_job_with_database_time(job_id)
+        row, now = await self._job_with_database_time(job_id, lock=True)
         current = _job_from_row(row)
         lease = current["lease"]
-        if current["status"] is not JobStatus.RUNNING or lease is None or lease["owner"] != owner:
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+        ):
             raise JobLeaseConflict(
                 "job lease is no longer owned by this worker",
                 details={"job_id": job_id, "owner": owner},
@@ -471,6 +491,8 @@ class JobRepository:
             .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
             .values(
                 status=JobStatus.QUEUED.value,
+                attempt=jobs.c.attempt - 1 if refund_attempt else jobs.c.attempt,
+                retry_not_before=None,
                 lease=None,
                 updated_at=now,
                 state_version=jobs.c.state_version + 1,
@@ -478,13 +500,15 @@ class JobRepository:
         )
         return await self.get(job_id)
 
-    async def complete(self, result: WorkerResult, *, owner: str) -> JobCompletionResult:
+    async def complete(
+        self, result: WorkerResult, *, owner: str, fencing_token: str
+    ) -> JobCompletionResult:
         """Persist one immutable terminal result and update its Job atomically."""
 
         validate_contract("WorkerResult", result)
         _ensure_terminal_worker_result(result)
         fingerprint = _worker_result_fingerprint(result)
-        row, now = await self._locked_job_with_database_time(result["job_id"])
+        row, now = await self._job_with_database_time(result["job_id"], lock=True)
         repeated = await self._existing_completion(row, result, fingerprint)
         if repeated is not None:
             return repeated
@@ -495,6 +519,7 @@ class JobRepository:
             current["status"] is not JobStatus.RUNNING
             or lease is None
             or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
             or _parse_datetime(lease["expires_at"]) <= now
         ):
             raise JobLeaseConflict(
@@ -510,13 +535,14 @@ class JobRepository:
         *,
         attempt: int,
         owner: str,
+        fencing_token: str,
         failure: StructuredFailure,
     ) -> Job:
         """Append one retryable failure and release that exact execution attempt."""
 
         validate_contract("StructuredFailure", failure)
         fingerprint = _structured_failure_fingerprint(failure)
-        row, now = await self._locked_job_with_database_time(job_id)
+        row, now = await self._job_with_database_time(job_id, lock=True)
         current = _job_from_row(row)
         existing_row = (
             (
@@ -554,6 +580,7 @@ class JobRepository:
             or current["attempt"] != attempt
             or lease is None
             or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
             or _parse_datetime(lease["expires_at"]) <= now
         ):
             raise JobLeaseConflict(
@@ -576,6 +603,7 @@ class JobRepository:
             .where(jobs.c.id == job_id, jobs.c.state_version == row["state_version"])
             .values(
                 status=JobStatus.QUEUED.value,
+                retry_not_before=(now + timedelta(seconds=retry_policy["backoff_seconds"])),
                 lease=None,
                 updated_at=now,
                 state_version=jobs.c.state_version + 1,
@@ -597,7 +625,9 @@ class JobRepository:
         )
         return [_job_attempt_failure_from_row(row) for row in rows]
 
-    async def fail_exhausted(self, result: WorkerResult) -> JobCompletionResult:
+    async def fail_exhausted(
+        self, result: WorkerResult, *, owner: str, fencing_token: str
+    ) -> JobCompletionResult:
         """Persist an exhausted Job failure without granting another execution lease."""
 
         validate_contract("WorkerResult", result)
@@ -608,26 +638,28 @@ class JobRepository:
                 details={"job_id": result["job_id"]},
             )
         fingerprint = _worker_result_fingerprint(result)
-        row, now = await self._locked_job_with_database_time(result["job_id"])
+        row, now = await self._job_with_database_time(result["job_id"], lock=True)
         repeated = await self._existing_completion(row, result, fingerprint)
         if repeated is not None:
             return repeated
 
         current = _job_from_row(row)
         lease = current["lease"]
-        lease_is_active = (
-            current["status"] is JobStatus.RUNNING
-            and lease is not None
-            and _parse_datetime(lease["expires_at"]) > now
-        )
-        if (
-            current["status"] not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}
-            or current["attempt"] < current["retry_policy"]["max_attempts"]
-            or lease_is_active
-        ):
+        if current["attempt"] < current["retry_policy"]["max_attempts"]:
             raise PersistenceInvariantError(
                 "job has not exhausted its permitted execution attempts",
                 details={"job_id": result["job_id"]},
+            )
+        if (
+            current["status"] is not JobStatus.RUNNING
+            or lease is None
+            or lease["owner"] != owner
+            or lease.get("fencing_token") != fencing_token
+            or _parse_datetime(lease["expires_at"]) <= now
+        ):
+            raise JobLeaseConflict(
+                "job exhaustion settlement lease is no longer owned by this worker",
+                details={"job_id": result["job_id"], "owner": owner},
             )
         return await self._persist_completion(row, now, result, fingerprint)
 
@@ -684,6 +716,7 @@ class JobRepository:
             .values(
                 status=str(result["status"]),
                 failure=result["failure"],
+                retry_not_before=None,
                 lease=None,
                 updated_at=now,
                 state_version=jobs.c.state_version + 1,
@@ -691,20 +724,16 @@ class JobRepository:
         )
         return JobCompletionResult(await self.get(result["job_id"]), result, True)
 
-    async def _locked_job_with_database_time(self, job_id: str) -> tuple[RowMapping, datetime]:
-        row = (
-            (
-                await self._connection.execute(
-                    select(jobs).where(jobs.c.id == job_id).with_for_update()
-                )
-            )
-            .mappings()
-            .one_or_none()
-        )
+    async def _job_with_database_time(
+        self, job_id: str, *, lock: bool
+    ) -> tuple[RowMapping, datetime]:
+        statement = select(*jobs.c, func.now().label("_database_now")).where(jobs.c.id == job_id)
+        if lock:
+            statement = statement.with_for_update()
+        row = (await self._connection.execute(statement)).mappings().one_or_none()
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
-        now = (await self._connection.execute(select(func.now()))).scalar_one()
-        return row, now
+        return row, row["_database_now"]
 
 
 class OutboxRepository:
@@ -1002,11 +1031,46 @@ def _worker_result_fingerprint(result: WorkerResult) -> str:
             "schema_version": result["schema_version"],
             "job_id": result["job_id"],
             "status": result["status"],
-            "produced_artifact_version_ids": result["produced_artifact_version_ids"],
-            "evidence_ids": result["evidence_ids"],
+            "produced_artifact_version_ids": sorted(result["produced_artifact_version_ids"]),
+            "evidence_ids": sorted(result["evidence_ids"]),
             "failure": result["failure"],
         }
     )
+
+
+def _read_only_claim_outcome(
+    row: RowMapping,
+    current: Job,
+    now: datetime,
+    owner: str,
+) -> JobLeaseClaim | None:
+    status = current["status"]
+    if status is JobStatus.SUCCEEDED:
+        return JobLeaseClaim(current, JobLeaseClaimOutcome.COMPLETED)
+    if status not in {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING}:
+        return JobLeaseClaim(current, JobLeaseClaimOutcome.NOT_RUNNABLE)
+
+    lease = current["lease"]
+    if (
+        status is JobStatus.RUNNING
+        and lease is not None
+        and _parse_datetime(lease["expires_at"]) > now
+    ):
+        outcome = (
+            JobLeaseClaimOutcome.ALREADY_OWNED
+            if lease["owner"] == owner
+            else JobLeaseClaimOutcome.BUSY
+        )
+        return JobLeaseClaim(current, outcome)
+
+    retry_not_before = row["retry_not_before"]
+    if status is JobStatus.QUEUED and retry_not_before is not None and retry_not_before > now:
+        return JobLeaseClaim(
+            current,
+            JobLeaseClaimOutcome.BACKING_OFF,
+            retry_after_seconds=(retry_not_before - now).total_seconds(),
+        )
+    return None
 
 
 def _structured_failure_fingerprint(failure: StructuredFailure) -> str:

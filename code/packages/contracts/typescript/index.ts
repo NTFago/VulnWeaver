@@ -75,6 +75,7 @@ export interface RetryPolicy {
 
 export interface Lease {
   owner: Identifier;
+  fencing_token?: Identifier;
   expires_at: string;
   heartbeat_interval_seconds: number;
 }

@@ -173,6 +173,7 @@ jobs = Table(
     Column("resource_budget", JSONB, nullable=False),
     Column("retry_policy", JSONB, nullable=False),
     Column("attempt", Integer, nullable=False),
+    Column("retry_not_before", TIMESTAMP, nullable=True),
     Column("lease", JSONB(none_as_null=True), nullable=True),
     Column("failure", JSONB(none_as_null=True), nullable=True),
     Column("created_at", TIMESTAMP, nullable=False),

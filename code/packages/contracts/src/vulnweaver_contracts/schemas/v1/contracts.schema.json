@@ -147,6 +147,7 @@
       "required": ["owner", "expires_at", "heartbeat_interval_seconds"],
       "properties": {
         "owner": {"$ref": "#/$defs/Identifier"},
+        "fencing_token": {"$ref": "#/$defs/Identifier"},
         "expires_at": {"type": "string", "format": "date-time"},
         "heartbeat_interval_seconds": {"type": "integer", "minimum": 1}
       }

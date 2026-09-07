@@ -13,12 +13,22 @@ Redis Streams 消费者组可以发现和转移未 ACK 的 pending 消息，但 
 ## 决策
 
 1. PostgreSQL `jobs.lease` 是执行所有权的事实来源；Redis pending 所有权只负责消息传输。
-2. 租约领取在 Job 行锁内完成，时间使用 PostgreSQL 服务器时间；有效租约只能由原 owner 续约或释放。
-3. 首次领取和过期接管都会增加 `attempt`；同一 owner 对有效租约重复领取返回 `already_owned`，
-   不增加次数且不得再次启动执行器。
-4. 达到 `retry_policy.max_attempts` 后返回明确的 `exhausted` 结果，由后续 Worker 完成失败结果登记和 dead-letter。
-5. Redis pending 接管使用 `XAUTOCLAIM`，并保留原 Stream message ID 与事件内容；接管后仍必须取得数据库租约才能执行。
-6. 优雅停止或可重试失败通过释放租约把 Job 返回 `queued`，消息在成功持久化最终结果前不得 ACK。
+2. 领取先用无锁读取处理终态、许可等待、有效租约和退避等只读结果；只有可能改变状态时才在
+   Job 行锁内复查并更新。Job 与 PostgreSQL 服务器时间由同一次查询返回。
+3. 每次首次领取或过期接管都会生成唯一 fencing token 并增加 `attempt`；续租、释放、失败审计
+   和最终结果写入必须同时匹配 owner 与 token，旧执行者恢复后不能覆盖新租约结果。token 作为
+   `Lease` 的可选字段加入 v1，保持历史消息可读取；缺少 token 的旧租约不能续约或结算，只能在
+   到期后安全接管。
+4. 同一 owner 对有效租约重复领取返回 `already_owned`，不续租、不增加 attempt，也不授予第二次
+   执行权。优雅停止在确认执行协程已结束后释放租约并退还本次 attempt；崩溃或过期接管仍消耗
+   attempt。
+5. 达到 `retry_policy.max_attempts` 后，领取者先取得不增加 attempt 的专用结算租约，再返回
+   `exhausted`；只有该租约的 owner 与 fencing token 可以登记最终失败和 dead-letter。
+6. 可重试失败写入 `job_attempt_failures` 时同步保存数据库 `retry_not_before`，领取者在该时间前
+   只能得到 `backing_off`，从而跨 Worker 执行 `retry_policy.backoff_seconds`。
+7. Redis pending 接管使用 `XAUTOCLAIM`，并保留原 Stream message ID 与事件内容；接管后仍必须
+   取得数据库租约才能执行。
+8. 可重试失败通过释放租约把 Job 返回 `queued`，消息在成功持久化最终结果前不得 ACK。
 
 ## 后果
 

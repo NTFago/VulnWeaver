@@ -13,4 +13,11 @@ An active lease returned as `already_owned` is never executed again, even if Red
 idle ownership moved away and back to the same consumer. A failed attempt is retried only
 when its structured failure is marked retryable, its kind is explicitly allowed by the
 Job retry policy, and another attempt remains; the failure is durably appended before the
-lease is released.
+lease is released. The configured `backoff_seconds` is enforced in PostgreSQL and in the
+current processing loop, rather than being approximated by Redis pending idle time.
+
+Fresh Stream entries and stale PEL recovery alternate priority, and an empty stale scan
+falls back to a blocking fresh read. `WAITING_PERMISSION` remains pending until the Job
+is explicitly resumed. Heartbeat database failures are retried while a fencing-token
+conflict stops stale execution; settlement conflicts are reconciled against the latest
+database state before ACK or dead-letter.

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import copy
 import sys
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from vulnweaver_contracts import (
     FailureKind,
     JobStatus,
@@ -17,10 +18,11 @@ from vulnweaver_persistence import (
     Database,
     DatabaseSettings,
     IdempotencyConflict,
+    JobLeaseClaimOutcome,
     JobLeaseConflict,
     PersistenceInvariantError,
 )
-from vulnweaver_persistence.models import job_results
+from vulnweaver_persistence.models import job_results, jobs
 
 from tests.persistence.factories import (
     artifact,
@@ -87,7 +89,9 @@ async def _enqueue_and_claim(
     owner: str,
     *,
     retryable_failure_kinds: list[FailureKind] | None = None,
-) -> None:
+    max_attempts: int = 2,
+    backoff_seconds: float = 1,
+) -> str:
     value = job(
         job_id,
         task_id="task:t06-results",
@@ -96,17 +100,21 @@ async def _enqueue_and_claim(
     value["retry_policy"]["retryable_failure_kinds"] = (
         [FailureKind.TOOL] if retryable_failure_kinds is None else retryable_failure_kinds
     )
+    value["retry_policy"]["max_attempts"] = max_attempts
+    value["retry_policy"]["backoff_seconds"] = backoff_seconds
     async with database.transaction() as repositories:
         await repositories.jobs.enqueue_with_outbox(
             value,
             job_event(value, f"event:{job_id}"),
         )
-        await repositories.jobs.claim_lease(
+        claim = await repositories.jobs.claim_lease(
             job_id,
             owner=owner,
             lease_seconds=60,
             heartbeat_interval_seconds=10,
         )
+    assert claim.job["lease"] is not None
+    return claim.job["lease"]["fencing_token"]
 
 
 def test_terminal_result_and_job_state_are_committed_once(
@@ -116,16 +124,20 @@ def test_terminal_result_and_job_state_are_committed_once(
         database = Database(DatabaseSettings(result_database_url))
         result = _worker_result("job:t06-result-once")
         try:
-            await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
+            token = await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
             async with database.transaction() as repositories:
-                first = await repositories.jobs.complete(result, owner="worker:t06-a")
+                first = await repositories.jobs.complete(
+                    result, owner="worker:t06-a", fencing_token=token
+                )
             assert first.created
             assert first.job["status"] is JobStatus.SUCCEEDED
             assert first.job["lease"] is None
 
             # A retry after an ACK/network loss does not require the already-released lease.
             async with database.transaction() as repositories:
-                repeated = await repositories.jobs.complete(result, owner="worker:t06-retry")
+                repeated = await repositories.jobs.complete(
+                    result, owner="worker:t06-retry", fencing_token="replay"
+                )
             assert not repeated.created
             assert repeated.result == result
 
@@ -149,15 +161,45 @@ def test_conflicting_terminal_result_is_rejected(result_database_url: str) -> No
         database = Database(DatabaseSettings(result_database_url))
         result = _worker_result("job:t06-result-conflict")
         try:
-            await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
+            token = await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
             async with database.transaction() as repositories:
-                await repositories.jobs.complete(result, owner="worker:t06-a")
+                await repositories.jobs.complete(result, owner="worker:t06-a", fencing_token=token)
 
             conflicting = copy.deepcopy(result)
             conflicting["evidence_ids"] = ["evidence:different"]
             with pytest.raises(IdempotencyConflict):
                 async with database.transaction() as repositories:
-                    await repositories.jobs.complete(conflicting, owner="worker:t06-a")
+                    await repositories.jobs.complete(
+                        conflicting, owner="worker:t06-a", fencing_token=token
+                    )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_result_replay_ignores_set_order(result_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(result_database_url))
+        result = _worker_result("job:t06-result-order")
+        result["produced_artifact_version_ids"] = ["artifact-version:b", "artifact-version:a"]
+        result["evidence_ids"] = ["evidence:b", "evidence:a"]
+        try:
+            token = await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
+            async with database.transaction() as repositories:
+                first = await repositories.jobs.complete(
+                    result, owner="worker:t06-a", fencing_token=token
+                )
+            replay = copy.deepcopy(result)
+            replay["produced_artifact_version_ids"].reverse()
+            replay["evidence_ids"].reverse()
+            async with database.transaction() as repositories:
+                repeated = await repositories.jobs.complete(
+                    replay, owner="worker:t06-replay", fencing_token="replay"
+                )
+            assert first.created
+            assert not repeated.created
+            assert repeated.result == result
         finally:
             await database.dispose()
 
@@ -169,10 +211,14 @@ def test_only_active_lease_owner_can_create_result(result_database_url: str) -> 
         database = Database(DatabaseSettings(result_database_url))
         result = _worker_result("job:t06-result-owner")
         try:
-            await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
+            token = await _enqueue_and_claim(database, result["job_id"], "worker:t06-a")
             with pytest.raises(JobLeaseConflict):
                 async with database.transaction() as repositories:
-                    await repositories.jobs.complete(result, owner="worker:t06-other")
+                    await repositories.jobs.complete(
+                        result,
+                        owner="worker:t06-other",
+                        fencing_token=token,
+                    )
 
             async with database.transaction() as repositories:
                 stored = await repositories.jobs.get(result["job_id"])
@@ -192,6 +238,73 @@ def test_only_active_lease_owner_can_create_result(result_database_url: str) -> 
     asyncio.run(scenario())
 
 
+def test_only_exhaustion_settlement_lease_owner_can_fail_job(
+    result_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(result_database_url))
+        job_id = "job:t06-exhaustion-owner"
+        failure = StructuredFailure(
+            code="worker.attempts_exhausted",
+            kind=FailureKind.TOOL,
+            message="job execution attempts were exhausted",
+            retryable=False,
+            details={"attempt": 1},
+        )
+        result = WorkerResult(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            job_id=job_id,
+            status=JobStatus.FAILED,
+            produced_artifact_version_ids=[],
+            evidence_ids=[],
+            failure=failure,
+        )
+        try:
+            first_token = await _enqueue_and_claim(
+                database, job_id, "worker:t06-old", max_attempts=1
+            )
+            async with database.engine.begin() as connection:
+                await connection.execute(
+                    update(jobs)
+                    .where(jobs.c.id == job_id)
+                    .values(
+                        lease={
+                            "owner": "worker:t06-old",
+                            "fencing_token": first_token,
+                            "expires_at": datetime(2020, 1, 1, tzinfo=UTC).isoformat(),
+                            "heartbeat_interval_seconds": 10,
+                        }
+                    )
+                )
+            async with database.transaction() as repositories:
+                settlement = await repositories.jobs.claim_lease(
+                    job_id,
+                    owner="worker:t06-settler",
+                    lease_seconds=60,
+                    heartbeat_interval_seconds=10,
+                )
+            assert settlement.job["lease"] is not None
+            settlement_token = settlement.job["lease"]["fencing_token"]
+            with pytest.raises(JobLeaseConflict):
+                async with database.transaction() as repositories:
+                    await repositories.jobs.fail_exhausted(
+                        result,
+                        owner="worker:t06-old",
+                        fencing_token=first_token,
+                    )
+            async with database.transaction() as repositories:
+                completed = await repositories.jobs.fail_exhausted(
+                    result,
+                    owner="worker:t06-settler",
+                    fencing_token=settlement_token,
+                )
+            assert completed.job["status"] is JobStatus.FAILED
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_worker_result_requires_terminal_status(result_database_url: str) -> None:
     async def scenario() -> None:
         database = Database(DatabaseSettings(result_database_url))
@@ -201,6 +314,7 @@ def test_worker_result_requires_terminal_status(result_database_url: str) -> Non
                     await repositories.jobs.complete(
                         _worker_result("job:missing", status=JobStatus.RUNNING),
                         owner="worker:t06-a",
+                        fencing_token="missing-job",
                     )
         finally:
             await database.dispose()
@@ -222,12 +336,13 @@ def test_retryable_attempt_failure_is_append_only_and_idempotent(
             details={"tool": "test-double"},
         )
         try:
-            await _enqueue_and_claim(database, job_id, "worker:t06-a")
+            token = await _enqueue_and_claim(database, job_id, "worker:t06-a")
             async with database.transaction() as repositories:
                 released = await repositories.jobs.record_attempt_failure(
                     job_id,
                     attempt=1,
                     owner="worker:t06-a",
+                    fencing_token=token,
                     failure=failure,
                 )
             assert released["status"] is JobStatus.QUEUED
@@ -238,6 +353,7 @@ def test_retryable_attempt_failure_is_append_only_and_idempotent(
                     job_id,
                     attempt=1,
                     owner="worker:t06-a",
+                    fencing_token=token,
                     failure=failure,
                 )
                 history = await repositories.jobs.attempt_failures(job_id)
@@ -255,6 +371,7 @@ def test_retryable_attempt_failure_is_append_only_and_idempotent(
                         job_id,
                         attempt=1,
                         owner="worker:t06-a",
+                        fencing_token=token,
                         failure=conflicting,
                     )
         finally:
@@ -277,7 +394,7 @@ def test_attempt_failure_cannot_bypass_retry_kind_policy(
             details={},
         )
         try:
-            await _enqueue_and_claim(
+            token = await _enqueue_and_claim(
                 database,
                 job_id,
                 "worker:t06-a",
@@ -289,6 +406,7 @@ def test_attempt_failure_cannot_bypass_retry_kind_policy(
                         job_id,
                         attempt=1,
                         owner="worker:t06-a",
+                        fencing_token=token,
                         failure=failure,
                     )
             async with database.transaction() as repositories:
@@ -296,6 +414,60 @@ def test_attempt_failure_cannot_bypass_retry_kind_policy(
                 history = await repositories.jobs.attempt_failures(job_id)
             assert stored["status"] is JobStatus.RUNNING
             assert history == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_retry_cannot_be_claimed_before_database_backoff_expires(
+    result_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(result_database_url))
+        job_id = "job:t06-attempt-backoff"
+        failure = StructuredFailure(
+            code="test.retryable",
+            kind=FailureKind.TOOL,
+            message="safe retryable failure",
+            retryable=True,
+            details={},
+        )
+        try:
+            token = await _enqueue_and_claim(
+                database,
+                job_id,
+                "worker:t06-a",
+                backoff_seconds=0.1,
+            )
+            async with database.transaction() as repositories:
+                await repositories.jobs.record_attempt_failure(
+                    job_id,
+                    attempt=1,
+                    owner="worker:t06-a",
+                    fencing_token=token,
+                    failure=failure,
+                )
+            async with database.transaction() as repositories:
+                backing_off = await repositories.jobs.claim_lease(
+                    job_id,
+                    owner="worker:t06-b",
+                    lease_seconds=60,
+                    heartbeat_interval_seconds=10,
+                )
+            assert backing_off.outcome is JobLeaseClaimOutcome.BACKING_OFF
+            assert 0 < backing_off.retry_after_seconds <= 0.1
+
+            await asyncio.sleep(0.12)
+            async with database.transaction() as repositories:
+                acquired = await repositories.jobs.claim_lease(
+                    job_id,
+                    owner="worker:t06-b",
+                    lease_seconds=60,
+                    heartbeat_interval_seconds=10,
+                )
+            assert acquired.outcome is JobLeaseClaimOutcome.ACQUIRED
+            assert acquired.job["attempt"] == 2
         finally:
             await database.dispose()
 

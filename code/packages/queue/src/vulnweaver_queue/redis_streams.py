@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -57,8 +58,6 @@ redis.call('EXPIRE', KEYS[2], ARGV[2])
 return message_id
 """
 _DEAD_LETTER_SCRIPT = """
-redis.call('XPENDING', KEYS[3], ARGV[4])
-
 local existing_id = redis.call('HGET', KEYS[2], 'message_id')
 if existing_id then
     local existing_fingerprint = redis.call('HGET', KEYS[2], 'fingerprint')
@@ -168,16 +167,10 @@ class RedisStreamsClient:
         )
 
     async def publish(self, event: QueueEvent) -> PublishedMessage:
-        try:
-            validate_contract("QueueEvent", event)
-        except ContractValidationError as error:
-            raise MalformedQueueMessage(
-                "queue event failed contract validation",
-                details={"definition": error.definition},
-            ) from error
+        _validate_queue_contract("QueueEvent", event, "queue event")
 
         encoded = _encode_event(event)
-        fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        fingerprint = _text_fingerprint(encoded)
         stream = self._stream_for(event["event_type"])
         deduplication_key = self._deduplication_key(event["event_id"])
         fields = [
@@ -243,15 +236,19 @@ class RedisStreamsClient:
         consumer: str,
         *,
         count: int = 10,
-        block_milliseconds: int = 1000,
+        block_milliseconds: int | None = 1000,
     ) -> list[StreamMessage]:
         self._ensure_owned_stream(stream)
         _validate_consumer_name(group, "group")
         _validate_consumer_name(consumer, "consumer")
         if count < 1 or count > 1000:
             raise QueueConfigurationError("stream read count must be between 1 and 1000")
-        if block_milliseconds < 0 or block_milliseconds > 60_000:
-            raise QueueConfigurationError("stream block duration must be between 0 and 60000 ms")
+        if block_milliseconds is not None and (
+            block_milliseconds < 1 or block_milliseconds > 60_000
+        ):
+            raise QueueConfigurationError(
+                "stream block duration must be between 1 and 60000 ms or omitted"
+            )
         try:
             response = await self._client.xreadgroup(
                 groupname=group,
@@ -291,32 +288,21 @@ class RedisStreamsClient:
         _validate_consumer_name(group, "group")
         if attempt < 1:
             raise QueueConfigurationError("dead-letter attempt must be positive")
-        try:
-            validate_contract("StructuredFailure", failure)
-        except ContractValidationError as error:
-            raise MalformedQueueMessage(
-                "dead-letter failure failed contract validation",
-                details={"definition": error.definition},
-            ) from error
+        _validate_queue_contract("StructuredFailure", failure, "dead-letter failure")
 
         encoded_event = _encode_event(message.event)
-        encoded_failure = json.dumps(
-            failure, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-        )
-        fingerprint = hashlib.sha256(
-            json.dumps(
+        encoded_failure = _stable_json(failure)
+        fingerprint = _text_fingerprint(
+            _stable_json(
                 {
                     "stream": stream,
                     "message_id": message.message_id,
                     "event": message.event,
                     "failure": failure,
                     "attempt": attempt,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+                }
+            )
+        )
         deduplication_key = self._dead_letter_deduplication_key(stream, message.message_id)
         fields = [
             "event",
@@ -430,7 +416,27 @@ class RedisStreamsClient:
 
 
 def _encode_event(event: QueueEvent) -> str:
-    return json.dumps(event, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return _stable_json(event)
+
+
+def _stable_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _text_fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _validate_queue_contract(
+    definition: str, value: Mapping[str, object], description: str
+) -> None:
+    try:
+        validate_contract(definition, value)
+    except ContractValidationError as error:
+        raise MalformedQueueMessage(
+            f"{description} failed contract validation",
+            details={"definition": error.definition},
+        ) from error
 
 
 def _decode_stream_response(response: object) -> list[StreamMessage]:

@@ -20,6 +20,7 @@ from vulnweaver_persistence import (
     JobLeaseClaim,
     JobLeaseClaimOutcome,
     JobLeaseConflict,
+    PersistenceInvariantError,
 )
 from vulnweaver_queue import RedisStreamsClient, StreamMessage
 
@@ -82,6 +83,7 @@ class ReliableWorker:
         await self._queue.ensure_group(stream, self._settings.consumer_group)
         running: set[asyncio.Task[None]] = set()
         stale_cursor = "0-0"
+        prefer_fresh = False
         while not stop.is_set():
             running = {task for task in running if not task.done()}
             capacity = self._settings.concurrency - len(running)
@@ -93,17 +95,39 @@ class ReliableWorker:
                 )
                 continue
 
-            claimed = await self._queue.claim_stale(
-                stream,
-                self._settings.consumer_group,
-                self._settings.consumer_name,
-                min_idle_milliseconds=self._settings.pending_idle_milliseconds,
-                count=capacity,
-                start_id=stale_cursor,
-            )
-            stale_cursor = claimed.next_start_id
-            messages = list(claimed.messages)
-            if not messages and stale_cursor == "0-0":
+            messages: list[StreamMessage] = []
+            if prefer_fresh:
+                messages.extend(
+                    await self._queue.read_group(
+                        stream,
+                        self._settings.consumer_group,
+                        self._settings.consumer_name,
+                        count=capacity,
+                        block_milliseconds=None,
+                    )
+                )
+            if len(messages) < capacity:
+                claimed = await self._queue.claim_stale(
+                    stream,
+                    self._settings.consumer_group,
+                    self._settings.consumer_name,
+                    min_idle_milliseconds=self._settings.pending_idle_milliseconds,
+                    count=capacity - len(messages),
+                    start_id=stale_cursor,
+                )
+                stale_cursor = claimed.next_start_id
+                messages.extend(claimed.messages)
+            if not prefer_fresh and len(messages) < capacity:
+                messages.extend(
+                    await self._queue.read_group(
+                        stream,
+                        self._settings.consumer_group,
+                        self._settings.consumer_name,
+                        count=capacity - len(messages),
+                        block_milliseconds=None,
+                    )
+                )
+            if not messages:
                 messages = await self._queue.read_group(
                     stream,
                     self._settings.consumer_group,
@@ -111,6 +135,7 @@ class ReliableWorker:
                     count=capacity,
                     block_milliseconds=self._settings.read_block_milliseconds,
                 )
+            prefer_fresh = not prefer_fresh
             for message in messages:
                 running.add(asyncio.create_task(self._process(message, stop)))
 
@@ -128,48 +153,89 @@ class ReliableWorker:
     async def _process(self, message: StreamMessage, stop: asyncio.Event) -> None:
         claim: JobLeaseClaim | None = None
         try:
-            async with self._database.transaction() as repositories:
-                claim = await repositories.jobs.claim_lease(
-                    message.event["aggregate_id"],
-                    owner=self._settings.consumer_name,
-                    lease_seconds=self._settings.lease_seconds,
-                    heartbeat_interval_seconds=self._settings.heartbeat_interval_seconds,
-                )
-            if claim.outcome is JobLeaseClaimOutcome.BUSY:
-                return
-            if claim.outcome is JobLeaseClaimOutcome.ALREADY_OWNED:
-                return
-            if claim.outcome is JobLeaseClaimOutcome.COMPLETED:
-                await self._acknowledge(message)
-                return
-            if claim.outcome is JobLeaseClaimOutcome.EXHAUSTED:
-                await self._finalize_exhausted(message, claim.job)
-                return
-            if claim.outcome is JobLeaseClaimOutcome.NOT_RUNNABLE:
-                await self._settle_existing_terminal(message, claim.job)
-                return
+            while not stop.is_set():
+                async with self._database.transaction() as repositories:
+                    claim = await repositories.jobs.claim_lease(
+                        message.event["aggregate_id"],
+                        owner=self._settings.consumer_name,
+                        lease_seconds=self._settings.lease_seconds,
+                        heartbeat_interval_seconds=self._settings.heartbeat_interval_seconds,
+                    )
+                if claim.outcome in {
+                    JobLeaseClaimOutcome.BUSY,
+                    JobLeaseClaimOutcome.ALREADY_OWNED,
+                }:
+                    return
+                if claim.outcome is JobLeaseClaimOutcome.BACKING_OFF:
+                    if not await self._wait_for_retry(claim.retry_after_seconds, stop):
+                        return
+                    claim = None
+                    continue
+                if claim.outcome is JobLeaseClaimOutcome.COMPLETED:
+                    await self._acknowledge(message)
+                    return
+                if claim.outcome is JobLeaseClaimOutcome.EXHAUSTED:
+                    fencing_token = _fencing_token(claim.job)
+                    try:
+                        await self._finalize_exhausted(
+                            message, claim.job, fencing_token=fencing_token
+                        )
+                    except (JobLeaseConflict, PersistenceInvariantError) as error:
+                        await self._recover_settlement(message, error)
+                    return
+                if claim.outcome is JobLeaseClaimOutcome.NOT_RUNNABLE:
+                    await self._settle_existing_terminal(message, claim.job)
+                    return
 
-            try:
-                result = await self._execute_with_heartbeat(claim.job, stop)
-            except _LeaseHeartbeatFailed:
-                LOGGER.warning(
-                    "worker_lease_heartbeat_failed",
-                    extra={"job_id": claim.job["id"]},
-                )
-                return
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                result = _unexpected_failure_result(claim.job["id"], error)
+                fencing_token = _fencing_token(claim.job)
+                try:
+                    result = await self._execute_with_heartbeat(
+                        claim.job, stop, fencing_token=fencing_token
+                    )
+                except _LeaseHeartbeatFailed:
+                    LOGGER.warning(
+                        "worker_lease_heartbeat_failed",
+                        extra={"job_id": claim.job["id"]},
+                    )
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    result = _unexpected_failure_result(claim.job["id"], error)
 
-            if result["job_id"] != claim.job["id"]:
-                result = _unexpected_failure_result(
-                    claim.job["id"], ValueError("executor returned a different job identifier")
-                )
-            await self._settle_execution_result(message, claim.job, result, stop)
+                if result["job_id"] != claim.job["id"]:
+                    result = _unexpected_failure_result(
+                        claim.job["id"],
+                        ValueError("executor returned a different job identifier"),
+                    )
+                try:
+                    retry_after = await self._settle_execution_result(
+                        message,
+                        claim.job,
+                        result,
+                        stop,
+                        fencing_token=fencing_token,
+                    )
+                except (JobLeaseConflict, PersistenceInvariantError) as error:
+                    await self._recover_settlement(message, error)
+                    return
+                if retry_after is None:
+                    return
+                claim = None
+                if not await self._wait_for_retry(retry_after, stop):
+                    return
         except asyncio.CancelledError:
-            if claim is not None and claim.outcome is JobLeaseClaimOutcome.ACQUIRED:
-                await asyncio.shield(self._release_if_owned(claim.job["id"]))
+            if claim is not None and claim.outcome in {
+                JobLeaseClaimOutcome.ACQUIRED,
+                JobLeaseClaimOutcome.EXHAUSTED,
+            }:
+                await asyncio.shield(
+                    self._release_if_owned(
+                        claim.job["id"],
+                        fencing_token=_fencing_token(claim.job),
+                        refund_attempt=claim.outcome is JobLeaseClaimOutcome.ACQUIRED,
+                    )
+                )
             raise
         except Exception:
             LOGGER.exception(
@@ -177,13 +243,21 @@ class ReliableWorker:
                 extra={"event_id": message.event["event_id"]},
             )
 
-    async def _execute_with_heartbeat(self, job: Job, stop: asyncio.Event) -> WorkerResult:
+    async def _execute_with_heartbeat(
+        self, job: Job, stop: asyncio.Event, *, fencing_token: str
+    ) -> WorkerResult:
         execution = asyncio.create_task(self._executor.execute(job, stop))
-        heartbeat = asyncio.create_task(self._heartbeat(job["id"]))
+        heartbeat = asyncio.create_task(self._heartbeat(job["id"], fencing_token))
         try:
             done, _ = await asyncio.wait(
                 {execution, heartbeat}, return_when=asyncio.FIRST_COMPLETED
             )
+            if heartbeat in done:
+                heartbeat_error = heartbeat.exception()
+                if heartbeat_error is not None:
+                    if execution in done:
+                        await asyncio.gather(execution, return_exceptions=True)
+                    raise _LeaseHeartbeatFailed from heartbeat_error
             if execution in done:
                 heartbeat.cancel()
                 await asyncio.gather(heartbeat, return_exceptions=True)
@@ -205,15 +279,34 @@ class ReliableWorker:
                     task.cancel()
             await asyncio.gather(execution, heartbeat, return_exceptions=True)
 
-    async def _heartbeat(self, job_id: str) -> None:
+    async def _heartbeat(self, job_id: str, fencing_token: str) -> None:
+        loop = asyncio.get_running_loop()
+        lease_deadline = loop.time() + self._settings.lease_seconds
         while True:
             await asyncio.sleep(self._settings.heartbeat_interval_seconds)
-            async with self._database.transaction() as repositories:
-                await repositories.jobs.renew_lease(
-                    job_id,
-                    owner=self._settings.consumer_name,
-                    lease_seconds=self._settings.lease_seconds,
-                )
+            while True:
+                try:
+                    async with self._database.transaction() as repositories:
+                        await repositories.jobs.renew_lease(
+                            job_id,
+                            owner=self._settings.consumer_name,
+                            fencing_token=fencing_token,
+                            lease_seconds=self._settings.lease_seconds,
+                        )
+                    lease_deadline = loop.time() + self._settings.lease_seconds
+                    break
+                except JobLeaseConflict:
+                    raise
+                except Exception:
+                    LOGGER.warning(
+                        "worker_lease_heartbeat_retry",
+                        extra={"job_id": job_id},
+                        exc_info=True,
+                    )
+                    retry_delay = min(1.0, self._settings.heartbeat_interval_seconds / 2)
+                    if loop.time() + retry_delay >= lease_deadline:
+                        raise TimeoutError("lease renewal did not recover before expiry") from None
+                    await asyncio.sleep(retry_delay)
 
     async def _settle_execution_result(
         self,
@@ -221,7 +314,9 @@ class ReliableWorker:
         job: Job,
         result: WorkerResult,
         stop: asyncio.Event,
-    ) -> None:
+        *,
+        fencing_token: str,
+    ) -> float | None:
         failure = result["failure"]
         retry_allowed = (
             result["status"] is JobStatus.FAILED
@@ -231,20 +326,27 @@ class ReliableWorker:
             and job["attempt"] < job["retry_policy"]["max_attempts"]
         )
         if result["status"] is JobStatus.CANCELLED and stop.is_set():
-            await self._release_if_owned(job["id"])
-            return
+            await self._release_if_owned(
+                job["id"], fencing_token=fencing_token, refund_attempt=True
+            )
+            return None
         if retry_allowed and failure is not None:
             async with self._database.transaction() as repositories:
                 await repositories.jobs.record_attempt_failure(
                     job["id"],
                     attempt=job["attempt"],
                     owner=self._settings.consumer_name,
+                    fencing_token=fencing_token,
                     failure=failure,
                 )
-            return
+            return job["retry_policy"]["backoff_seconds"]
 
         async with self._database.transaction() as repositories:
-            await repositories.jobs.complete(result, owner=self._settings.consumer_name)
+            await repositories.jobs.complete(
+                result,
+                owner=self._settings.consumer_name,
+                fencing_token=fencing_token,
+            )
         if result["status"] is JobStatus.FAILED and failure is not None:
             await self._queue.dead_letter(
                 message.stream,
@@ -255,8 +357,11 @@ class ReliableWorker:
             )
         else:
             await self._acknowledge(message)
+        return None
 
-    async def _finalize_exhausted(self, message: StreamMessage, job: Job) -> None:
+    async def _finalize_exhausted(
+        self, message: StreamMessage, job: Job, *, fencing_token: str
+    ) -> None:
         failure = StructuredFailure(
             code="worker.attempts_exhausted",
             kind=FailureKind.TOOL,
@@ -266,7 +371,11 @@ class ReliableWorker:
         )
         result = _failed_result(job["id"], failure)
         async with self._database.transaction() as repositories:
-            await repositories.jobs.fail_exhausted(result)
+            await repositories.jobs.fail_exhausted(
+                result,
+                owner=self._settings.consumer_name,
+                fencing_token=fencing_token,
+            )
         await self._queue.dead_letter(
             message.stream,
             self._settings.consumer_group,
@@ -276,6 +385,8 @@ class ReliableWorker:
         )
 
     async def _settle_existing_terminal(self, message: StreamMessage, job: Job) -> None:
+        if job["status"] is JobStatus.WAITING_PERMISSION:
+            return
         if job["status"] is JobStatus.FAILED and job["failure"] is not None:
             await self._queue.dead_letter(
                 message.stream,
@@ -285,14 +396,48 @@ class ReliableWorker:
                 attempt=job["attempt"],
             )
             return
-        await self._acknowledge(message)
+        if job["status"] in {JobStatus.SUCCEEDED, JobStatus.CANCELLED}:
+            await self._acknowledge(message)
 
-    async def _release_if_owned(self, job_id: str) -> None:
+    async def _release_if_owned(
+        self, job_id: str, *, fencing_token: str, refund_attempt: bool
+    ) -> None:
         try:
             async with self._database.transaction() as repositories:
-                await repositories.jobs.release_lease(job_id, owner=self._settings.consumer_name)
+                await repositories.jobs.release_lease(
+                    job_id,
+                    owner=self._settings.consumer_name,
+                    fencing_token=fencing_token,
+                    refund_attempt=refund_attempt,
+                )
         except JobLeaseConflict:
             LOGGER.warning("worker_lease_release_skipped", extra={"job_id": job_id})
+
+    async def _recover_settlement(
+        self,
+        message: StreamMessage,
+        error: JobLeaseConflict | PersistenceInvariantError,
+    ) -> None:
+        LOGGER.warning(
+            "worker_result_settlement_conflict",
+            extra={
+                "job_id": message.event["aggregate_id"],
+                "error_code": error.code,
+            },
+        )
+        async with self._database.transaction() as repositories:
+            current = await repositories.jobs.get(message.event["aggregate_id"])
+        await self._settle_existing_terminal(message, current)
+
+    @staticmethod
+    async def _wait_for_retry(delay_seconds: float, stop: asyncio.Event) -> bool:
+        if delay_seconds <= 0:
+            return not stop.is_set()
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
+        except TimeoutError:
+            return True
+        return False
 
     async def _acknowledge(self, message: StreamMessage) -> None:
         await self._queue.acknowledge(
@@ -320,3 +465,13 @@ def _unexpected_failure_result(job_id: str, error: Exception) -> WorkerResult:
         details={"exception_type": type(error).__name__},
     )
     return _failed_result(job_id, failure)
+
+
+def _fencing_token(job: Job) -> str:
+    lease = job["lease"]
+    if lease is None or "fencing_token" not in lease:
+        raise PersistenceInvariantError(
+            "claimed job is missing its lease fencing token",
+            details={"job_id": job["id"]},
+        )
+    return lease["fencing_token"]
