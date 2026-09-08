@@ -17,6 +17,9 @@ from vulnweaver_contracts import (
     Artifact,
     ArtifactKind,
     ArtifactVersion,
+    Evidence,
+    EvidenceStrength,
+    EvidenceType,
     Job,
     JobKind,
     JobRequestedEvent,
@@ -51,6 +54,7 @@ from vulnweaver_persistence.models import (
     agent_runs,
     artifact_versions,
     artifacts,
+    evidence,
     job_attempt_failures,
     job_results,
     jobs,
@@ -1229,6 +1233,53 @@ class TaskEventRepository:
         return int(value)
 
 
+class EvidenceRepository:
+    """Immutable, idempotent Evidence fact storage."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, item: Evidence) -> Evidence:
+        validate_contract("Evidence", item)
+        values = {
+            **item,
+            "schema_version": str(item["schema_version"]),
+            "type": str(item["type"]),
+            "strength": str(item["strength"]),
+            "created_at": _parse_datetime(item["created_at"]),
+        }
+        statement = insert(evidence).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get(item["id"])
+            if existing != item:
+                raise EntityConflict(
+                    "evidence identifier conflicts with an existing fact",
+                    details={"evidence_id": item["id"]},
+                )
+            return existing
+        return item
+
+    async def get(self, evidence_id: str) -> Evidence:
+        row = (
+            (await self._connection.execute(select(evidence).where(evidence.c.id == evidence_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("evidence not found", details={"evidence_id": evidence_id})
+        return _evidence_from_row(row)
+
+    async def list_for_input(self, input_ref: str) -> list[Evidence]:
+        rows = (
+            await self._connection.execute(
+                select(evidence)
+                .where(evidence.c.input_ref == input_ref)
+                .order_by(evidence.c.created_at, evidence.c.id)
+            )
+        ).mappings()
+        return [_evidence_from_row(row) for row in rows]
+
+
 class PairRepository:
     """Idempotent PAIR graph storage and bounded source-query primitives."""
 
@@ -1428,6 +1479,7 @@ class Repositories:
     agent_runs: AgentRunRepository
     checkpoints: CheckpointRepository
     pair: PairRepository
+    evidence: EvidenceRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1441,6 +1493,7 @@ class Repositories:
         object.__setattr__(self, "agent_runs", AgentRunRepository(connection))
         object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
         object.__setattr__(self, "pair", PairRepository(connection))
+        object.__setattr__(self, "evidence", EvidenceRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -1593,6 +1646,25 @@ def _task_from_row(row: RowMapping) -> Task:
         resource_budget=row["resource_budget"],
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
+    )
+
+
+def _evidence_from_row(row: RowMapping) -> Evidence:
+    return Evidence(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        type=EvidenceType(row["type"]),
+        strength=EvidenceStrength(row["strength"]),
+        artifact_ref=row["artifact_ref"],
+        digest=row["digest"],
+        tool=row["tool"],
+        input_ref=row["input_ref"],
+        command_hash=row["command_hash"],
+        exit_code=row["exit_code"],
+        stdout_ref=row["stdout_ref"],
+        stderr_ref=row["stderr_ref"],
+        replay_recipe=row["replay_recipe"],
+        created_at=_format_datetime(row["created_at"]),
     )
 
 

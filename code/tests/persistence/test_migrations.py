@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "api_requests",
     "alembic_version",
     "artifact_versions",
+    "evidence",
     "artifacts",
     "jobs",
     "job_results",

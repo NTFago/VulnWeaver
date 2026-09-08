@@ -23,6 +23,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from vulnweaver_contracts import (
     ArtifactKind,
+    EvidenceStrength,
+    EvidenceType,
     JobKind,
     JobStatus,
     PairEdgeType,
@@ -277,6 +279,34 @@ tasks = Table(
     ),
     UniqueConstraint("project_id", "idempotency_key", name="uq_tasks_project_idempotency"),
 )
+
+evidence = Table(
+    "evidence",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("type", String(64), nullable=False),
+    Column("strength", String(32), nullable=False),
+    Column("artifact_ref", Text, nullable=False),
+    Column("digest", DIGEST, nullable=False),
+    Column("tool", JSONB(none_as_null=True), nullable=True),
+    Column("input_ref", Text, nullable=False),
+    Column("command_hash", DIGEST, nullable=True),
+    Column("exit_code", Integer, nullable=True),
+    Column("stdout_ref", Text, nullable=True),
+    Column("stderr_ref", Text, nullable=True),
+    Column("replay_recipe", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("type", EvidenceType, "type"),
+    _enum_constraint("strength", EvidenceStrength, "strength"),
+    CheckConstraint("digest ~ '^sha256:[0-9a-f]{64}$'", name="sha256_digest"),
+    CheckConstraint(
+        "command_hash IS NULL OR command_hash ~ '^sha256:[0-9a-f]{64}$'",
+        name="command_sha256_digest",
+    ),
+)
+Index("ix_evidence_type", evidence.c.type)
 
 jobs = Table(
     "jobs",

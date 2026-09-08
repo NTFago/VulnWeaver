@@ -15,6 +15,7 @@ from vulnweaver_persistence.personal_auth import PersonalAccount, PersonalSessio
 from vulnweaver_persistence.repositories import (
     AgentRunRepository,
     CreateResult,
+    EvidenceRepository,
     JobAttemptFailure,
     JobCompletionResult,
     JobEnqueueResult,
@@ -30,6 +31,7 @@ from vulnweaver_persistence.repositories import (
 __all__ = [
     "AgentRunRepository",
     "CreateResult",
+    "EvidenceRepository",
     "Database",
     "DatabaseSettings",
     "EntityConflict",
