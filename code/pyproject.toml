@@ -12,6 +12,7 @@ dependencies = [
     "vulnweaver-domain",
     "vulnweaver-persistence",
     "vulnweaver-queue",
+    "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
 
@@ -36,6 +37,7 @@ members = [
     "packages/domain",
     "packages/persistence",
     "packages/queue",
+    "packages/tool-runtime",
     "packages/worker",
 ]
 
@@ -47,6 +49,7 @@ vulnweaver-persistence = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
 [tool.ruff]
@@ -67,6 +70,7 @@ extraPaths = [
     "packages/domain/src",
     "packages/persistence/src",
     "packages/queue/src",
+    "packages/tool-runtime/src",
     "packages/worker/src",
 ]
 venvPath = "."
@@ -90,6 +94,7 @@ source_pkgs = [
     "vulnweaver_domain",
     "vulnweaver_persistence",
     "vulnweaver_queue",
+    "vulnweaver_tool_runtime",
     "vulnweaver_worker",
 ]
 omit = [

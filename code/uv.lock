@@ -11,6 +11,7 @@ members = [
     "vulnweaver-domain",
     "vulnweaver-persistence",
     "vulnweaver-queue",
+    "vulnweaver-tool-runtime",
     "vulnweaver-worker",
     "vulnweaver-workspace",
 ]
@@ -812,6 +813,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-tool-runtime"
+version = "0.1.0"
+source = { editable = "packages/tool-runtime" }
+dependencies = [
+    { name = "jsonschema" },
+    { name = "vulnweaver-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+]
+
+[[package]]
 name = "vulnweaver-worker"
 version = "0.1.0"
 source = { editable = "packages/worker" }
@@ -840,6 +856,7 @@ dependencies = [
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
+    { name = "vulnweaver-tool-runtime" },
     { name = "vulnweaver-worker" },
 ]
 
@@ -861,6 +878,7 @@ requires-dist = [
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
     { name = "vulnweaver-worker", editable = "packages/worker" },
 ]
 

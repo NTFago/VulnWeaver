@@ -13,7 +13,7 @@
 - **总体状态**：首个可运行控制面 MVP 已形成；已覆盖认证、项目、工件、任务和实时轨迹，实际分析需继续 T09-T15
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前集成分支 `main`，HEAD 为 `673c477`；T06/T07/T08 已完成分支已清理
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t09-tool-policy`，HEAD 为 `156f667`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：未分配
 
@@ -33,6 +33,8 @@
 | T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
 | T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
 | Git 分支清理 | 已完成 | Codex | 确认 T06/T07/T08 均已合并到 `origin/main`，本地 `main` 快进到 `673c477`，删除 3 个本地及 3 个远程已完成分支，并清理过期 `origin/pr/5` 引用 | 无 | 2026-09-08 |
+| T09 ToolSpec 与 Policy Engine | 已完成 | Codex | 实现精确版本 Tool Registry、JSON ToolSpec 加载、ActionPlan 校验、结构化策略拒绝/许可等待、资源与安全边界校验及可查询审计记录 | 无；持久化审计后端由后续编排/观测任务接入 | 2026-09-08 |
+
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -87,6 +89,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08：完成 T09 ToolSpec 与 Policy Engine
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/tool-runtime/`、`code/packages/tool-runtime/pyproject.toml`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/tool_runtime/test_tool_runtime.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增精确 `name` + `version` 注册的不可变 Tool Registry；支持单个/数组/目录 JSON ToolSpec 加载与结构校验；Policy Engine 只接受契约合法 ActionPlan，校验工具注册、参数 Schema、输入工件类型、绝对/穿越路径、命令/容器/提权字段、网络双重白名单、资源预算和审批模式；输出不含任意命令字符串的结构化 `ScheduledToolCall`；每个步骤生成可查询审计记录；`FULL_ACCESS` 仅跳过审批等待，不绕过安全策略。
+- 测试与结果：Dev Container 内定向 9 个测试通过；Ruff 通过；Pyright 0 错误；使用 PostgreSQL/Redis 服务地址运行 `pnpm run check` 通过，156 个 pytest 全部通过、总覆盖率 89.49%，Svelte/TypeScript 通过，`uv lock --check` 通过。
+- 问题：完整检查产生既有 FastAPI/Starlette 上游弃用警告，不影响运行；审计默认使用内存实现，持久化接入留给编排/观测任务。
+- 阻碍点：无。
+- 决策：无新增重大架构决策；沿用公共 v1 ToolSpec/ActionPlan 契约和现有控制面/执行面边界。
+- 下一步：认领 T10，实现 OpenAI 兼容模型访问适配、超时/重试/结构化输出和 AgentRun 运行记录。
 
 ### 2026-09-08：清理已合并的本地与远程开发分支
 
@@ -288,8 +302,7 @@
 
 ## 10. 下一步
 
-1. 认领 T09，实现版本化 Tool Registry、ToolSpec 加载和 Policy Engine 结构化拒绝。
-2. 并行准备 T10 模型访问适配与运行记录，为 T11 LangGraph 主流程提供两个前置依赖。
+1. 认领 T10，实现 OpenAI 兼容模型访问适配、超时/重试/结构化输出和 AgentRun 运行记录。
 3. T11 完成后将 `task.requested` 转换为经策略校验的初始 Job，使现有工作台展示真实编排进度。
 
 ## 11. 每次工作结束时的更新模板
