@@ -103,7 +103,7 @@
 - 状态：已完成
 - 修改文件：`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/`、`code/compose.yaml`、`code/uv.lock`、`code/tests/contracts/`、`code/tests/source_analysis/`
 - 已完成：新增 `StaticAnalysisDiagnostic`、`StaticToolRun`、`StaticAnalysisResult` v1 契约；实现固定可审计参数、无 Shell 的 Semgrep/cppcheck 适配与 JSON/XML 归一化；统一高/中/低严重性、CWE、源码位置、工具版本、退出码及 `executable_not_found`/`rules_not_installed`/`language_not_detected` 等能力缺失原因；源码导入成功后按语言能力创建 Semgrep/cppcheck 静态分析 Job，使用确定性幂等键和同事务 Outbox；静态结果按父版本、工具身份和镜像摘要登记为不可变派生工件；分析 Worker 镜像安装 Semgrep 1.130.0 与 cppcheck 2.17.1，关闭 Semgrep metrics/version check，并挂载只读 ToolSpec/rule 配置。
-- 测试与结果：Ruff 全仓库通过；变更文件 Pyright 0 错误；契约/静态适配/调度/源码导入定向测试 30 个通过；全量 pytest 196 个通过、1 个既有 Starlette 弃用警告；`uv lock --check`、Compose 配置解析通过；`docker compose ... build analysis-worker` 成功，镜像摘要为 `sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68`，容器以 UID 10001 启动，真实 Semgrep/cppcheck 样本扫描产生结构化输出。
+- 测试与结果：Ruff 全仓库通过；变更文件 Pyright 0 错误；契约 TypeScript `tsc --noEmit` 通过；契约/静态适配/调度/源码导入定向测试 30 个通过；全量 pytest 196 个通过、1 个既有 Starlette 弃用警告；`uv lock --check`、Compose 配置解析通过；`docker compose ... build analysis-worker` 成功，镜像摘要为 `sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68`，容器以 UID 10001 启动，真实 Semgrep/cppcheck 样本扫描产生结构化输出。
 - 问题：Windows 工作区含中文路径时，直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；本轮使用无 editable 的临时环境执行验证，不改变项目代码约束。
 - 阻碍点：无
 - 决策：无新增重大架构决策；沿用 ADR-012/013/015/016/019 的不可变工件、Outbox、租约、Worker 结算和可恢复编排语义。
@@ -393,7 +393,7 @@
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
 | 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
 | 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
-| 2026-09-08 | T13 静态工具与 Job 链路 | 变更文件 Ruff/Pyright；契约、静态适配、调度、源码导入定向测试；Windows Selector 下全量 pytest；`uv lock --check`；Compose 配置解析与 `docker compose ... build analysis-worker`；容器内 Semgrep/cppcheck 样本扫描 | 通过；Ruff 全仓库、Pyright 变更文件 0 错误；30 个定向测试、196 个全量测试通过；镜像和真实工具扫描通过 | 未在远端 GitHub Actions runner 实跑；T14/T15 尚未覆盖 PAIR/Finding 消费 |
+| 2026-09-08 | T13 静态工具与 Job 链路 | 变更文件 Ruff/Pyright；契约 TypeScript `tsc --noEmit`；契约、静态适配、调度、源码导入定向测试；Windows Selector 下全量 pytest；`uv lock --check`；Compose 配置解析与 `docker compose ... build analysis-worker`；容器内 Semgrep/cppcheck 样本扫描 | 通过；Ruff 全仓库、Pyright 变更文件、TypeScript 契约均无错误；30 个定向测试、196 个全量测试通过；镜像和真实工具扫描通过 | 未在远端 GitHub Actions runner 实跑；T14/T15 尚未覆盖 PAIR/Finding 消费 |
 | 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
 
 ## 10. 下一步
