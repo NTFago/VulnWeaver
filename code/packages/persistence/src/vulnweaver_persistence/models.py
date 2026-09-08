@@ -347,7 +347,6 @@ personal_sessions = Table(
     Column("password_version", Integer, nullable=False),
     Column("expires_at", TIMESTAMP, nullable=False),
     Column("created_at", TIMESTAMP, nullable=False, server_default=text("now()")),
-    Column("revoked_at", TIMESTAMP, nullable=True),
     CheckConstraint("password_version > 0", name="password_version_positive"),
 )
 Index("ix_personal_sessions_expires_at", personal_sessions.c.expires_at)

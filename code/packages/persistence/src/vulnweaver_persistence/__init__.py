@@ -21,6 +21,7 @@ from vulnweaver_persistence.repositories import (
     JobLeaseClaimOutcome,
     OutboxMessage,
     Repositories,
+    TaskCancellationResult,
 )
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "PersistenceError",
     "PersistenceInvariantError",
     "Repositories",
+    "TaskCancellationResult",
     "downgrade_database",
     "metadata",
     "upgrade_database",

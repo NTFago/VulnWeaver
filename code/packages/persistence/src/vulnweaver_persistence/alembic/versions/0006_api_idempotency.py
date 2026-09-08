@@ -87,7 +87,6 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "password_version > 0", name=op.f("ck_personal_sessions_password_version_positive")
         ),

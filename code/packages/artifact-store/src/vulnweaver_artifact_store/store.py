@@ -41,6 +41,8 @@ class ArtifactStore(Protocol):
 
     def verify(self, object_ref: str) -> StoredObject: ...
 
+    def healthcheck(self) -> None: ...
+
 
 class LocalContentAddressedStore:
     """Store bytes below a service-owned root without accepting filesystem paths."""
@@ -122,6 +124,28 @@ class LocalContentAddressedStore:
             size_bytes=size_bytes,
             created=False,
         )
+
+    def healthcheck(self) -> None:
+        """Verify that staging and object roots remain writable and durable."""
+
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w+b", dir=self._staging_root, prefix="health-", suffix=".tmp", delete=False
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                temporary.write(b"vulnweaver-healthcheck")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            temporary_path.unlink()
+            temporary_path = None
+            self._sync_directory(self._staging_root)
+        except OSError as error:
+            raise _io_error("artifact store healthcheck failed", error) from error
+        finally:
+            if temporary_path is not None:
+                with suppress(OSError):
+                    temporary_path.unlink(missing_ok=True)
 
     def _copy_and_hash(
         self, source: BinaryIO, destination: BinaryIO, max_bytes: int

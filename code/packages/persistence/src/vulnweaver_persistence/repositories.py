@@ -62,6 +62,13 @@ class CreateResult[T]:
 
 
 @dataclass(frozen=True, slots=True)
+class TaskCancellationResult:
+    task: Task
+    changed: bool
+    previous_status: TaskStatus
+
+
+@dataclass(frozen=True, slots=True)
 class JobEnqueueResult:
     job: Job
     event: JobRequestedEvent
@@ -318,15 +325,31 @@ class TaskRepository:
         ).mappings()
         return [_task_from_row(row) for row in rows]
 
-    async def cancel(self, task_id: str) -> Task:
+    async def cancel(self, task_id: str) -> TaskCancellationResult:
+        current_row = (
+            (
+                await self._connection.execute(
+                    select(tasks).where(tasks.c.id == task_id).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if current_row is None:
+            raise EntityNotFound("task not found", details={"task_id": task_id})
+        current = _task_from_row(current_row)
+        previous_status = current["status"]
+        if previous_status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }:
+            return TaskCancellationResult(current, False, previous_status)
         row = (
             (
                 await self._connection.execute(
                     update(tasks)
-                    .where(
-                        tasks.c.id == task_id,
-                        tasks.c.status.not_in(("completed", "failed", "cancelled")),
-                    )
+                    .where(tasks.c.id == task_id)
                     .values(
                         status="cancelled",
                         result=None,
@@ -337,11 +360,9 @@ class TaskRepository:
                 )
             )
             .mappings()
-            .one_or_none()
+            .one()
         )
-        if row is not None:
-            return _task_from_row(row)
-        return await self.get(task_id)
+        return TaskCancellationResult(_task_from_row(row), True, previous_status)
 
 
 class JobRepository:
@@ -933,11 +954,12 @@ class TaskEventRepository:
 
     async def append(self, event: QueueEvent) -> None:
         validate_contract("QueueEvent", event)
-        if event["event_type"] != "task.status_changed":
-            raise ValueError("task event repository only accepts task.status_changed events")
-        if event["payload"]["task_id"] != event["aggregate_id"]:
+        if event["event_type"] not in {"task.requested", "task.status_changed"}:
+            raise ValueError("task event repository only accepts task events")
+        payload = cast(dict[str, object], event["payload"])
+        if payload["task_id"] != event["aggregate_id"]:
             raise PersistenceInvariantError(
-                "task.status_changed event does not match its task",
+                "task event does not match its task",
                 details={"mismatched_fields": ["payload.task_id"]},
             )
         try:

@@ -609,6 +609,36 @@
         "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]}
       }
     },
+    "TaskRequestedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "artifact_version_ids"],
+      "properties": {
+        "task_id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/Identifier"}
+        }
+      }
+    },
+    "TaskRequestedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_id", "event_type", "aggregate_id", "sequence", "occurred_at", "correlation_id", "causation_id", "payload"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "event_id": {"$ref": "#/$defs/Identifier"},
+        "event_type": {"type": "string", "const": "task.requested"},
+        "aggregate_id": {"$ref": "#/$defs/Identifier"},
+        "sequence": {"type": "integer", "const": 0},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "correlation_id": {"$ref": "#/$defs/Identifier"},
+        "causation_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "payload": {"$ref": "#/$defs/TaskRequestedPayload"}
+      }
+    },
     "JobRequestedEvent": {
       "type": "object",
       "additionalProperties": false,
@@ -659,6 +689,7 @@
     },
     "QueueEvent": {
       "oneOf": [
+        {"$ref": "#/$defs/TaskRequestedEvent"},
         {"$ref": "#/$defs/JobRequestedEvent"},
         {"$ref": "#/$defs/JobStatusChangedEvent"},
         {"$ref": "#/$defs/TaskStatusChangedEvent"}
@@ -709,6 +740,64 @@
         "resource_budget": {"$ref": "#/$defs/ResourceBudget"}
       }
     },
+    "LoginRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "username", "password"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "password": {"type": "string", "minLength": 1, "maxLength": 1024}
+      }
+    },
+    "PasswordChangeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "current_password", "new_password"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "current_password": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "new_password": {"type": "string", "minLength": 12, "maxLength": 1024}
+      }
+    },
+    "SessionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "username", "must_change_password", "csrf_token"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "must_change_password": {"type": "boolean"},
+        "csrf_token": {"type": "string", "minLength": 32, "maxLength": 256}
+      }
+    },
+    "MeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "username", "must_change_password"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "username": {"type": "string", "minLength": 1, "maxLength": 128},
+        "must_change_password": {"type": "boolean"}
+      }
+    },
+    "ArtifactDetail": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact", "versions"],
+      "properties": {
+        "artifact": {"$ref": "#/$defs/Artifact"},
+        "versions": {"type": "array", "items": {"$ref": "#/$defs/ArtifactVersion"}}
+      }
+    },
+    "HealthResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"type": "string", "enum": ["ok", "ready"]}
+      }
+    },
     "WorkerRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -741,6 +830,14 @@
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/QueueEvent"},
     {"$ref": "#/$defs/ErrorResponse"},
+    {"$ref": "#/$defs/CreateProjectRequest"},
+    {"$ref": "#/$defs/CreateTaskRequest"},
+    {"$ref": "#/$defs/LoginRequest"},
+    {"$ref": "#/$defs/PasswordChangeRequest"},
+    {"$ref": "#/$defs/SessionResponse"},
+    {"$ref": "#/$defs/MeResponse"},
+    {"$ref": "#/$defs/ArtifactDetail"},
+    {"$ref": "#/$defs/HealthResponse"},
     {"$ref": "#/$defs/WorkerRequest"},
     {"$ref": "#/$defs/WorkerResult"}
   ]

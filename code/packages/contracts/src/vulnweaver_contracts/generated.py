@@ -478,6 +478,21 @@ class TaskStatusChangedPayload(TypedDict):
     status: TaskStatus
     result: TaskResult | None
 
+class TaskRequestedPayload(TypedDict):
+    task_id: Identifier
+    artifact_version_ids: list[Identifier]
+
+class TaskRequestedEvent(TypedDict):
+    schema_version: SchemaVersion
+    event_id: Identifier
+    event_type: Literal['task.requested']
+    aggregate_id: Identifier
+    sequence: Literal[0]
+    occurred_at: str
+    correlation_id: Identifier
+    causation_id: Identifier | None
+    payload: TaskRequestedPayload
+
 class JobRequestedEvent(TypedDict):
     schema_version: SchemaVersion
     event_id: Identifier
@@ -511,7 +526,12 @@ class TaskStatusChangedEvent(TypedDict):
     causation_id: Identifier | None
     payload: TaskStatusChangedPayload
 
-type QueueEvent = JobRequestedEvent | JobStatusChangedEvent | TaskStatusChangedEvent
+type QueueEvent = (
+    TaskRequestedEvent
+    | JobRequestedEvent
+    | JobStatusChangedEvent
+    | TaskStatusChangedEvent
+)
 
 class ErrorDetail(TypedDict):
     field: str
@@ -537,6 +557,34 @@ class CreateTaskRequest(TypedDict):
     schema_version: SchemaVersion
     artifact_version_ids: list[Identifier]
     resource_budget: ResourceBudget
+
+class LoginRequest(TypedDict):
+    schema_version: SchemaVersion
+    username: str
+    password: str
+
+class PasswordChangeRequest(TypedDict):
+    schema_version: SchemaVersion
+    current_password: str
+    new_password: str
+
+class SessionResponse(TypedDict):
+    schema_version: SchemaVersion
+    username: str
+    must_change_password: bool
+    csrf_token: str
+
+class MeResponse(TypedDict):
+    schema_version: SchemaVersion
+    username: str
+    must_change_password: bool
+
+class ArtifactDetail(TypedDict):
+    artifact: Artifact
+    versions: list[ArtifactVersion]
+
+class HealthResponse(TypedDict):
+    status: Literal['ok', 'ready']
 
 class WorkerRequest(TypedDict):
     schema_version: SchemaVersion
