@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；T13 静态工具与 T14 PAIR 源码导入/查询已完成，下一步进入 T15 Finding、Evidence 与独立复核
+- **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
 - **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入、静态工具和 PAIR 源码查询链路已形成；正在建设 Finding、Evidence 与独立复核路径
-- **最后更新**：2026-09-08 22:46（Asia/Shanghai）
+- **最后更新**：2026-09-08 22:50（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；本地 `main` 已快进至 `b7d687d`；当前开发分支为 `feat/t13-static-tools`；已合并的 T09-T12 本地分支已清理，远端分支未改动
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；T14 已完成，下一任务包为 T15（尚未开始）
+- **当前负责人**：Codex；已认领 T15，正在实现 Finding、Evidence 与复核持久化
 
 ## 3. 开发进度
 
@@ -40,7 +40,7 @@
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
-| T15 Finding、Evidence 与复核 | 未开始 | Codex | T13/T14 已提供静态诊断、PAIR 函数/节点/边和稳定工件引用 | 定义 Finding/Evidence/Review 持久化与策略门禁，消费静态工具和 PAIR 结果并实现独立复核 | 2026-09-08 |
+| T15 Finding、Evidence 与复核 | 进行中 | Codex | 已认领任务并完成现有 Finding/Evidence/Review 契约、确认策略和聚合规则核查 | 实现 0010 关系表、幂等仓储、候选 Finding/Evidence 导入、确认策略门禁、Review 历史和定向测试 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
