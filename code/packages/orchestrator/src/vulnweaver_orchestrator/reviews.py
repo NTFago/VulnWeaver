@@ -48,6 +48,7 @@ class ReviewFactContext:
     location: JsonObject
     current_status: FindingStatus
     evidence: tuple[ReviewEvidenceFact, ...]
+    review_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,8 +66,8 @@ class FindingReviewGate:
 
     async def build_fact_context(self, finding_id: str) -> ReviewFactContext:
         async with self._database.transaction() as repositories:
-            finding = await repositories.findings.get(finding_id)
-            return await _build_fact_context(repositories, finding)
+            finding = await repositories.findings.lock_for_review(finding_id)
+            return await build_review_fact_context(repositories, finding)
 
     async def submit(
         self,
@@ -75,60 +76,70 @@ class FindingReviewGate:
         established_facts: frozenset[str] = frozenset(),
     ) -> ReviewGateResult:
         async with self._database.transaction() as repositories:
-            finding = await repositories.findings.lock_for_review(review["finding_id"])
-            fact_context = await _build_fact_context(repositories, finding)
-            outcome = FindingStatus(review["outcome"])
-            decision: ConfirmationDecision | None = None
-            confirmation_allowed = False
-            if outcome is FindingStatus.CONFIRMED:
-                derived_facts = set(established_facts) - {
-                    "independent_review_agreement",
-                    "independent_tool_evidence",
-                }
-                derived_facts.add("independent_review_agreement")
-                if any(
-                    fact.relation is EvidenceRelation.SUPPORTS
-                    and fact.evidence_type is EvidenceType.TOOL_OUTPUT
-                    and fact.tool is not None
-                    for fact in fact_context.evidence
-                ):
-                    derived_facts.add("independent_tool_evidence")
-                decision = evaluate_confirmation(
-                    ConfirmationContext(
-                        category=fact_context.category,
-                        evidence=tuple(
-                            EvidenceAssessment(
-                                evidence_type=fact.evidence_type,
-                                strength=fact.strength,
-                                reproducible=fact.replay_facts.get("reproducible") is True,
-                            )
-                            for fact in fact_context.evidence
-                            if fact.relation is EvidenceRelation.SUPPORTS
-                        ),
-                        established_facts=frozenset(derived_facts),
-                    )
+            return await self.submit_in_transaction(
+                repositories, review, established_facts=established_facts
+            )
+
+    async def submit_in_transaction(
+        self,
+        repositories: Repositories,
+        review: Review,
+        *,
+        established_facts: frozenset[str] = frozenset(),
+    ) -> ReviewGateResult:
+        finding = await repositories.findings.lock_for_review(review["finding_id"])
+        fact_context = await build_review_fact_context(repositories, finding)
+        outcome = FindingStatus(review["outcome"])
+        decision: ConfirmationDecision | None = None
+        confirmation_allowed = False
+        if outcome is FindingStatus.CONFIRMED:
+            derived_facts = set(established_facts) - {
+                "independent_review_agreement",
+                "independent_tool_evidence",
+            }
+            derived_facts.add("independent_review_agreement")
+            if any(
+                fact.relation is EvidenceRelation.SUPPORTS
+                and fact.evidence_type is EvidenceType.TOOL_OUTPUT
+                and fact.tool is not None
+                for fact in fact_context.evidence
+            ):
+                derived_facts.add("independent_tool_evidence")
+            decision = evaluate_confirmation(
+                ConfirmationContext(
+                    category=fact_context.category,
+                    evidence=tuple(
+                        EvidenceAssessment(
+                            evidence_type=fact.evidence_type,
+                            strength=fact.strength,
+                            reproducible=fact.replay_facts.get("reproducible") is True,
+                        )
+                        for fact in fact_context.evidence
+                        if fact.relation is EvidenceRelation.SUPPORTS
+                    ),
+                    established_facts=frozenset(derived_facts),
                 )
-                confirmation_allowed = decision.allowed
-                if not confirmation_allowed:
-                    return ReviewGateResult(False, decision, fact_context)
-            transition_finding(
-                finding["status"],
-                outcome,
-                confirmation=decision,
             )
-            await repositories.findings.add_review(
-                review,
-                confirmation_allowed=confirmation_allowed,
-            )
-            return ReviewGateResult(True, decision, fact_context)
+            confirmation_allowed = decision.allowed
+            if not confirmation_allowed:
+                return ReviewGateResult(False, decision, fact_context)
+        transition_finding(finding["status"], outcome, confirmation=decision)
+        await repositories.findings.add_review(
+            review, confirmation_allowed=confirmation_allowed
+        )
+        return ReviewGateResult(True, decision, fact_context)
 
 
-async def _build_fact_context(repositories: Repositories, finding: Finding) -> ReviewFactContext:
+async def build_review_fact_context(
+    repositories: Repositories, finding: Finding
+) -> ReviewFactContext:
     finding_id = finding["id"]
     relations = await repositories.findings.list_evidence_relations(finding_id)
     facts: list[ReviewEvidenceFact] = []
     for relation in relations:
         evidence = await repositories.evidence.get(relation["evidence_id"])
+        if evidence["type"] in {EvidenceType.MODEL_EXPLANATION, EvidenceType.REVIEW_CONCLUSION}:
+            continue
         replay_facts = _safe_replay_facts(evidence["type"], evidence["replay_recipe"])
         facts.append(
             ReviewEvidenceFact(
@@ -151,6 +162,7 @@ async def _build_fact_context(repositories: Repositories, finding: Finding) -> R
         location=cast(JsonObject, finding["location"]),
         current_status=finding["status"],
         evidence=tuple(facts),
+        review_ids=tuple(finding["review_ids"]),
     )
 
 

@@ -13,6 +13,7 @@ from vulnweaver_orchestrator.flow import (
     Orchestrator,
     OrchestratorSettings,
 )
+from vulnweaver_orchestrator.model_reviews import IndependentModelReviewer, ModelReviewResult
 from vulnweaver_orchestrator.reviews import (
     FindingReviewGate,
     ReviewEvidenceFact,
@@ -31,6 +32,8 @@ __all__ = [
     "OrchestratorSettings",
     "PostgresCheckpointStore",
     "FindingReviewGate",
+    "IndependentModelReviewer",
+    "ModelReviewResult",
     "ReviewEvidenceFact",
     "ReviewFactContext",
     "ReviewGateResult",

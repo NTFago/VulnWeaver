@@ -341,9 +341,12 @@ class TaskRepository:
             )
         return CreateResult(_task_from_row(row), False)
 
-    async def get(self, task_id: str) -> Task:
+    async def get(self, task_id: str, *, for_update: bool = False) -> Task:
+        statement = select(tasks).where(tasks.c.id == task_id)
+        if for_update:
+            statement = statement.with_for_update()
         row = (
-            (await self._connection.execute(select(tasks).where(tasks.c.id == task_id)))
+            (await self._connection.execute(statement))
             .mappings()
             .one_or_none()
         )
