@@ -15,7 +15,7 @@
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；本地 `main` 已快进至 `b7d687d`；当前开发分支为 `feat/t13-static-tools`；已合并的 T09-T12 本地分支已清理，远端分支未改动
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；T13 已完成，下一任务包为 T14（尚未开始）
+- **当前负责人**：Codex；已认领 T14，正在实现 PAIR 源码导入与查询
 
 ## 3. 开发进度
 
@@ -39,7 +39,7 @@
 | T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
-| T14 PAIR 源码导入与查询 | 未开始 | Codex | T13 已提供稳定的 `SourceImportResult` 与 `StaticAnalysisResult` 输入边界 | 设计并实现 PAIR 源码函数/节点/边/原始结果导入、幂等关系表与函数/邻域查询 | 2026-09-08 |
+| T14 PAIR 源码导入与查询 | 进行中 | Codex | 已认领任务并完成架构/现有持久化实现核查；复用 T12 `SourceImportResult`、T13 `StaticAnalysisResult` 作为导入输入 | 实现 PAIR 契约、PostgreSQL 关系表/仓储、源码函数/调用边导入、幂等重放及函数/调用邻域查询测试 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
