@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import RowMapping, func, select, text, update
+from sqlalchemy import RowMapping, Table, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -22,6 +22,10 @@ from vulnweaver_contracts import (
     JobRequestedEvent,
     JobStatus,
     Lease,
+    PairEdge,
+    PairFunction,
+    PairNode,
+    PairRaw,
     PermissionMode,
     Project,
     QueueEvent,
@@ -52,6 +56,10 @@ from vulnweaver_persistence.models import (
     jobs,
     orchestration_checkpoints,
     outbox_events,
+    pair_edges,
+    pair_functions,
+    pair_nodes,
+    pair_raw,
     projects,
     task_events,
     tasks,
@@ -1221,7 +1229,193 @@ class TaskEventRepository:
         return int(value)
 
 
-@dataclass(frozen=True, slots=True)
+class PairRepository:
+    """Idempotent PAIR graph storage and bounded source-query primitives."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def import_graph(
+        self,
+        functions: list[PairFunction],
+        nodes: list[PairNode],
+        edges: list[PairEdge],
+        raw: PairRaw | None,
+        *,
+        created_at: datetime,
+    ) -> None:
+        for function in functions:
+            validate_contract("PairFunction", function)
+            await self._insert_or_verify(
+                pair_functions,
+                function["id"],
+                {
+                    **function,
+                    "schema_version": str(function["schema_version"]),
+                    "created_at": created_at,
+                },
+            )
+        for node in nodes:
+            validate_contract("PairNode", node)
+            await self._insert_or_verify(
+                pair_nodes,
+                node["id"],
+                {
+                    **node,
+                    "schema_version": str(node["schema_version"]),
+                    "kind": str(node["kind"]),
+                    "created_at": created_at,
+                },
+            )
+        for edge in edges:
+            validate_contract("PairEdge", edge)
+            await self._insert_or_verify(
+                pair_edges,
+                edge["id"],
+                {
+                    **edge,
+                    "schema_version": str(edge["schema_version"]),
+                    "type": str(edge["type"]),
+                    "created_at": created_at,
+                },
+            )
+        if raw is not None:
+            validate_contract("PairRaw", raw)
+            await self._insert_or_verify(
+                pair_raw,
+                raw["id"],
+                {**raw, "schema_version": str(raw["schema_version"]), "created_at": created_at},
+            )
+
+    async def list_functions(self, artifact_version_id: str) -> list[PairFunction]:
+        rows = (
+            await self._connection.execute(
+                select(pair_functions)
+                .where(pair_functions.c.artifact_version_id == artifact_version_id)
+                .order_by(pair_functions.c.name, pair_functions.c.id)
+            )
+        ).mappings()
+        return [_pair_function_from_row(row) for row in rows]
+
+    async def get_function(self, function_id: str) -> PairFunction:
+        row = (
+            (
+                await self._connection.execute(
+                    select(pair_functions).where(pair_functions.c.id == function_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("PAIR function not found", details={"function_id": function_id})
+        return _pair_function_from_row(row)
+
+    async def functions_at_location(
+        self, artifact_version_id: str, path: str, line: int
+    ) -> list[PairFunction]:
+        rows = (
+            await self._connection.execute(
+                select(pair_functions)
+                .where(
+                    pair_functions.c.artifact_version_id == artifact_version_id,
+                    pair_functions.c.source_location["path"].as_string() == path,
+                )
+                .order_by(pair_functions.c.id)
+            )
+        ).mappings()
+        values = [_pair_function_from_row(row) for row in rows]
+        return [
+            value
+            for value in values
+            if value["source_location"] is not None
+            and value["source_location"]["start_line"]
+            <= line
+            <= value["source_location"]["end_line"]
+        ]
+
+    async def neighborhood(
+        self, artifact_version_id: str, function_id: str, *, depth: int = 1
+    ) -> dict[str, object]:
+        if depth < 0 or depth > 8:
+            raise ValueError("PAIR neighborhood depth must be between 0 and 8")
+        nodes = list(
+            (
+                await self._connection.execute(
+                    select(pair_nodes).where(
+                        pair_nodes.c.artifact_version_id == artifact_version_id
+                    )
+                )
+            ).mappings()
+        )
+        edges = list(
+            (
+                await self._connection.execute(
+                    select(pair_edges).where(
+                        pair_edges.c.artifact_version_id == artifact_version_id
+                    )
+                )
+            ).mappings()
+        )
+        node_values = [_pair_node_from_row(row) for row in nodes]
+        edge_values = [_pair_edge_from_row(row) for row in edges]
+        function_nodes = {node["id"] for node in node_values if node["function_id"] == function_id}
+        selected_nodes = set(function_nodes)
+        for _ in range(depth):
+            for edge in edge_values:
+                if (
+                    edge["source_node_id"] in selected_nodes
+                    or edge["target_node_id"] in selected_nodes
+                ):
+                    selected_nodes.update({edge["source_node_id"], edge["target_node_id"]})
+        selected_edges = [
+            edge
+            for edge in edge_values
+            if edge["source_node_id"] in selected_nodes and edge["target_node_id"] in selected_nodes
+        ]
+        selected_function_ids = {
+            node["function_id"]
+            for node in node_values
+            if node["id"] in selected_nodes and node["function_id"]
+        }
+        functions = [
+            function
+            for function in await self.list_functions(artifact_version_id)
+            if function["id"] in selected_function_ids
+        ]
+        return {
+            "functions": functions,
+            "nodes": [node for node in node_values if node["id"] in selected_nodes],
+            "edges": selected_edges,
+        }
+
+    async def _insert_or_verify(
+        self, table: Table, identifier: str, values: dict[str, object]
+    ) -> None:
+        statement = insert(table).values(values).on_conflict_do_nothing(index_elements=["id"])
+        inserted = (await self._connection.execute(statement)).rowcount
+        if inserted:
+            return
+        existing = (
+            (
+                await self._connection.execute(select(table).where(table.c.id == identifier))  # type: ignore[attr-defined]
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing is None:
+            raise PersistenceInvariantError(
+                "PAIR row disappeared during idempotent import", details={"id": identifier}
+            )
+        for key, value in values.items():
+            if key in {"created_at"}:
+                continue
+            if existing[key] != value:
+                raise EntityConflict(
+                    "PAIR row conflicts with existing identity", details={"id": identifier}
+                )
+
+
 class Repositories:
     projects: ProjectRepository
     artifacts: ArtifactRepository
@@ -1233,6 +1427,7 @@ class Repositories:
     personal_auth: PersonalAuthRepository
     agent_runs: AgentRunRepository
     checkpoints: CheckpointRepository
+    pair: PairRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1245,6 +1440,7 @@ class Repositories:
         object.__setattr__(self, "personal_auth", PersonalAuthRepository(connection))
         object.__setattr__(self, "agent_runs", AgentRunRepository(connection))
         object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
+        object.__setattr__(self, "pair", PairRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -1397,6 +1593,48 @@ def _task_from_row(row: RowMapping) -> Task:
         resource_budget=row["resource_budget"],
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
+    )
+
+
+def _pair_function_from_row(row: RowMapping) -> PairFunction:
+    return PairFunction(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        name=row["name"],
+        symbol=row["symbol"],
+        language=row["language"],
+        source_location=row["source_location"],
+        binary_location=row["binary_location"],
+        signature=row["signature"],
+        attributes=row["attributes"],
+    )
+
+
+def _pair_node_from_row(row: RowMapping) -> PairNode:
+    return PairNode(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        function_id=row["function_id"],
+        kind=row["kind"],
+        location=row["location"],
+        attributes=row["attributes"],
+    )
+
+
+def _pair_edge_from_row(row: RowMapping) -> PairEdge:
+    return PairEdge(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        source_node_id=row["source_node_id"],
+        target_node_id=row["target_node_id"],
+        type=row["type"],
+        scope=row["scope"],
+        confidence=float(row["confidence"]),
+        evidence_id=row["evidence_id"],
+        attributes=row["attributes"],
     )
 
 

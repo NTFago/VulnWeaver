@@ -181,6 +181,56 @@ export interface StaticAnalysisResult {
   created_at: string;
 }
 
+export type PairNodeKind = "function" | "basic_block" | "instruction" | "parameter" | "variable" | "memory_object" | "source_location";
+
+export type PairEdgeType = "call" | "control_flow" | "def_use" | "data_flow" | "taint" | "xref";
+
+export interface PairFunction {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  name: string;
+  symbol: string | null;
+  language: string;
+  source_location: SourceLocation | null;
+  binary_location: BinaryLocation | null;
+  signature: string | null;
+  attributes: JsonObject;
+}
+
+export interface PairNode {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  function_id: Identifier | null;
+  kind: PairNodeKind;
+  location: SourceLocation | BinaryLocation | null;
+  attributes: JsonObject;
+}
+
+export interface PairEdge {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  source_node_id: Identifier;
+  target_node_id: Identifier;
+  type: PairEdgeType;
+  scope: string;
+  confidence: number;
+  evidence_id: Identifier | null;
+  attributes: JsonObject;
+}
+
+export interface PairRaw {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  tool: ToolIdentity;
+  format: string;
+  object_ref: ObjectReference;
+  created_at: string;
+}
+
 export interface BinaryLocation {
   artifact_version_id: Identifier;
   image_base?: number;

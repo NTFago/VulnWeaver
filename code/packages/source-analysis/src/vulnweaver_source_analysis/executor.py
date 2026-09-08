@@ -28,6 +28,7 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
+from vulnweaver_pair import SourcePairImporter
 from vulnweaver_persistence import Database, EntityConflict, EntityNotFound
 
 from vulnweaver_source_analysis.archive import (
@@ -72,6 +73,7 @@ class SourceImportExecutor:
         indexer: SourceIndexer | None = None,
         scratch_root: str | Path | None = None,
         static_scheduler: StaticAnalysisScheduler | None = None,
+        pair_importer: SourcePairImporter | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -79,6 +81,7 @@ class SourceImportExecutor:
         self._indexer = indexer or SourceIndexer()
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
         self._static_scheduler = static_scheduler
+        self._pair_importer = pair_importer
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         try:
@@ -155,7 +158,7 @@ class SourceImportExecutor:
                 return _cancelled_result(job["id"])
             derived_version_id = _derived_identifier("artifact-version", job["id"])
             derived_artifact_id = _derived_identifier("artifact", job["id"])
-            await self._publish_index(
+            index_object_ref = await self._publish_index(
                 job,
                 result,
                 parent_version_id,
@@ -163,6 +166,13 @@ class SourceImportExecutor:
                 derived_version_id,
                 summary.files,
             )
+            if self._pair_importer is not None:
+                await self._pair_importer.import_source_result(
+                    result,
+                    raw_object_ref=index_object_ref,
+                    tool=_tool_identity(job),
+                    created_at=job["created_at"],
+                )
             if self._static_scheduler is not None:
                 await self._static_scheduler.schedule(job, result, derived_version_id)
             return WorkerResult(

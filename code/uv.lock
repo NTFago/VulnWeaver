@@ -13,6 +13,7 @@ members = [
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
     "vulnweaver-orchestrator-service",
+    "vulnweaver-pair",
     "vulnweaver-persistence",
     "vulnweaver-queue",
     "vulnweaver-source-analysis",
@@ -1291,6 +1292,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-pair"
+version = "0.1.0"
+source = { editable = "packages/pair" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-persistence" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
+]
+
+[[package]]
 name = "vulnweaver-persistence"
 version = "0.1.0"
 source = { editable = "packages/persistence" }
@@ -1336,6 +1352,7 @@ dependencies = [
     { name = "tree-sitter-python" },
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-worker" },
 ]
@@ -1349,6 +1366,7 @@ requires-dist = [
     { name = "tree-sitter-python", specifier = ">=0.23,<1" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-worker", editable = "packages/worker" },
 ]
@@ -1399,6 +1417,7 @@ dependencies = [
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-orchestrator-service" },
+    { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-source-analysis" },
@@ -1426,6 +1445,7 @@ requires-dist = [
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-orchestrator-service", editable = "apps/orchestrator" },
+    { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },

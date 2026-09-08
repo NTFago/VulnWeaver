@@ -196,3 +196,44 @@ def test_unknown_contract_version_is_rejected() -> None:
     ensure_supported_version("1.0.0")
     with pytest.raises(ContractValidationError):
         ensure_supported_version("2.0.0")
+
+
+def test_pair_source_contracts_validate() -> None:
+    location = {
+        "artifact_version_id": "artifact-version:pair",
+        "path": "src/main.c",
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 10,
+    }
+    validate_contract(
+        "PairFunction",
+        {
+            "schema_version": "1.0.0",
+            "id": "pair-function:main",
+            "artifact_version_id": "artifact-version:pair",
+            "name": "main",
+            "symbol": "main",
+            "language": "c",
+            "source_location": location,
+            "binary_location": None,
+            "signature": "main()",
+            "attributes": {"kind": "function"},
+        },
+    )
+    validate_contract(
+        "PairEdge",
+        {
+            "schema_version": "1.0.0",
+            "id": "pair-edge:call",
+            "artifact_version_id": "artifact-version:pair",
+            "source_node_id": "pair-node:main",
+            "target_node_id": "pair-node:helper",
+            "type": "call",
+            "scope": "source",
+            "confidence": 1.0,
+            "evidence_id": None,
+            "attributes": {},
+        },
+    )

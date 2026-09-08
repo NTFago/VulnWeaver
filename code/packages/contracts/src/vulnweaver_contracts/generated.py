@@ -160,6 +160,23 @@ class AnnotationTargetKind(StrEnum):
     FUNCTION = 'function'
     FINDING = 'finding'
 
+class PairNodeKind(StrEnum):
+    FUNCTION = 'function'
+    BASIC_BLOCK = 'basic_block'
+    INSTRUCTION = 'instruction'
+    PARAMETER = 'parameter'
+    VARIABLE = 'variable'
+    MEMORY_OBJECT = 'memory_object'
+    SOURCE_LOCATION = 'source_location'
+
+class PairEdgeType(StrEnum):
+    CALL = 'call'
+    CONTROL_FLOW = 'control_flow'
+    DEF_USE = 'def_use'
+    DATA_FLOW = 'data_flow'
+    TAINT = 'taint'
+    XREF = 'xref'
+
 type Identifier = str
 
 type Sha256Digest = str
@@ -274,6 +291,48 @@ class StaticAnalysisResult(TypedDict):
     artifact_version_id: Identifier
     diagnostics: list[StaticAnalysisDiagnostic]
     tool_runs: list[StaticToolRun]
+    created_at: str
+
+class PairFunction(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    name: str
+    symbol: str | None
+    language: str
+    source_location: SourceLocation | None
+    binary_location: BinaryLocation | None
+    signature: str | None
+    attributes: JsonObject
+
+class PairNode(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    function_id: Identifier | None
+    kind: PairNodeKind
+    location: SourceLocation | BinaryLocation | None
+    attributes: JsonObject
+
+class PairEdge(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    source_node_id: Identifier
+    target_node_id: Identifier
+    type: PairEdgeType
+    scope: str
+    confidence: float
+    evidence_id: Identifier | None
+    attributes: JsonObject
+
+class PairRaw(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    tool: ToolIdentity
+    format: str
+    object_ref: ObjectReference
     created_at: str
 
 class BinaryLocation(TypedDict):

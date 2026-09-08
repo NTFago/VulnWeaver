@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -24,6 +25,8 @@ from vulnweaver_contracts import (
     ArtifactKind,
     JobKind,
     JobStatus,
+    PairEdgeType,
+    PairNodeKind,
     PermissionMode,
     RunStatus,
     TaskResult,
@@ -123,6 +126,126 @@ artifact_versions = Table(
     CheckConstraint("digest ~ '^sha256:[0-9a-f]{64}$'", name="sha256_digest"),
     UniqueConstraint("artifact_id", "digest", name="uq_artifact_versions_artifact_digest"),
 )
+
+pair_functions = Table(
+    "pair_functions",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("name", String(2048), nullable=False),
+    Column("symbol", String(2048), nullable=True),
+    Column("language", String(128), nullable=False),
+    Column("source_location", JSONB(none_as_null=True), nullable=True),
+    Column("binary_location", JSONB(none_as_null=True), nullable=True),
+    Column("signature", Text, nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    UniqueConstraint("artifact_version_id", "id", name="uq_pair_functions_version_id"),
+)
+
+pair_nodes = Table(
+    "pair_nodes",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "function_id",
+        IDENTIFIER,
+        ForeignKey("pair_functions.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("kind", String(32), nullable=False),
+    Column("location", JSONB(none_as_null=True), nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("kind", PairNodeKind, "kind"),
+    UniqueConstraint("artifact_version_id", "id", name="uq_pair_nodes_version_id"),
+)
+
+pair_edges = Table(
+    "pair_edges",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "source_node_id",
+        IDENTIFIER,
+        ForeignKey("pair_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "target_node_id",
+        IDENTIFIER,
+        ForeignKey("pair_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("type", String(32), nullable=False),
+    Column("scope", String(128), nullable=False),
+    Column("confidence", Float(), nullable=False),
+    Column("evidence_id", IDENTIFIER, nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("type", PairEdgeType, "type"),
+    CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+    UniqueConstraint(
+        "artifact_version_id",
+        "source_node_id",
+        "target_node_id",
+        "type",
+        "scope",
+        name="uq_pair_edges_identity",
+    ),
+)
+
+pair_raw = Table(
+    "pair_raw",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("tool", JSONB, nullable=False),
+    Column("format", String(128), nullable=False),
+    Column("object_ref", Text, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    UniqueConstraint(
+        "artifact_version_id", "tool", "format", "object_ref", name="uq_pair_raw_identity"
+    ),
+)
+
+Index("ix_pair_functions_artifact_version_id", pair_functions.c.artifact_version_id)
+Index("ix_pair_functions_source_path", pair_functions.c.source_location["path"].as_string())
+Index("ix_pair_nodes_function_id", pair_nodes.c.function_id)
+Index("ix_pair_nodes_artifact_version_id", pair_nodes.c.artifact_version_id)
+Index("ix_pair_edges_source_node_id", pair_edges.c.source_node_id)
+Index("ix_pair_edges_target_node_id", pair_edges.c.target_node_id)
+Index("ix_pair_raw_artifact_version_id", pair_raw.c.artifact_version_id)
 
 tasks = Table(
     "tasks",

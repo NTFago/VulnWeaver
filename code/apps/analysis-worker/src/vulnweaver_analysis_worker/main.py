@@ -10,6 +10,7 @@ import sys
 from types import FrameType
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_pair import SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
 from vulnweaver_source_analysis import (
@@ -52,11 +53,13 @@ async def _run() -> None:
         if spec["name"] in {"semgrep", "cppcheck"}
     }
     scheduler = StaticAnalysisScheduler(database, static_specs)
+    pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
         store,
         scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
         static_scheduler=scheduler,
+        pair_importer=pair_importer,
     )
     executor = AnalysisJobExecutor(
         source_executor,
