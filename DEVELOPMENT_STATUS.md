@@ -11,11 +11,11 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 进行中；T12 Review 修复已完成，准备接入静态分析工具
 - **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
-- **最后更新**：2026-09-08 20:31（Asia/Shanghai）
+- **最后更新**：2026-09-08 20:46（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配；T12 已完成，下一任务包待认领
+- **当前负责人**：未分配；T01.2 已完成，下一任务包待认领
 
 ## 3. 开发进度
 
@@ -29,6 +29,7 @@
 | T04 本地内容寻址工件库 | 已完成 | Codex | 主体实现及 Review 修正完成：字符串 `derived` 输入无法绕过谱系约束，合法字符串枚举可持久化；重复旧摘要不回退 current version；新摘要目录逐级 fsync；首版本循环外键的事务内临时 NULL 语义已明确 | 无；受控未引用对象 GC 与 MinIO 后端按后续部署需求实现 | 2026-09-07 |
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无 | 2026-09-07 |
 | T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
+| T01.2 CI 触发去重 | 已完成 | Codex | 移除 `push: main` 触发，保留 Pull Request 与手动触发；同步 ADR-014，避免合并后对已检查变更重复运行 | 无；仓库应禁止绕过必需检查直接推送 `main` | 2026-09-08 |
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
 | T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
 | T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
@@ -83,7 +84,7 @@
 | ADR-011 | PostgreSQL 持久化采用 SQLAlchemy Core 2.x、psycopg 3 与显式 Alembic 迁移 | 提供清晰的异步事务边界、可审查 DDL，并让 Job 与 Outbox 在同一事务登记 | `code/docs/adr/011-postgresql-persistence-toolkit.md` |
 | ADR-012 | 首版本地工件库采用 SHA-256 内容寻址、同文件系统 staging 与排他硬链接原子发布 | 保证同内容稳定引用、拒绝覆盖与调用方宿主路径，并保留 MinIO 后端替换能力 | `code/docs/adr/012-local-content-addressed-artifact-store.md` |
 | ADR-013 | PostgreSQL Outbox 到 Redis Streams 采用至少一次交付、稳定事件 ID 和 Redis 内短期原子去重 | 正确认知跨存储崩溃窗口，同时避免等价重试重复追加并要求 T06 保护持久化副作用 | `code/docs/adr/013-at-least-once-outbox-to-redis.md` |
-| ADR-014 | CI 使用 Ruff、Pyright 与 pytest 分层门禁，在 PR/`main` 推送/手动触发时以只读权限运行 | 分层覆盖规范、类型与运行行为，把质量检查固化为必过门禁 | `code/docs/adr/014-ci-quality-gate.md` |
+| ADR-014 | CI 使用 Ruff、Pyright 与 pytest 分层门禁，在 PR/手动触发时以只读权限运行，`main` 依靠分支保护复用 PR 检查结果 | 分层覆盖规范、类型与运行行为，同时避免 PR 合并后重复运行 | `code/docs/adr/014-ci-quality-gate.md` |
 | ADR-015 | PostgreSQL Job 租约作为执行权事实来源，Redis pending 仅负责传输与超时接管 | 防止崩溃、ACK 丢失或重复消息造成同一 Job 并发执行 | `code/docs/adr/015-job-leases-and-pending-recovery.md` |
 | ADR-016 | 最终 WorkerResult 先与 Job 终态事务落库；获准重试的失败按 attempt 追加审计；之后 ACK、保留 pending 或原子转入 dead-letter | 在 PostgreSQL/Redis 无分布式事务时保证结果唯一、失败可追溯并稳定恢复 ACK、死信响应丢失和进程崩溃 | `code/docs/adr/016-worker-result-and-settlement-protocol.md` |
 | ADR-017 | 单个人账号使用 Argon2id、数据库会话、HttpOnly Cookie、会话绑定 CSRF、锁定和幂等改密 | 不引入 RBAC 的前提下建立可多实例、可撤销且抗资源滥用的浏览器认证边界 | `code/docs/adr/017-personal-browser-authentication.md` |
@@ -93,6 +94,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08 20:46：完成 T01.2 CI 触发去重
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`.github/workflows/quality-gate.yml`、`code/docs/adr/014-ci-quality-gate.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：移除质量门禁的 `push: main` 触发，保留 Pull Request 与手动触发；合并 PR 后不再对同一变更重复启动。
+- 测试与结果：使用 PyYAML BaseLoader 成功解析 Workflow，断言触发器精确为 `pull_request` 和 `workflow_dispatch`，并确认 `push` 不存在；`git diff --check` 通过。
+- 问题：若仓库允许直接推送 `main`，该推送不再自动运行 CI；应将 `Python quality gate` 保持为必需检查并禁止直接推送。
+- 阻碍点：无。
+- 决策：更新 ADR-014。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
 
 ### 2026-09-08 20:31：完成 T12 Review 正确性修复
 
@@ -354,6 +367,7 @@
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
 | 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
 | 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
+| 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
 
 ## 10. 下一步
 
