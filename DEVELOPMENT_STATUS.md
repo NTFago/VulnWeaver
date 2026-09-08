@@ -9,8 +9,8 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T07 已完成，准备 T08）
-- **总体状态**：PR #5 审计问题与个人认证重构已完成；按 MVP 风险分层门禁继续推进前端闭环
+- **当前阶段**：P1 控制面最小闭环已完成，准备 P2 编排与源码主流程
+- **总体状态**：首个可运行控制面 MVP 已形成；已覆盖认证、项目、工件、任务和实时轨迹，实际分析需继续 T09-T15
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支 `feat/t07-api`，基于 `main` 的 `dbc6137`
@@ -31,6 +31,7 @@
 | T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
 | T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
+| T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -85,6 +86,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08：完成 T08 Svelte 个人工作台与控制面 MVP
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/apps/web/`、`code/compose.yaml`、`code/compose.dev.yaml`、`code/pnpm-workspace.yaml`、`code/pnpm-lock.yaml`、`DEVELOPMENT_STATUS.md`
+- 已完成：建立 Svelte 5 + TypeScript + Vite 工作台；接入真实 Cookie/CSRF 认证、首次改密、Project/Artifact/Task/Job API 与任务事件 WebSocket；实现加载、空、错误、成功、禁用及移动端状态；使用同源 Nginx 隔离浏览器与 API，Web 容器非 root、只读根文件系统且移除 capabilities
+- 测试与结果：`pnpm run check` 通过，147 个 pytest 通过、总覆盖率 89.45%、Ruff/Pyright/Svelte/TypeScript 无错误；`pnpm --filter @vulnweaver/web build`、Compose 配置解析、`docker compose ... build web`、`uv lock --check` 通过
+- 问题：未新增低价值 UI 单测；实际浏览器 E2E 与更完整工作台留待 T22 里程碑集中验证
+- 阻碍点：无
+- 决策：无新增重大架构决策；沿用 ADR-002、ADR-017、ADR-018
+- 下一步：认领 T09，实现 Tool Registry 与 Policy Engine，为 T11 编排提供强制策略门禁
 
 ### 2026-09-08：完成 T07 PR #5 审计修正与认证重构
 
@@ -259,12 +272,13 @@
 | 2026-09-07 | T06 Code Review 回归 | 先运行重复执行与空重试白名单失败用例；再执行 `pnpm run check`、迁移漂移测试、`uv lock --check`、Compose 构建/迁移/安全配置检查 | 通过；127 个测试、90.20% 分支覆盖率；同 owner PEL 往返不重复执行，白名单、追加失败审计、心跳竞态和游标推进均有回归；`0004` 迁移退出码 0 | 具体工具副作用仍须遵守幂等接口；租约真实过期后的新 attempt 接管属于既定至少一次执行语义 |
 | 2026-09-08 | T06 第二轮正确性修正 | 修复遗留 Ruff B904 后 `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript）与 `uv lock --check` | 通过；135 个测试、90.28% 分支覆盖率、Ruff 0 问题、Pyright 0 错误、TypeScript 通过、锁文件一致 | 未在远端 GitHub Actions runner 实跑，需由 PR 触发 |
 | 2026-09-08 | T07 PR #5 审计修正与认证重构 | `pnpm run check`、`uv lock --check`、Compose 配置解析、`docker compose ... build api` | 通过；147 个测试、89.42% 分支覆盖率（MVP 门槛 80%）、Ruff/Pyright/TypeScript 通过，迁移与真实 PostgreSQL/Redis 集成通过，API 镜像构建成功 | 未推送远程分支，GitHub Actions 待推送后触发 |
+| 2026-09-08 | T08 Svelte 工作台与容器交付 | `pnpm run check`、Web 生产构建、`uv lock --check`、Compose 配置解析与 Web 镜像构建 | 通过；147 个测试、89.45% 覆盖率；Svelte 检查 0 错误/0 警告；生产包与 `vulnweaver-web:dev` 镜像构建成功 | Playwright 真实浏览器 E2E 留待 T22 集中执行 |
 
 ## 10. 下一步
 
-1. 认领 T08，创建 Svelte 5 工作台并生成 OpenAPI TypeScript 客户端。
-2. 接入个人登录、首次改密、项目创建、工件上传、任务创建和事件恢复主流程。
-3. 使用 Playwright 验证桌面/移动视口、键盘可达性、加载/空/错误状态和页面重叠。
+1. 认领 T09，实现版本化 Tool Registry、ToolSpec 加载和 Policy Engine 结构化拒绝。
+2. 并行准备 T10 模型访问适配与运行记录，为 T11 LangGraph 主流程提供两个前置依赖。
+3. T11 完成后将 `task.requested` 转换为经策略校验的初始 Job，使现有工作台展示真实编排进度。
 
 ## 11. 每次工作结束时的更新模板
 
