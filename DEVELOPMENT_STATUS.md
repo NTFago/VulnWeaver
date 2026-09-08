@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；T12 Review 修复已完成，准备接入静态分析工具
-- **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
-- **最后更新**：2026-09-08 20:46（Asia/Shanghai）
+- **当前阶段**：P2 源码静态分析 MVP 进行中；T13 Semgrep/cppcheck 适配已完成，下一步进入 T14 PAIR 源码导入与查询
+- **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入索引和静态工具 Job 链路已形成；正在建设 PAIR、Finding 与独立复核路径
+- **最后更新**：2026-09-08 22:16（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；本地 `main` 已快进至 `b7d687d`；当前开发分支为 `feat/t13-static-tools`；已合并的 T09-T12 本地分支已清理，远端分支未改动
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配；T01.2 已完成，下一任务包待认领
+- **当前负责人**：Codex；已认领 T13
 
 ## 3. 开发进度
 
@@ -38,6 +38,7 @@
 | T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 已由 T11 接入 | 2026-09-08 |
 | T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
+| T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -94,6 +95,30 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08 22:16：完成 T13 Semgrep/cppcheck 适配与静态 Job 链路
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/`、`code/compose.yaml`、`code/uv.lock`、`code/tests/contracts/`、`code/tests/source_analysis/`
+- 已完成：新增 `StaticAnalysisDiagnostic`、`StaticToolRun`、`StaticAnalysisResult` v1 契约；实现固定可审计参数、无 Shell 的 Semgrep/cppcheck 适配与 JSON/XML 归一化；统一高/中/低严重性、CWE、源码位置、工具版本、退出码及 `executable_not_found`/`rules_not_installed`/`language_not_detected` 等能力缺失原因；源码导入成功后按语言能力创建 Semgrep/cppcheck 静态分析 Job，使用确定性幂等键和同事务 Outbox；静态结果按父版本、工具身份和镜像摘要登记为不可变派生工件；分析 Worker 镜像安装 Semgrep 1.130.0 与 cppcheck 2.17.1，关闭 Semgrep metrics/version check，并挂载只读 ToolSpec/rule 配置。
+- 测试与结果：Ruff 全仓库通过；变更文件 Pyright 0 错误；契约/静态适配/调度/源码导入定向测试 30 个通过；全量 pytest 196 个通过、1 个既有 Starlette 弃用警告；`uv lock --check`、Compose 配置解析通过；`docker compose ... build analysis-worker` 成功，镜像摘要为 `sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68`，容器以 UID 10001 启动，真实 Semgrep/cppcheck 样本扫描产生结构化输出。
+- 问题：Windows 工作区含中文路径时，直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；本轮使用无 editable 的临时环境执行验证，不改变项目代码约束。
+- 阻碍点：无
+- 决策：无新增重大架构决策；沿用 ADR-012/013/015/016/019 的不可变工件、Outbox、租约、Worker 结算和可恢复编排语义。
+- 下一步：认领 T14，实现 PAIR 源码导入与按函数/调用邻域查询，并为 T15 Finding/Evidence 消费静态工具结果预留稳定输入。
+
+### 2026-09-08 21:10：认领 T13 并清理本地开发分支
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`DEVELOPMENT_STATUS.md`；后续实现预计位于 `code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/packages/orchestrator/`、`code/deploy/tool-specs/` 及对应测试
+- 已完成：刷新远端引用，确认 T09-T12 四条本地功能分支均已进入 `origin/main`；本地 `main` 快进至 `b7d687d` 后删除旧分支，并创建 `feat/t13-static-tools`；完成 T13 架构、模块边界和现有实现核查
+- 测试与结果：Git 合并关系检查通过；工作树在开始实现前无未提交改动
+- 问题：无
+- 阻碍点：无
+- 决策：沿用既有 ToolSpec、Policy Engine、Worker 可靠结算和原始工件不可变约束，不新增重大架构决策
+- 下一步：先添加失败优先的 Semgrep/cppcheck 适配器测试，再实现结构化结果、能力缺失和静态分析 Job 执行入口
 
 ### 2026-09-08 20:46：完成 T01.2 CI 触发去重
 
@@ -367,13 +392,14 @@
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
 | 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
 | 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
+| 2026-09-08 | T13 静态工具与 Job 链路 | 变更文件 Ruff/Pyright；契约、静态适配、调度、源码导入定向测试；Windows Selector 下全量 pytest；`uv lock --check`；Compose 配置解析与 `docker compose ... build analysis-worker`；容器内 Semgrep/cppcheck 样本扫描 | 通过；Ruff 全仓库、Pyright 变更文件 0 错误；30 个定向测试、196 个全量测试通过；镜像和真实工具扫描通过 | 未在远端 GitHub Actions runner 实跑；T14/T15 尚未覆盖 PAIR/Finding 消费 |
 | 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
 
 ## 10. 下一步
 
-1. 认领 T13，实现 Semgrep/cppcheck 适配、结构化工具结果和能力缺失原因。
-2. 扩展编排链路，在源码导入 Job 成功后按 CapabilityProfile 调度静态分析 Job。
-3. T13 完成后继续 T14 PAIR 源码导入与查询。
+1. 认领 T14，实现 PAIR 源码导入、函数/调用邻域索引与查询接口。
+2. 将 Semgrep/cppcheck 的 `StaticAnalysisResult` 接入 PAIR/Finding 候选消费边界。
+3. T14 完成后继续 T15 Finding、Evidence 与独立复核。
 
 ## 11. 每次工作结束时的更新模板
 

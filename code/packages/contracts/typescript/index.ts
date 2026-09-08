@@ -45,6 +45,8 @@ export type NetworkAccess = "none" | "allowlist";
 
 export type CapabilityStatus = "available" | "unavailable";
 
+export type StaticToolStatus = "succeeded" | "unavailable" | "failed";
+
 export type AnnotationTargetKind = "function" | "finding";
 
 export type Identifier = string;
@@ -151,6 +153,32 @@ export interface SourceImportResult {
   functions: Array<SourceFunction>;
   calls: Array<SourceCall>;
   capability_profile: CapabilityProfile;
+}
+
+export interface StaticAnalysisDiagnostic {
+  tool_name: Identifier;
+  rule_id: string;
+  severity: Severity;
+  message: string;
+  location: SourceLocation;
+  cwe_ids: Array<string>;
+  properties: JsonObject;
+}
+
+export interface StaticToolRun {
+  tool_name: Identifier;
+  tool_version: string | null;
+  status: StaticToolStatus;
+  exit_code: number | null;
+  reason: string | null;
+}
+
+export interface StaticAnalysisResult {
+  schema_version: SchemaVersion;
+  artifact_version_id: Identifier;
+  diagnostics: Array<StaticAnalysisDiagnostic>;
+  tool_runs: Array<StaticToolRun>;
+  created_at: string;
 }
 
 export interface BinaryLocation {

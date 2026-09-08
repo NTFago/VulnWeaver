@@ -177,11 +177,14 @@ services:
       dockerfile: apps/analysis-worker/Dockerfile
       args:
         UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       REDIS_STREAM_NAMESPACE: ${REDIS_STREAM_NAMESPACE:-vulnweaver}
       ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
       WORKER_CONSUMER_NAME: ${ANALYSIS_WORKER_CONSUMER_NAME:-analysis-worker-1}
       WORKER_CONSUMER_GROUP: ${ANALYSIS_WORKER_CONSUMER_GROUP:-analysis-workers}
       WORKER_CONCURRENCY: ${ANALYSIS_WORKER_CONCURRENCY:-1}
@@ -189,6 +192,7 @@ services:
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

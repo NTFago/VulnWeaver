@@ -151,6 +151,11 @@ class CapabilityStatus(StrEnum):
     AVAILABLE = 'available'
     UNAVAILABLE = 'unavailable'
 
+class StaticToolStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    UNAVAILABLE = 'unavailable'
+    FAILED = 'failed'
+
 class AnnotationTargetKind(StrEnum):
     FUNCTION = 'function'
     FINDING = 'finding'
@@ -247,6 +252,29 @@ class SourceImportResult(TypedDict):
     functions: list[SourceFunction]
     calls: list[SourceCall]
     capability_profile: CapabilityProfile
+
+class StaticAnalysisDiagnostic(TypedDict):
+    tool_name: Identifier
+    rule_id: str
+    severity: Severity
+    message: str
+    location: SourceLocation
+    cwe_ids: list[str]
+    properties: JsonObject
+
+class StaticToolRun(TypedDict):
+    tool_name: Identifier
+    tool_version: str | None
+    status: StaticToolStatus
+    exit_code: int | None
+    reason: str | None
+
+class StaticAnalysisResult(TypedDict):
+    schema_version: SchemaVersion
+    artifact_version_id: Identifier
+    diagnostics: list[StaticAnalysisDiagnostic]
+    tool_runs: list[StaticToolRun]
+    created_at: str
 
 class BinaryLocation(TypedDict):
     artifact_version_id: Identifier

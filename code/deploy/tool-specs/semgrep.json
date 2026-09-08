@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0.0",
+  "name": "semgrep",
+  "version": "1.0.0",
+  "image_digest": "sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68",
+  "risk_level": "low",
+  "accepted_artifacts": ["source_archive", "source_repository"],
+  "command_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["artifact_version_id", "source_index_version_id", "languages"],
+    "properties": {
+      "artifact_version_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "source_index_version_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "languages": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 32}}
+    }
+  },
+  "output_schema": {"type": "object"},
+  "network_policy": {"access": "none", "allowed_hosts": []},
+  "filesystem_policy": {"input_read_only": true, "isolated_output": true, "allow_host_paths": false},
+  "resource_limits": {"max_model_tokens": 0, "cpu_millis": 4000, "memory_bytes": 536870912, "disk_bytes": 536870912, "max_tool_concurrency": 1, "max_dynamic_runs": 0, "timeout_seconds": 300},
+  "approval_required": false,
+  "timeout_seconds": 300,
+  "retry_policy": {"max_attempts": 2, "backoff_seconds": 5.0, "retryable_failure_kinds": ["timeout", "environment", "dependency"]}
+}

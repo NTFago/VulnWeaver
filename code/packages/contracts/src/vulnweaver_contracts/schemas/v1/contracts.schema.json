@@ -88,6 +88,10 @@
       "type": "string",
       "enum": ["available", "unavailable"]
     },
+    "StaticToolStatus": {
+      "type": "string",
+      "enum": ["succeeded", "unavailable", "failed"]
+    },
     "AnnotationTargetKind": {
       "type": "string",
       "enum": ["function", "finding"]
@@ -263,6 +267,48 @@
         "functions": {"type": "array", "items": {"$ref": "#/$defs/SourceFunction"}},
         "calls": {"type": "array", "items": {"$ref": "#/$defs/SourceCall"}},
         "capability_profile": {"$ref": "#/$defs/CapabilityProfile"}
+      }
+    },
+    "StaticAnalysisDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "rule_id", "severity", "message", "location", "cwe_ids", "properties"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "rule_id": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "severity": {"$ref": "#/$defs/Severity"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "location": {"$ref": "#/$defs/SourceLocation"},
+        "cwe_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "properties": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "StaticToolRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "tool_version", "status", "exit_code", "reason"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/StaticToolStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "StaticAnalysisResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "diagnostics", "tool_runs", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/StaticAnalysisDiagnostic"}},
+        "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/StaticToolRun"}},
+        "created_at": {"type": "string", "format": "date-time"}
       }
     },
     "BinaryLocation": {

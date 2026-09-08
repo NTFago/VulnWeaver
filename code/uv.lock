@@ -1140,6 +1140,7 @@ dependencies = [
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-source-analysis" },
+    { name = "vulnweaver-tool-runtime" },
     { name = "vulnweaver-worker" },
 ]
 
@@ -1149,6 +1150,7 @@ requires-dist = [
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
     { name = "vulnweaver-worker", editable = "packages/worker" },
 ]
 

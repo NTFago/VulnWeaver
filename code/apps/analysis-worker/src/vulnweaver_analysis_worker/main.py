@@ -12,7 +12,13 @@ from types import FrameType
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
-from vulnweaver_source_analysis import SourceImportExecutor
+from vulnweaver_source_analysis import (
+    AnalysisJobExecutor,
+    SourceImportExecutor,
+    StaticAnalysisExecutor,
+    StaticAnalysisScheduler,
+)
+from vulnweaver_tool_runtime import ToolSpecLoader
 from vulnweaver_worker import ReliableWorker, WorkerSettings
 
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
@@ -37,10 +43,28 @@ async def _run() -> None:
         )
     )
     store = LocalContentAddressedStore(_required_environment("ARTIFACT_STORE_ROOT"))
-    executor = SourceImportExecutor(
+    tool_registry = ToolSpecLoader.load_directory(
+        os.environ.get("TOOL_SPEC_DIRECTORY", "/etc/vulnweaver/tool-specs")
+    )
+    static_specs = {
+        spec["name"]: spec
+        for spec in tool_registry.snapshot()
+        if spec["name"] in {"semgrep", "cppcheck"}
+    }
+    scheduler = StaticAnalysisScheduler(database, static_specs)
+    source_executor = SourceImportExecutor(
         database,
         store,
         scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
+        static_scheduler=scheduler,
+    )
+    executor = AnalysisJobExecutor(
+        source_executor,
+        StaticAnalysisExecutor(
+            database,
+            store,
+            scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
+        ),
     )
     worker = ReliableWorker(
         database,
@@ -51,16 +75,10 @@ async def _run() -> None:
             consumer_group=os.environ.get("WORKER_CONSUMER_GROUP", "analysis-workers"),
             concurrency=_environment_int("WORKER_CONCURRENCY", 1),
             read_block_milliseconds=_environment_int("WORKER_READ_BLOCK_MILLISECONDS", 1000),
-            pending_idle_milliseconds=_environment_int(
-                "WORKER_PENDING_IDLE_MILLISECONDS", 30_000
-            ),
+            pending_idle_milliseconds=_environment_int("WORKER_PENDING_IDLE_MILLISECONDS", 30_000),
             lease_seconds=_environment_int("WORKER_LEASE_SECONDS", 120),
-            heartbeat_interval_seconds=_environment_int(
-                "WORKER_HEARTBEAT_INTERVAL_SECONDS", 30
-            ),
-            shutdown_grace_seconds=float(
-                os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")
-            ),
+            heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
+            shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
     )
     stop = asyncio.Event()

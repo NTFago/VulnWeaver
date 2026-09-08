@@ -35,6 +35,10 @@ from vulnweaver_source_analysis.archive import (
     SourceImportError,
 )
 from vulnweaver_source_analysis.indexer import SourceIndexer
+from vulnweaver_source_analysis.static_executor import (
+    StaticAnalysisExecutor,
+    StaticAnalysisScheduler,
+)
 
 
 class SourceImportExecutionError(RuntimeError):
@@ -67,12 +71,14 @@ class SourceImportExecutor:
         importer: SafeArchiveImporter | None = None,
         indexer: SourceIndexer | None = None,
         scratch_root: str | Path | None = None,
+        static_scheduler: StaticAnalysisScheduler | None = None,
     ) -> None:
         self._database = database
         self._store = store
         self._importer = importer or SafeArchiveImporter()
         self._indexer = indexer or SourceIndexer()
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
+        self._static_scheduler = static_scheduler
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         try:
@@ -157,6 +163,8 @@ class SourceImportExecutor:
                 derived_version_id,
                 summary.files,
             )
+            if self._static_scheduler is not None:
+                await self._static_scheduler.schedule(job, result, derived_version_id)
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
@@ -315,3 +323,18 @@ def _failed_result(
             details=cast(JsonObject, dict(details or {})),
         ),
     )
+
+
+class AnalysisJobExecutor:
+    """Route trusted tool identities to their concrete worker executors."""
+
+    def __init__(self, source: SourceImportExecutor, static: StaticAnalysisExecutor) -> None:
+        self._source = source
+        self._static = static
+
+    async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
+        tool = job.get("tool")
+        name = tool.get("name") if isinstance(tool, Mapping) else None
+        if name == "source-import":
+            return await self._source.execute(job, cancellation)
+        return await self._static.execute(job, cancellation)

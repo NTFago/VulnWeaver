@@ -62,6 +62,51 @@ def test_task_requested_event_validates() -> None:
     )
 
 
+def test_static_analysis_result_validates_structured_tool_outcomes() -> None:
+    validate_contract(
+        "StaticAnalysisResult",
+        {
+            "schema_version": "1.0.0",
+            "artifact_version_id": "artifact-version:source",
+            "diagnostics": [
+                {
+                    "tool_name": "semgrep",
+                    "rule_id": "python.lang.security.audit.eval-detected",
+                    "severity": "high",
+                    "message": "Use of eval on untrusted input",
+                    "location": {
+                        "artifact_version_id": "artifact-version:source",
+                        "path": "src/app.py",
+                        "start_line": 4,
+                        "start_column": 5,
+                        "end_line": 4,
+                        "end_column": 18,
+                    },
+                    "cwe_ids": ["CWE-95"],
+                    "properties": {"confidence": "high"},
+                }
+            ],
+            "tool_runs": [
+                {
+                    "tool_name": "semgrep",
+                    "tool_version": "1.130.0",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "reason": None,
+                },
+                {
+                    "tool_name": "cppcheck",
+                    "tool_version": None,
+                    "status": "unavailable",
+                    "exit_code": None,
+                    "reason": "language_not_detected",
+                },
+            ],
+            "created_at": "2026-09-08T13:10:00Z",
+        },
+    )
+
+
 def test_event_type_and_payload_shape_cannot_be_mixed() -> None:
     with pytest.raises(ContractValidationError):
         validate_contract(
