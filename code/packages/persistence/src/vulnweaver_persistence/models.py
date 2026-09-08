@@ -25,6 +25,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     PermissionMode,
+    RunStatus,
     TaskResult,
     TaskStatus,
 )
@@ -166,6 +167,8 @@ jobs = Table(
         nullable=False,
     ),
     Column("kind", String(32), nullable=False),
+    Column("tool", JSONB(none_as_null=True), nullable=True),
+    Column("arguments", JSONB(none_as_null=True), nullable=True),
     Column("input_refs", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
     Column("idempotency_key", String(128), nullable=False),
@@ -302,6 +305,61 @@ task_events = Table(
     CheckConstraint("sequence >= 0", name="sequence_non_negative"),
     UniqueConstraint("task_id", "sequence", name="uq_task_events_task_sequence"),
 )
+
+agent_runs = Table(
+    "agent_runs",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column(
+        "task_id",
+        IDENTIFIER,
+        ForeignKey("tasks.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("model", String(256), nullable=False),
+    Column("prompt_hash", DIGEST, nullable=False),
+    Column("input_refs", JSONB, nullable=False),
+    Column("decisions", JSONB, nullable=False),
+    Column("token_usage", JSONB, nullable=False),
+    Column("duration_ms", Integer, nullable=True),
+    Column("result_refs", JSONB, nullable=True),
+    Column("failure", JSONB(none_as_null=True), nullable=True),
+    Column("run_fingerprint", String(64), nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    Column("updated_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("status", RunStatus, "status"),
+    CheckConstraint("prompt_hash ~ '^sha256:[0-9a-f]{64}$'", name="prompt_sha256_digest"),
+    CheckConstraint("(status = 'failed') = (failure IS NOT NULL)", name="failure_matches_status"),
+    CheckConstraint("duration_ms IS NULL OR duration_ms >= 0", name="duration_non_negative"),
+    UniqueConstraint("task_id", "run_fingerprint", name="uq_agent_runs_task_fingerprint"),
+)
+Index("ix_agent_runs_task_created", agent_runs.c.task_id, agent_runs.c.created_at)
+
+orchestration_checkpoints = Table(
+    "orchestration_checkpoints",
+    metadata,
+    Column(
+        "task_id",
+        IDENTIFIER,
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("sequence", Integer, primary_key=True),
+    Column("node", IDENTIFIER, nullable=False),
+    Column("state", JSONB, nullable=False),
+    Column("state_fingerprint", String(64), nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    CheckConstraint("sequence >= 0", name="sequence_non_negative"),
+)
+Index(
+    "ix_orchestration_checkpoints_task_latest",
+    orchestration_checkpoints.c.task_id,
+    orchestration_checkpoints.c.sequence.desc(),
+)
+
 
 api_requests = Table(
     "api_requests",

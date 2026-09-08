@@ -8,11 +8,12 @@ from enum import StrEnum
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import RowMapping, func, select, update
+from sqlalchemy import RowMapping, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 from vulnweaver_contracts import (
+    AgentRun,
     Artifact,
     ArtifactKind,
     ArtifactVersion,
@@ -24,6 +25,7 @@ from vulnweaver_contracts import (
     PermissionMode,
     Project,
     QueueEvent,
+    RunStatus,
     StructuredFailure,
     Task,
     TaskResult,
@@ -42,11 +44,13 @@ from vulnweaver_persistence.errors import (
 )
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_persistence.models import (
+    agent_runs,
     artifact_versions,
     artifacts,
     job_attempt_failures,
     job_results,
     jobs,
+    orchestration_checkpoints,
     outbox_events,
     projects,
     task_events,
@@ -66,6 +70,22 @@ class TaskCancellationResult:
     task: Task
     changed: bool
     previous_status: TaskStatus
+
+
+@dataclass(frozen=True, slots=True)
+class TaskStatusUpdateResult:
+    task: Task
+    changed: bool
+    previous_status: TaskStatus
+
+
+@dataclass(frozen=True, slots=True)
+class StoredCheckpoint:
+    task_id: str
+    sequence: int
+    node: str
+    state: dict[str, object]
+    created_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +345,45 @@ class TaskRepository:
         ).mappings()
         return [_task_from_row(row) for row in rows]
 
+    async def set_status(
+        self, task_id: str, status: TaskStatus, *, result: TaskResult | None = None
+    ) -> TaskStatusUpdateResult:
+        """Atomically update a task status; repeated target status is idempotent."""
+
+        current_row = (
+            (
+                await self._connection.execute(
+                    select(tasks).where(tasks.c.id == task_id).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if current_row is None:
+            raise EntityNotFound("task not found", details={"task_id": task_id})
+        current = _task_from_row(current_row)
+        previous_status = current["status"]
+        if previous_status is status and current["result"] == result:
+            return TaskStatusUpdateResult(current, False, previous_status)
+        row = (
+            (
+                await self._connection.execute(
+                    update(tasks)
+                    .where(tasks.c.id == task_id)
+                    .values(
+                        status=str(status),
+                        result=str(result) if result is not None else None,
+                        updated_at=func.now(),
+                        state_version=tasks.c.state_version + 1,
+                    )
+                    .returning(*tasks.c)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        return TaskStatusUpdateResult(_task_from_row(row), True, previous_status)
+
     async def cancel(self, task_id: str) -> TaskCancellationResult:
         current_row = (
             (
@@ -368,6 +427,47 @@ class TaskRepository:
 class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
+
+    async def create_without_outbox(self, job: Job) -> CreateResult[Job]:
+        """Create a waiting job without publishing it before permission is granted."""
+
+        validate_contract("Job", job)
+        fingerprint = _job_fingerprint(job)
+        statement = (
+            insert(jobs)
+            .values(_job_values(job, fingerprint))
+            .on_conflict_do_nothing(constraint="uq_jobs_task_idempotency")
+            .returning(jobs.c.id)
+        )
+        try:
+            inserted_id = (await self._connection.execute(statement)).scalar_one_or_none()
+        except IntegrityError as error:
+            raise EntityConflict(
+                "job identifier already exists", details={"job_id": job["id"]}
+            ) from error
+        if inserted_id is not None:
+            return CreateResult(job, True)
+        row = (
+            (
+                await self._connection.execute(
+                    select(jobs).where(
+                        jobs.c.task_id == job["task_id"],
+                        jobs.c.idempotency_key == job["idempotency_key"],
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        if row["request_fingerprint"] != fingerprint:
+            raise IdempotencyConflict(
+                "idempotency key was already used for a different job request",
+                details={
+                    "task_id": job["task_id"],
+                    "idempotency_key": job["idempotency_key"],
+                },
+            )
+        return CreateResult(_job_from_row(row), False)
 
     async def enqueue_with_outbox(self, job: Job, event: JobRequestedEvent) -> JobEnqueueResult:
         """Create a Job and its dispatch event in the caller's single transaction."""
@@ -851,6 +951,122 @@ class JobRepository:
         return row, row["_database_now"]
 
 
+class AgentRunRepository:
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def add(self, run: AgentRun) -> CreateResult[AgentRun]:
+        validate_contract("AgentRun", run)
+        fingerprint = request_fingerprint(run)
+        statement = (
+            insert(agent_runs)
+            .values(_agent_run_values(run, fingerprint))
+            .on_conflict_do_nothing()
+            .returning(agent_runs.c.id)
+        )
+        try:
+            inserted_id = (await self._connection.execute(statement)).scalar_one_or_none()
+        except IntegrityError as error:
+            raise EntityConflict(
+                "AgentRun conflicts with an existing run", details={"run_id": run["id"]}
+            ) from error
+        if inserted_id is not None:
+            return CreateResult(run, True)
+        stored = await self.get(run["id"])
+        if stored != run:
+            raise IdempotencyConflict(
+                "AgentRun identifier was already used for different content",
+                details={"run_id": run["id"]},
+            )
+        return CreateResult(stored, False)
+
+    async def get(self, run_id: str) -> AgentRun:
+        row = (
+            (await self._connection.execute(select(agent_runs).where(agent_runs.c.id == run_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("AgentRun not found", details={"run_id": run_id})
+        return _agent_run_from_row(row)
+
+    async def list_for_task(self, task_id: str) -> list[AgentRun]:
+        rows = (
+            await self._connection.execute(
+                select(agent_runs)
+                .where(agent_runs.c.task_id == task_id)
+                .order_by(agent_runs.c.created_at, agent_runs.c.id)
+            )
+        ).mappings()
+        return [_agent_run_from_row(row) for row in rows]
+
+
+class CheckpointRepository:
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def append(
+        self,
+        task_id: str,
+        node: str,
+        state: dict[str, object],
+        *,
+        created_at: datetime,
+    ) -> StoredCheckpoint:
+        if not node or len(node) > 128:
+            raise ValueError("checkpoint node must be non-empty and at most 128 chars")
+        # Advisory lock serializes sequence allocation for one task without locking
+        # unrelated orchestration runs or relying on an application process lock.
+        await self._connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:task_id, 0))"),
+            {"task_id": task_id},
+        )
+        latest = await self._connection.scalar(
+            select(func.coalesce(func.max(orchestration_checkpoints.c.sequence), -1)).where(
+                orchestration_checkpoints.c.task_id == task_id
+            )
+        )
+        assert latest is not None
+        sequence = int(latest) + 1
+        fingerprint = request_fingerprint({"node": node, "state": state})
+        await self._connection.execute(
+            insert(orchestration_checkpoints).values(
+                task_id=task_id,
+                sequence=sequence,
+                node=node,
+                state=state,
+                state_fingerprint=fingerprint,
+                created_at=created_at,
+            )
+        )
+        return StoredCheckpoint(task_id, sequence, node, state, created_at)
+
+    async def latest(self, task_id: str) -> StoredCheckpoint | None:
+        row = (
+            (
+                await self._connection.execute(
+                    select(orchestration_checkpoints)
+                    .where(orchestration_checkpoints.c.task_id == task_id)
+                    .order_by(orchestration_checkpoints.c.sequence.desc())
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _checkpoint_from_row(row) if row is not None else None
+
+    async def list_for_task(self, task_id: str) -> list[StoredCheckpoint]:
+        rows = (
+            await self._connection.execute(
+                select(orchestration_checkpoints)
+                .where(orchestration_checkpoints.c.task_id == task_id)
+                .order_by(orchestration_checkpoints.c.sequence)
+            )
+        ).mappings()
+        return [_checkpoint_from_row(row) for row in rows]
+
+
 class OutboxRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -1015,6 +1231,8 @@ class Repositories:
     task_events: TaskEventRepository
     api_requests: ApiRequestRepository
     personal_auth: PersonalAuthRepository
+    agent_runs: AgentRunRepository
+    checkpoints: CheckpointRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1025,6 +1243,60 @@ class Repositories:
         object.__setattr__(self, "task_events", TaskEventRepository(connection))
         object.__setattr__(self, "api_requests", ApiRequestRepository(connection))
         object.__setattr__(self, "personal_auth", PersonalAuthRepository(connection))
+        object.__setattr__(self, "agent_runs", AgentRunRepository(connection))
+        object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
+
+
+def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
+    return {
+        "id": run["id"],
+        "task_id": run["task_id"],
+        "schema_version": run["schema_version"],
+        "status": str(run["status"]),
+        "model": run["model"],
+        "prompt_hash": run["prompt_hash"],
+        "input_refs": run["input_refs"],
+        "decisions": run["decisions"],
+        "token_usage": run["token_usage"],
+        "duration_ms": run.get("duration_ms"),
+        "result_refs": run.get("result_refs"),
+        "failure": run["failure"],
+        "run_fingerprint": fingerprint,
+        "created_at": _parse_datetime(run["created_at"]),
+        "updated_at": _parse_datetime(run["updated_at"]),
+    }
+
+
+def _agent_run_from_row(row: RowMapping) -> AgentRun:
+    run = AgentRun(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        task_id=row["task_id"],
+        status=RunStatus(row["status"]),
+        model=row["model"],
+        prompt_hash=row["prompt_hash"],
+        input_refs=row["input_refs"],
+        decisions=row["decisions"],
+        token_usage=row["token_usage"],
+        failure=row["failure"],
+        created_at=_format_datetime(row["created_at"]),
+        updated_at=_format_datetime(row["updated_at"]),
+    )
+    if row["duration_ms"] is not None:
+        run["duration_ms"] = row["duration_ms"]
+    if row["result_refs"] is not None:
+        run["result_refs"] = row["result_refs"]
+    return run
+
+
+def _checkpoint_from_row(row: RowMapping) -> StoredCheckpoint:
+    return StoredCheckpoint(
+        task_id=row["task_id"],
+        sequence=row["sequence"],
+        node=row["node"],
+        state=row["state"],
+        created_at=row["created_at"],
+    )
 
 
 def _project_values(project: Project) -> dict[str, object]:
@@ -1134,6 +1406,8 @@ def _job_fingerprint(job: Job) -> str:
             "schema_version": job["schema_version"],
             "task_id": job["task_id"],
             "kind": job["kind"],
+            "tool": job.get("tool"),
+            "arguments": job.get("arguments"),
             "input_refs": job["input_refs"],
             "resource_budget": job["resource_budget"],
             "retry_policy": job["retry_policy"],
@@ -1153,7 +1427,7 @@ def _job_values(job: Job, fingerprint: str) -> dict[str, object]:
 
 
 def _job_from_row(row: RowMapping) -> Job:
-    return Job(
+    job = Job(
         schema_version=row["schema_version"],
         id=row["id"],
         task_id=row["task_id"],
@@ -1169,6 +1443,11 @@ def _job_from_row(row: RowMapping) -> Job:
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
     )
+    if row["tool"] is not None:
+        job["tool"] = row["tool"]
+    if row["arguments"] is not None:
+        job["arguments"] = row["arguments"]
+    return job
 
 
 def _worker_result_fingerprint(result: WorkerResult) -> str:

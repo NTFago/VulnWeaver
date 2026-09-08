@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环已完成，准备 P2 编排与源码主流程
-- **总体状态**：首个可运行控制面 MVP 已形成；已覆盖认证、项目、工件、任务和实时轨迹，实际分析需继续 T09-T15
-- **最后更新**：2026-09-08
+- **当前阶段**：P2 源码静态分析 MVP 进行中；T12 Review 修复已完成，准备接入静态分析工具
+- **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
+- **最后更新**：2026-09-08 20:31（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支 `feat/t07-api`，基于 `main` 的 `dbc6137`
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配
+- **当前负责人**：未分配；T12 已完成，下一任务包待认领
 
 ## 3. 开发进度
 
@@ -32,6 +32,12 @@
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
 | T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
 | T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
+| Git 分支清理 | 已完成 | Codex | 确认 T06/T07/T08 均已合并到 `origin/main`，本地 `main` 快进到 `673c477`，删除 3 个本地及 3 个远程已完成分支，并清理过期 `origin/pr/5` 引用 | 无 | 2026-09-08 |
+| T09 ToolSpec 与 Policy Engine | 已完成 | Codex | 实现精确版本 Tool Registry、JSON ToolSpec 加载、ActionPlan 校验、结构化策略拒绝/许可等待、资源与安全边界校验及可查询审计记录 | 无；持久化审计后端由后续编排/观测任务接入 | 2026-09-08 |
+| T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 已由 T11 接入 | 2026-09-08 |
+| T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
+| T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
+
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -82,11 +88,83 @@
 | ADR-016 | 最终 WorkerResult 先与 Job 终态事务落库；获准重试的失败按 attempt 追加审计；之后 ACK、保留 pending 或原子转入 dead-letter | 在 PostgreSQL/Redis 无分布式事务时保证结果唯一、失败可追溯并稳定恢复 ACK、死信响应丢失和进程崩溃 | `code/docs/adr/016-worker-result-and-settlement-protocol.md` |
 | ADR-017 | 单个人账号使用 Argon2id、数据库会话、HttpOnly Cookie、会话绑定 CSRF、锁定和幂等改密 | 不引入 RBAC 的前提下建立可多实例、可撤销且抗资源滥用的浏览器认证边界 | `code/docs/adr/017-personal-browser-authentication.md` |
 | ADR-018 | API 只事务登记 `CREATED` Task、`task.requested` 与 Outbox，初始 Job 由编排层创建 | 防止接入层绕过 LangGraph 与 Policy Engine，保持控制面职责边界 | `code/docs/adr/018-task-intake-owned-by-orchestrator.md` |
+| ADR-019 | LangGraph 节点结果追加到 PostgreSQL 检查点；初始 Job/Outbox 使用确定性标识幂等重放；永久结果后 ACK，瞬时失败保留 Pending | 保证 task.requested 至少一次投递下的节点恢复、策略门禁和 Job 唯一性 | `code/docs/adr/019-task-orchestration-checkpoints.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
 
+### 2026-09-08 20:31：完成 T12 Review 正确性修复
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/source-analysis/src/vulnweaver_source_analysis/`、`code/packages/orchestrator/src/vulnweaver_orchestrator/flow.py`、`code/tests/source_analysis/test_source_import.py`、`code/tests/orchestrator/test_orchestrator.py`、`code/deploy/tool-specs/source-import.json`、`DEVELOPMENT_STATUS.md`
+- 已完成：将归档解压、tree-sitter 索引和契约校验移入工作线程，避免阻塞 Worker 心跳；每次索引创建独立 Parser 集合以支持并发线程；在写盘前双向拒绝文件/目录祖先路径冲突；JobKind 改用值比较；仅当 ToolSpec `command_schema.required` 声明 `artifact_version_id` 时自动注入；删除无效的 `InitialJobPolicy.retry_policy`，Job 统一使用所选 ToolSpec 的重试策略。
+- 测试与结果：定向源码分析/编排 PostgreSQL 集成测试 27 个通过；Dev Container `pnpm run check` 与 `uv lock --check` 通过，191 个 pytest 全部通过、总覆盖率 86.77%，Ruff/Pyright/TypeScript/Svelte 均通过；重建 orchestrator/analysis-worker 后服务正常启动，ToolSpec、构建镜像与运行容器摘要一致；真实 Compose 任务得到成功 Import Job、3 文件、3 函数、2 调用边及 C/Python 索引，Job 使用 ToolSpec 的 2 秒退避和 timeout/environment/dependency 重试白名单。
+- 问题：Review #5 所述“对象先于数据库事务写入”是 ADR-012 的既定一致性顺序；派生输出确定且 CAS 按摘要去重，回归确认幂等重放不会增加物理对象。事务失败留下的安全未引用对象继续由后续受控 GC 处理，本次不扩展功能范围。
+- 阻碍点：无。
+- 决策：沿用 ADR-012、ADR-015、ADR-016 和 ADR-019；未引入新的重大架构决策。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
+
+### 2026-09-08 19:34：完成 T12 安全导入与 tree-sitter 源码索引
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/source-import.json`、`code/packages/contracts/`、`code/packages/orchestrator/`、`code/packages/persistence/`、迁移 `0008_job_tool_identity.py`、`code/tests/source_analysis/`、`code/tests/orchestrator/test_orchestrator.py`、`code/compose.yaml`、`code/pyproject.toml`、`code/uv.lock`、`DEVELOPMENT_STATUS.md`
+- 已完成：安全导入 ZIP/TAR，拒绝路径穿越、绝对路径、符号链接、特殊文件、跨平台危险路径、超限文件和压缩炸弹；忽略 Git hooks、`.gitmodules` 且不执行仓库内容；用 tree-sitter 索引 C/C++/Python/Java 文件、摘要、函数/方法、参数、位置和调用关系，生成语言、构建系统与 CapabilityProfile；SourceImportExecutor 从 CAS 读取原工件并登记带父版本、工具版本和镜像摘要的不可变派生索引；修复 Orchestrator 缺少 `vulnweaver-domain` 容器依赖和策略参数未传入 Job 的缺陷；修复派生工件幂等重放的事务中止与非确定时间戳；启用 orchestrator/analysis-worker Compose 服务。
+- 测试与结果：Dev Container `pnpm run check` 与 `uv lock --check` 通过；185 个 pytest 全部通过，总覆盖率 86.55%，Ruff/Pyright/TypeScript/Svelte 均通过；定向 Orchestrator/源码分析 PostgreSQL 测试 21 个通过；镜像构建成功且 ToolSpec 摘要与 `vulnweaver-analysis-worker:dev` 镜像 ID 一致；隔离 Compose 栈完成“HTTP 上传源码 → task.requested → Orchestrator → Import Job → analysis-worker → 派生索引工件”真实链路，样本得到 3 文件、3 函数、1 调用边及 C/Python/CMake 能力信息；服务以非 root、只读根文件系统、移除全部 capabilities、无 Docker Socket 运行。
+- 问题：Task 在首个 Import Job 成功后仍保持 `VALIDATING`，因为 T13-T15 尚未实现后续静态分析、Finding 聚合与 Task 终态；不影响 T12 导入索引验收。
+- 阻碍点：无。
+- 决策：沿用 ADR-012、ADR-015、ADR-016、ADR-018、ADR-019；未引入新的重大架构决策。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
+
+### 2026-09-08：完成 T11 LangGraph 主流程与持久化检查点
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/orchestrator/`、`code/apps/orchestrator/`、`code/packages/persistence/`、迁移 `0007_agent_runs_checkpoints`、`code/tests/orchestrator/`、`code/tests/persistence/test_agent_runs_checkpoints.py`、`code/tests/persistence/test_migrations.py`、`code/pyproject.toml`、`code/uv.lock`、`code/docs/adr/019-task-orchestration-checkpoints.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：建立 LangGraph 输入校验、管线选择、初始策略判定和 Job 持久化节点；从最新 PostgreSQL 检查点之后恢复；以 advisory lock 追加检查点序号；真实消费并 ACK `task.requested`，交替处理 fresh 与 `XAUTOCLAIM` pending；永久失败写 Task 后 ACK，瞬时异常保留 pending；确定性 Job/事件/幂等标识覆盖“Job 已提交、检查点未提交”崩溃窗口；策略许可等待只创建 `waiting_permission` Job，不写执行 Outbox；新增 AgentRun 与检查点 PostgreSQL 仓储；提供只从受信 ToolSpec 目录加载的非 root orchestrator 服务镜像。
+- 测试与结果：Dev Container 内 `pnpm run check` 通过；171 个 pytest 全部通过、总覆盖率 87.53%；Ruff 通过、Pyright 0 错误、TypeScript/Svelte 通过、契约生成漂移检查及 `uv lock --check` 通过；定向 PostgreSQL/Redis 编排与迁移测试 10 个通过；真实 Redis 消费/ACK、持久化中间节点恢复、幂等重放、策略拒绝和许可等待均通过；Dispatcher 迁移镜像将现有数据库升级到 `0007_agent_runs_checkpoints`；`vulnweaver-orchestrator:dev` 构建成功并以 UID 10001 非 root 运行。
+- 问题：具体 Worker ToolSpec 必须携带真实镜像摘要；因此不在 T11 为未交付的分析镜像伪造摘要，Compose 中 orchestrator 服务待 T12/T16 提供对应 ToolSpec 后启用。
+- 阻碍点：无。
+- 决策：ADR-019。
+- 下一步：认领 T12，实现安全归档导入、tree-sitter 函数索引、source-import ToolSpec 与 analysis-worker 镜像，并启用源码编排链路。
+
+### 2026-09-08：完成 T10 模型访问适配与运行记录
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/model-gateway/`、`code/packages/contracts/src/vulnweaver_contracts/schemas/v1/contracts.schema.json`、`code/packages/contracts/src/vulnweaver_contracts/generated.py`、`code/packages/contracts/typescript/index.ts`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/model_gateway/test_model_gateway.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增不依赖厂商 SDK 的 OpenAI 兼容 `chat/completions` HTTP 适配；支持规划、批量审计、复核、报告四类模型档位及远程/本地 fallback；实现有界超时、指数退避重试、全局最小请求间隔限流、HTTP 429/5xx 降级；结构化 JSON 输出契约校验与最多 3 次修复；默认及自定义敏感信息脱敏；安全截断修复上下文；记录提示哈希、输入/结果引用、模型、token、耗时、决策序列和结构化失败到 AgentRun；新增可幂等的内存 AgentRun recorder。AgentRun v1 增加可选 `duration_ms` 与 `result_refs`，保持旧记录兼容。
+- 测试与结果：Dev Container 内 `pnpm run check` 通过；163 个 pytest 全部通过、总覆盖率 87.68%；Ruff 通过、Pyright 0 错误、TypeScript/Svelte 通过、契约生成漂移检查通过、`uv lock --check` 通过；PostgreSQL/Redis 集成测试均通过。
+- 问题：完整检查产生既有 FastAPI/Starlette 上游弃用警告，不影响运行；AgentRun 当前默认内存记录器，数据库迁移和查询适配留给 T11/M17。
+- 阻碍点：无。
+- 决策：AgentRun 新增可选字段而非修改 required 集合，保持 v1 历史任务回放兼容；沿用 ADR-005 的 OpenAI 兼容协议，不引入具体厂商 SDK。
+- 下一步：认领 T11，实现 `task.requested` 消费、LangGraph 编排骨架、检查点和首个经 Policy Engine 校验的 Job。
+
+### 2026-09-08：完成 T09 ToolSpec 与 Policy Engine
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/tool-runtime/`、`code/packages/tool-runtime/pyproject.toml`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/tool_runtime/test_tool_runtime.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增精确 `name` + `version` 注册的不可变 Tool Registry；支持单个/数组/目录 JSON ToolSpec 加载与结构校验；Policy Engine 只接受契约合法 ActionPlan，校验工具注册、参数 Schema、输入工件类型、绝对/穿越路径、命令/容器/提权字段、网络双重白名单、资源预算和审批模式；输出不含任意命令字符串的结构化 `ScheduledToolCall`；每个步骤生成可查询审计记录；`FULL_ACCESS` 仅跳过审批等待，不绕过安全策略。
+- 测试与结果：Dev Container 内定向 9 个测试通过；Ruff 通过；Pyright 0 错误；使用 PostgreSQL/Redis 服务地址运行 `pnpm run check` 通过，156 个 pytest 全部通过、总覆盖率 89.49%，Svelte/TypeScript 通过，`uv lock --check` 通过。
+- 问题：完整检查产生既有 FastAPI/Starlette 上游弃用警告，不影响运行；审计默认使用内存实现，持久化接入留给编排/观测任务。
+- 阻碍点：无。
+- 决策：无新增重大架构决策；沿用公共 v1 ToolSpec/ActionPlan 契约和现有控制面/执行面边界。
+- 下一步：认领 T10，实现 OpenAI 兼容模型访问适配、超时/重试/结构化输出和 AgentRun 运行记录。
+
+### 2026-09-08：清理已合并的本地与远程开发分支
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`DEVELOPMENT_STATUS.md`；Git refs（本地与 `origin`）
+- 已完成：执行 `git fetch --prune origin`；确认 T06、T07、T08 分支均已合并至 `origin/main`；将本地 `main` 快进至 `673c477`；删除本地 `feat/t06-worker-reliability`、`feat/t07-api`、`feat/t08-ui` 及对应远程分支；清理已关闭 PR 的 `origin/pr/5` 跟踪引用
+- 测试与结果：Git 状态、分支合并关系、远程分支列表复核通过；当前仅保留本地 `main` 与远程 `origin/main`
+- 问题：无
+- 阻碍点：无
+- 决策：无新增重大架构决策
+- 下一步：认领 T09，实现 Tool Registry 与 Policy Engine，为 T11 编排提供强制策略门禁
 ### 2026-09-08：完成 T08 Svelte 个人工作台与控制面 MVP
 
 - 负责人：Codex
@@ -273,12 +351,15 @@
 | 2026-09-08 | T06 第二轮正确性修正 | 修复遗留 Ruff B904 后 `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript）与 `uv lock --check` | 通过；135 个测试、90.28% 分支覆盖率、Ruff 0 问题、Pyright 0 错误、TypeScript 通过、锁文件一致 | 未在远端 GitHub Actions runner 实跑，需由 PR 触发 |
 | 2026-09-08 | T07 PR #5 审计修正与认证重构 | `pnpm run check`、`uv lock --check`、Compose 配置解析、`docker compose ... build api` | 通过；147 个测试、89.42% 分支覆盖率（MVP 门槛 80%）、Ruff/Pyright/TypeScript 通过，迁移与真实 PostgreSQL/Redis 集成通过，API 镜像构建成功 | 未推送远程分支，GitHub Actions 待推送后触发 |
 | 2026-09-08 | T08 Svelte 工作台与容器交付 | `pnpm run check`、Web 生产构建、`uv lock --check`、Compose 配置解析与 Web 镜像构建 | 通过；147 个测试、89.45% 覆盖率；Svelte 检查 0 错误/0 警告；生产包与 `vulnweaver-web:dev` 镜像构建成功 | Playwright 真实浏览器 E2E 留待 T22 集中执行 |
+| 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
+| 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
+| 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
 
 ## 10. 下一步
 
-1. 认领 T09，实现版本化 Tool Registry、ToolSpec 加载和 Policy Engine 结构化拒绝。
-2. 并行准备 T10 模型访问适配与运行记录，为 T11 LangGraph 主流程提供两个前置依赖。
-3. T11 完成后将 `task.requested` 转换为经策略校验的初始 Job，使现有工作台展示真实编排进度。
+1. 认领 T13，实现 Semgrep/cppcheck 适配、结构化工具结果和能力缺失原因。
+2. 扩展编排链路，在源码导入 Job 成功后按 CapabilityProfile 调度静态分析 Job。
+3. T13 完成后继续 T14 PAIR 源码导入与查询。
 
 ## 11. 每次工作结束时的更新模板
 

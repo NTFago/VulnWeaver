@@ -207,6 +207,64 @@
         "end_column": {"type": "integer", "minimum": 1}
       }
     },
+    "SourceFileRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "size_bytes", "digest", "language", "parse_status"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "language": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "parse_status": {"type": "string", "enum": ["indexed", "unsupported", "binary", "too_large", "parse_error"]}
+      }
+    },
+    "SourceParameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 512},
+        "type": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 1024}, {"type": "null"}]}
+      }
+    },
+    "SourceFunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "qualified_name", "kind", "language", "parameters", "location"],
+      "properties": {
+        "id": {"$ref": "#/$defs/Identifier"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 512},
+        "qualified_name": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "kind": {"type": "string", "enum": ["function", "method", "constructor"]},
+        "language": {"type": "string", "minLength": 1, "maxLength": 128},
+        "parameters": {"type": "array", "items": {"$ref": "#/$defs/SourceParameter"}},
+        "location": {"$ref": "#/$defs/SourceLocation"}
+      }
+    },
+    "SourceCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caller_id", "callee", "location"],
+      "properties": {
+        "caller_id": {"$ref": "#/$defs/Identifier"},
+        "callee": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "location": {"$ref": "#/$defs/SourceLocation"}
+      }
+    },
+    "SourceImportResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "files", "functions", "calls", "capability_profile"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/SourceFileRecord"}},
+        "functions": {"type": "array", "items": {"$ref": "#/$defs/SourceFunction"}},
+        "calls": {"type": "array", "items": {"$ref": "#/$defs/SourceCall"}},
+        "capability_profile": {"$ref": "#/$defs/CapabilityProfile"}
+      }
+    },
     "BinaryLocation": {
       "type": "object",
       "additionalProperties": false,
@@ -324,6 +382,8 @@
         "id": {"$ref": "#/$defs/Identifier"},
         "task_id": {"$ref": "#/$defs/Identifier"},
         "kind": {"$ref": "#/$defs/JobKind"},
+        "tool": {"$ref": "#/$defs/ToolIdentity"},
+        "arguments": {"$ref": "#/$defs/JsonObject"},
         "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
         "status": {"$ref": "#/$defs/JobStatus"},
         "idempotency_key": {"$ref": "#/$defs/IdempotencyKey"},
@@ -350,6 +410,8 @@
         "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
         "decisions": {"type": "array", "items": {"$ref": "#/$defs/DecisionRecord"}},
         "token_usage": {"$ref": "#/$defs/TokenUsage"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "result_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ObjectReference"}},
         "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
         "created_at": {"type": "string", "format": "date-time"},
         "updated_at": {"type": "string", "format": "date-time"}
@@ -828,6 +890,7 @@
     {"$ref": "#/$defs/ActionPlan"},
     {"$ref": "#/$defs/ToolSpec"},
     {"$ref": "#/$defs/CapabilityProfile"},
+    {"$ref": "#/$defs/SourceImportResult"},
     {"$ref": "#/$defs/QueueEvent"},
     {"$ref": "#/$defs/ErrorResponse"},
     {"$ref": "#/$defs/CreateProjectRequest"},

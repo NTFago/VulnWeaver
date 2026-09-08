@@ -1,0 +1,29 @@
+[project]
+name = "vulnweaver-source-analysis"
+version = "0.1.0"
+description = "Safe source import and tree-sitter indexing for VulnWeaver"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-c>=0.24,<1",
+    "tree-sitter-cpp>=0.23,<1",
+    "tree-sitter-java>=0.23,<1",
+    "tree-sitter-python>=0.23,<1",
+    "vulnweaver-artifact-store",
+    "vulnweaver-contracts",
+    "vulnweaver-persistence",
+    "vulnweaver-worker",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-artifact-store = { workspace = true }
+vulnweaver-contracts = { workspace = true }
+vulnweaver-persistence = { workspace = true }
+vulnweaver-worker = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_source_analysis"

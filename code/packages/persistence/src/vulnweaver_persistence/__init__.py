@@ -13,6 +13,7 @@ from vulnweaver_persistence.migrations import downgrade_database, upgrade_databa
 from vulnweaver_persistence.models import metadata
 from vulnweaver_persistence.personal_auth import PersonalAccount, PersonalSession
 from vulnweaver_persistence.repositories import (
+    AgentRunRepository,
     CreateResult,
     JobAttemptFailure,
     JobCompletionResult,
@@ -21,10 +22,13 @@ from vulnweaver_persistence.repositories import (
     JobLeaseClaimOutcome,
     OutboxMessage,
     Repositories,
+    StoredCheckpoint,
     TaskCancellationResult,
+    TaskStatusUpdateResult,
 )
 
 __all__ = [
+    "AgentRunRepository",
     "CreateResult",
     "Database",
     "DatabaseSettings",
@@ -38,6 +42,8 @@ __all__ = [
     "JobLeaseClaimOutcome",
     "JobLeaseConflict",
     "OutboxMessage",
+    "StoredCheckpoint",
+    "TaskStatusUpdateResult",
     "PersonalAccount",
     "PersonalSession",
     "PersistenceError",
