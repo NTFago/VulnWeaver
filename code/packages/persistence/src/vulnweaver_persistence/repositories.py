@@ -46,7 +46,6 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
-from vulnweaver_domain import ConfirmationContext, evaluate_confirmation, transition_finding
 
 from vulnweaver_persistence.api_requests import ApiRequestRepository
 from vulnweaver_persistence.errors import (
@@ -1341,21 +1340,16 @@ class FindingRepository:
         self,
         review: Review,
         *,
-        confirmation: ConfirmationContext | None = None,
+        confirmation_allowed: bool = False,
     ) -> Review:
         validate_contract("Review", review)
         finding = await self.get(review["finding_id"])
         target = review["outcome"]
-        if target.value == "confirmed":
-            if confirmation is None:
-                raise PersistenceInvariantError(
-                    "finding confirmation requires an evaluated evidence context",
-                    details={"finding_id": finding["id"]},
-                )
-            decision = evaluate_confirmation(confirmation)
-            transition_finding(finding["status"], target, confirmation=decision)
-        else:
-            transition_finding(finding["status"], target)
+        if target.value == "confirmed" and not confirmation_allowed:
+            raise PersistenceInvariantError(
+                "finding confirmation requires an evaluated evidence context",
+                details={"finding_id": finding["id"]},
+            )
         values = {
             **review,
             "schema_version": str(review["schema_version"]),

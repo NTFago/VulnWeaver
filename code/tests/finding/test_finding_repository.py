@@ -17,7 +17,6 @@ from vulnweaver_contracts import (
     Severity,
     ToolIdentity,
 )
-from vulnweaver_domain import ConfirmationContext, EvidenceAssessment
 from vulnweaver_persistence import Database, DatabaseSettings, PersistenceInvariantError
 
 from tests.persistence.factories import artifact, artifact_version, project, task
@@ -129,7 +128,7 @@ def test_candidate_finding_and_evidence_link_are_idempotent(
                         "id": "review:finding",
                         "finding_id": finding["id"],
                         "outcome": FindingStatus.CONFIRMED,
-                        "rationale": "Independent review agrees with the tool evidence.",
+                        "rationale": "Independent review agrees with the evidence.",
                         "model": "review-model",
                         "supersedes_review_id": None,
                         "created_at": "2026-09-08T10:01:00Z",
@@ -137,20 +136,7 @@ def test_candidate_finding_and_evidence_link_are_idempotent(
                 )
                 with pytest.raises(PersistenceInvariantError):
                     await repositories.findings.add_review(review)
-                await repositories.findings.add_review(
-                    review,
-                    confirmation=ConfirmationContext(
-                        category=FindingCategory.STATIC_ONLY,
-                        evidence=(
-                            EvidenceAssessment(
-                                EvidenceType.TOOL_OUTPUT, EvidenceStrength.STRONG, True
-                            ),
-                        ),
-                        established_facts=frozenset(
-                            {"independent_tool_evidence", "independent_review_agreement"}
-                        ),
-                    ),
-                )
+                await repositories.findings.add_review(review, confirmation_allowed=True)
                 assert (await repositories.findings.get(finding["id"]))[
                     "status"
                 ] is FindingStatus.CONFIRMED
