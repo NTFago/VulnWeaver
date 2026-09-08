@@ -136,6 +136,27 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  web:
+    image: vulnweaver-web:dev
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-https://registry.npmmirror.com}
+    depends_on:
+      - api
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
 networks:
   control-plane:
     driver: bridge

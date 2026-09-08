@@ -1,3 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  # Vite's compiler binary; the exact version is locked in pnpm-lock.yaml.
+  esbuild: true
