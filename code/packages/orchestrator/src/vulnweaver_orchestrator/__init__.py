@@ -13,6 +13,12 @@ from vulnweaver_orchestrator.flow import (
     Orchestrator,
     OrchestratorSettings,
 )
+from vulnweaver_orchestrator.reviews import (
+    FindingReviewGate,
+    ReviewEvidenceFact,
+    ReviewFactContext,
+    ReviewGateResult,
+)
 
 __all__ = [
     "Checkpoint",
@@ -24,4 +30,8 @@ __all__ = [
     "Orchestrator",
     "OrchestratorSettings",
     "PostgresCheckpointStore",
+    "FindingReviewGate",
+    "ReviewEvidenceFact",
+    "ReviewFactContext",
+    "ReviewGateResult",
 ]

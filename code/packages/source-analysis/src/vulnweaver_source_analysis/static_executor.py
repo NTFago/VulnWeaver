@@ -44,6 +44,7 @@ from vulnweaver_persistence import (
 )
 
 from vulnweaver_source_analysis.archive import SafeArchiveImporter, SourceImportError
+from vulnweaver_source_analysis.finding_projection import StaticFindingProjector
 from vulnweaver_source_analysis.static_tools import (
     CppcheckAdapter,
     SemgrepAdapter,
@@ -80,6 +81,7 @@ class StaticAnalysisExecutor:
         importer: SafeArchiveImporter | None = None,
         adapters: Mapping[str, StaticToolAdapter] | None = None,
         scratch_root: str | Path | None = None,
+        finding_projector: StaticFindingProjector | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -88,6 +90,7 @@ class StaticAnalysisExecutor:
             adapters or {"semgrep": SemgrepAdapter(), "cppcheck": CppcheckAdapter()}
         )
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
+        self._finding_projector = finding_projector or StaticFindingProjector(database)
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         try:
@@ -186,19 +189,20 @@ class StaticAnalysisExecutor:
             )
             validate_contract("StaticAnalysisResult", result)
             derived_version_id = _stable_identifier("artifact-version", job["id"])
-            await self._publish_result(
+            result_version = await self._publish_result(
                 job,
                 result,
                 artifact_version_id,
                 source_index_version_id,
                 derived_version_id,
             )
+            projection = await self._finding_projector.project(job, result, result_version)
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
                 status=JobStatus.SUCCEEDED,
                 produced_artifact_version_ids=[derived_version_id],
-                evidence_ids=[],
+                evidence_ids=list(projection.evidence_ids),
                 failure=None,
             )
         finally:
@@ -243,7 +247,7 @@ class StaticAnalysisExecutor:
         parent_version_id: str,
         source_index_version_id: str,
         version_id: str,
-    ) -> None:
+    ) -> ArtifactVersion:
         encoded = json.dumps(
             result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode()
@@ -282,6 +286,7 @@ class StaticAnalysisExecutor:
                 validate_contract("ArtifactVersion", version)
                 await repositories.artifacts.add(artifact)
                 await repositories.artifacts.add_version(version)
+                return version
         except EntityNotFound as error:
             raise StaticAnalysisExecutionError(
                 "static_analysis.parent_artifact_missing",
@@ -301,6 +306,7 @@ class StaticAnalysisExecutor:
                         "deterministic static result conflicts with existing metadata",
                         kind=FailureKind.INTERNAL,
                     ) from error
+                return existing
 
 
 class StaticAnalysisScheduler:

@@ -12,6 +12,10 @@ from vulnweaver_source_analysis.executor import (
     SourceImportExecutionError,
     SourceImportExecutor,
 )
+from vulnweaver_source_analysis.finding_projection import (
+    StaticFindingProjection,
+    StaticFindingProjector,
+)
 from vulnweaver_source_analysis.indexer import SourceIndexer, SourceIndexerSettings
 from vulnweaver_source_analysis.static_executor import (
     StaticAnalysisExecutionError,
@@ -42,6 +46,8 @@ __all__ = [
     "StaticAnalysisExecutionError",
     "StaticAnalysisExecutor",
     "StaticAnalysisScheduler",
+    "StaticFindingProjection",
+    "StaticFindingProjector",
     "StaticToolOutput",
     "parse_cppcheck_output",
     "parse_semgrep_output",

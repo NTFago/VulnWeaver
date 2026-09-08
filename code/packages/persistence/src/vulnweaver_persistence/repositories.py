@@ -18,6 +18,7 @@ from vulnweaver_contracts import (
     ArtifactKind,
     ArtifactVersion,
     Evidence,
+    EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
     Finding,
@@ -1324,9 +1325,106 @@ class FindingRepository:
             return existing
         return canonical
 
+    async def upsert_candidate(self, finding: Finding) -> Finding:
+        """Create a normalized candidate or merge stronger tool severity/confidence.
+
+        The deterministic identifier is owned by the projection layer.  All semantic
+        identity fields must remain equal; only severity and confidence can be
+        promoted as additional tools report the same candidate.  Review state and
+        existing evidence links are never reset by a later tool result.
+        """
+
+        validate_contract("Finding", finding)
+        if finding["status"] is not FindingStatus.CANDIDATE:
+            raise PersistenceInvariantError(
+                "candidate upsert only accepts candidate findings",
+                details={"finding_id": finding["id"]},
+            )
+        canonical = cast(
+            Finding,
+            {**finding, "created_at": _canonical_timestamp(finding["created_at"])},
+        )
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "category": str(canonical["category"]),
+            "severity": str(canonical["severity"]),
+            "status": str(canonical["status"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        inserted_id = (
+            await self._connection.execute(
+                insert(findings)
+                .values(values)
+                .on_conflict_do_nothing(index_elements=["id"])
+                .returning(findings.c.id)
+            )
+        ).scalar_one_or_none()
+        if inserted_id is not None:
+            return canonical
+
+        row = (
+            (
+                await self._connection.execute(
+                    select(findings)
+                    .where(findings.c.id == canonical["id"])
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one()
+        )
+        existing = _finding_from_row(row)
+        identity_fields = (
+            "schema_version",
+            "task_id",
+            "category",
+            "cwe_id",
+            "title",
+            "location",
+            "dataflow",
+            "fix_suggestion",
+        )
+        if any(existing[field] != canonical[field] for field in identity_fields):
+            raise EntityConflict(
+                "finding identifier conflicts with a different normalized candidate",
+                details={"finding_id": canonical["id"]},
+            )
+
+        severity = max(
+            (existing["severity"], canonical["severity"]),
+            key=_severity_rank,
+        )
+        confidence = max(existing["confidence"], canonical["confidence"])
+        if severity != existing["severity"] or confidence != existing["confidence"]:
+            await self._connection.execute(
+                update(findings)
+                .where(findings.c.id == canonical["id"])
+                .values(severity=str(severity), confidence=confidence)
+            )
+            existing = cast(
+                Finding,
+                {**existing, "severity": severity, "confidence": confidence},
+            )
+        return existing
+
     async def get(self, finding_id: str) -> Finding:
         row = (
             (await self._connection.execute(select(findings).where(findings.c.id == finding_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("finding not found", details={"finding_id": finding_id})
+        return _finding_from_row(row)
+
+    async def lock_for_review(self, finding_id: str) -> Finding:
+        row = (
+            (
+                await self._connection.execute(
+                    select(findings).where(findings.c.id == finding_id).with_for_update()
+                )
+            )
             .mappings()
             .one_or_none()
         )
@@ -1423,18 +1521,62 @@ class FindingRepository:
 
     async def link_evidence(self, relation: FindingEvidence) -> FindingEvidence:
         validate_contract("FindingEvidence", relation)
+        canonical = cast(
+            FindingEvidence,
+            {**relation, "created_at": _canonical_timestamp(relation["created_at"])},
+        )
+        finding_row = (
+            await self._connection.execute(
+                select(findings.c.id)
+                .where(findings.c.id == canonical["finding_id"])
+                .with_for_update()
+            )
+        ).one_or_none()
+        if finding_row is None:
+            raise EntityNotFound(
+                "finding not found", details={"finding_id": canonical["finding_id"]}
+            )
         values = {
-            **relation,
-            "schema_version": str(relation["schema_version"]),
-            "relation": str(relation["relation"]),
-            "created_at": _parse_datetime(relation["created_at"]),
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "relation": str(canonical["relation"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
         }
         await self._connection.execute(
             insert(finding_evidence)
             .values(values)
             .on_conflict_do_nothing(index_elements=["finding_id", "evidence_id", "relation"])
         )
-        return relation
+        evidence_ids = list(
+            (
+                await self._connection.execute(
+                    select(finding_evidence.c.evidence_id)
+                    .where(finding_evidence.c.finding_id == canonical["finding_id"])
+                    .distinct()
+                    .order_by(finding_evidence.c.evidence_id)
+                )
+            ).scalars()
+        )
+        await self._connection.execute(
+            update(findings)
+            .where(findings.c.id == canonical["finding_id"])
+            .values(evidence_ids=evidence_ids)
+        )
+        return canonical
+
+    async def list_evidence_relations(self, finding_id: str) -> list[FindingEvidence]:
+        rows = (
+            await self._connection.execute(
+                select(finding_evidence)
+                .where(finding_evidence.c.finding_id == finding_id)
+                .order_by(
+                    finding_evidence.c.created_at,
+                    finding_evidence.c.evidence_id,
+                    finding_evidence.c.relation,
+                )
+            )
+        ).mappings()
+        return [_finding_evidence_from_row(row) for row in rows]
 
 
 class PairRepository:
@@ -1864,6 +2006,18 @@ def _evidence_from_row(row: RowMapping) -> Evidence:
     )
 
 
+def _finding_evidence_from_row(row: RowMapping) -> FindingEvidence:
+    return FindingEvidence(
+        schema_version=row["schema_version"],
+        finding_id=row["finding_id"],
+        evidence_id=row["evidence_id"],
+        relation=EvidenceRelation(row["relation"]),
+        weight=float(row["weight"]),
+        created_by=row["created_by"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
 def _pair_function_from_row(row: RowMapping) -> PairFunction:
     return PairFunction(
         schema_version=row["schema_version"],
@@ -2132,6 +2286,16 @@ def _parse_datetime(value: str) -> datetime:
 
 def _canonical_timestamp(value: str) -> str:
     return _format_datetime(_parse_datetime(value))
+
+
+def _severity_rank(value: Severity) -> int:
+    return {
+        Severity.INFO: 0,
+        Severity.LOW: 1,
+        Severity.MEDIUM: 2,
+        Severity.HIGH: 3,
+        Severity.CRITICAL: 4,
+    }[value]
 
 
 def _format_datetime(value: datetime) -> str:

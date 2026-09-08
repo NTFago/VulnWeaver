@@ -10,8 +10,8 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
-- **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入、静态工具和 PAIR 源码查询链路已形成；正在建设 Finding、Evidence 与独立复核路径
-- **最后更新**：2026-09-09 00:40（Asia/Shanghai）
+- **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入、静态工具和 PAIR 源码查询链路已形成；静态诊断现可确定性投影为 Finding/Evidence，编排层已建立独立复核事实上下文与确认门禁
+- **最后更新**：2026-09-09 01:21（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支为 `feat/t15-finding`，未推送或合并本轮修复
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -40,7 +40,7 @@
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
-| T15 Finding、Evidence 与复核 | 进行中 | Codex | 已完成 Evidence `0010`、候选 Finding/FindingEvidence `0011`、Review 历史 `0012` 关系表与仓储；Review 默认拒绝无确认授权的 `confirmed` 状态，保留 Review 历史并更新 Finding 状态；容器内迁移/策略定向测试通过 | 将领域 ConfirmationContext 从编排层接入 Review，并实现 StaticAnalysisResult/PAIR 到候选 Finding/Evidence 的投影 | 2026-09-08 |
+| T15 Finding、Evidence 与复核 | 进行中 | Codex | 已完成 Evidence `0010`、候选 Finding/FindingEvidence `0011`、Review 历史 `0012` 及关系枚举修正 `0013`；`StaticAnalysisResult` 现按任务/CWE/精确位置投影并跨工具去重，Evidence 固化结果工件、命令摘要和 PAIR 函数/节点/边快照；编排层从锁定快照生成无审计推理文本的独立复核事实包，并以领域 ConfirmationContext 门禁 Review | 接入 review 模型档位的结构化独立复核调用，将 Review 结论登记为 Evidence；完成 Task 聚合状态更新与人工 Annotation | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 
 
@@ -98,6 +98,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 01:21：完成 T15 静态候选投影与独立复核确认门禁
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/source-analysis/`、`code/packages/orchestrator/`、`code/packages/persistence/`、`code/tests/source_analysis/`、`code/tests/orchestrator/`、`code/tests/finding/`、`DEVELOPMENT_STATUS.md`
+- 已完成：静态诊断按任务、CWE 与精确位置生成稳定候选身份；同一 Job 重放幂等，Semgrep/cppcheck 同位置候选合并并提升严重度；每条诊断登记 supporting Evidence，保存结果工件摘要、固定命令摘要与 PAIR 邻域快照；FindingEvidence 列表与 Finding 聚合 ID 同步；新增隔离复核事实包，过滤模型解释和自由叙述，并在事务锁内调用领域确认策略后写入 Review；修正 `contextual` 关系数据库约束
+- 测试与结果：Dev Container `pnpm run check` 通过，209 个测试全部通过、总覆盖率 86.10%，Ruff/Pyright/TypeScript/Svelte 均通过；`uv lock --check`、Compose 配置、`0013` 迁移、analysis-worker/dispatcher 镜像构建通过；开发库 revision 为 `0013_finding_evidence_contextual`
+- 问题：本机 uv 仍受 Q-003 影响，本轮依既定方案在 Dev Container 验证；无新增问题
+- 阻碍点：无
+- 决策：无新增重大架构决策；沿用证据驱动确认与上下文隔离约束
+- 下一步：在 orchestrator 使用 review 模型档位消费 `ReviewFactContext` 的结构化事实，保存 AgentRun/ReviewConclusion Evidence，并聚合 Task 状态。
 
 ### 2026-09-09 00:40：完成 T15-R1 静态分析与 PAIR 审计修正
 
@@ -459,12 +471,13 @@
 | 2026-09-08 | T13 静态工具与 Job 链路 | 变更文件 Ruff/Pyright；契约 TypeScript `tsc --noEmit`；契约、静态适配、调度、源码导入定向测试；Windows Selector 下全量 pytest；`uv lock --check`；Compose 配置解析与 `docker compose ... build analysis-worker`；容器内 Semgrep/cppcheck 样本扫描 | 通过；Ruff 全仓库、Pyright 变更文件、TypeScript 契约均无错误；30 个定向测试、196 个全量测试通过；镜像和真实工具扫描通过 | 未在远端 GitHub Actions runner 实跑；T14/T15 尚未覆盖 PAIR/Finding 消费 |
 | 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
 | 2026-09-09 | T15-R1 静态分析与 PAIR 审计修正 | 定向 PostgreSQL/静态工具测试；Dev Container `pnpm run check`；Compose config；analysis-worker 构建、网络检查及内外连通性探测 | 通过；33 个定向集成测试；全量 208 个测试、85.79% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；Worker 可访问内部 PostgreSQL且外网不可达 | 远端 CI 尚未运行 |
+| 2026-09-09 | T15 静态候选投影与独立复核门禁 | 定向 Finding/Orchestrator/迁移测试；Dev Container `pnpm run check`；`uv lock --check`；Compose 配置、迁移与镜像构建 | 通过；209 个全量测试、86.10% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；`0013` 升降级、跨工具去重、重放幂等、PAIR 快照和强证据确认门禁通过 | review 模型实际调用、ReviewConclusion Evidence、Task 聚合与远端 CI 尚未执行 |
 
 ## 10. 下一步
 
-1. 继续 T15，将 `StaticAnalysisResult` 与 PAIR 函数/边引用接入候选 Finding/Evidence 生成。
-2. 在编排层生成 ConfirmationContext 并调用 Review 门禁。
-3. 实现独立复核上下文、证据快照和 Task 聚合状态更新。
+1. 继续 T15，在 orchestrator 使用 review 模型档位对 `ReviewFactContext` 执行结构化独立复核，并保存 AgentRun、Review 与 ReviewConclusion Evidence。
+2. 根据 Job/Finding/Review 结果聚合 Task 状态，确保部分成功落为 `PARTIAL` 且已登记证据不被清除。
+3. 实现函数/Finding 人工 Annotation 后核对 M15 验收标准。
 
 ## 11. 每次工作结束时的更新模板
 
