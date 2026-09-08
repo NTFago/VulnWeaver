@@ -34,6 +34,7 @@ from vulnweaver_tool_runtime import (
     PolicyContext,
     PolicyDecisionStatus,
     PolicyEngine,
+    ToolNotFound,
     ToolRegistry,
 )
 
@@ -77,16 +78,6 @@ class InitialJobPolicy:
     binary_job_kind: JobKind = JobKind.IMPORT
     source_arguments: Mapping[str, object] = field(default_factory=_empty_arguments)
     binary_arguments: Mapping[str, object] = field(default_factory=_empty_arguments)
-    retry_policy: RetryPolicy = field(
-        default_factory=lambda: {
-            "max_attempts": 2,
-            "backoff_seconds": 1.0,
-            "retryable_failure_kinds": [FailureKind.TIMEOUT, FailureKind.ENVIRONMENT],
-        }
-    )
-
-    def __post_init__(self) -> None:
-        validate_contract("RetryPolicy", self.retry_policy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,9 +250,7 @@ class Orchestrator:
                 retryable=True,
                 details={"error_type": type(error).__name__},
             )
-            return OrchestrationResult(
-                task_id, None, False, False, "retryable_failure", failure
-            )
+            return OrchestrationResult(task_id, None, False, False, "retryable_failure", failure)
 
     async def _latest_checkpoint(self, task_id: str):
         if self._checkpoints is None:
@@ -385,8 +374,13 @@ class Orchestrator:
         return cast(FlowState, next_state)
 
     async def _authorize_initial_job(self, state: FlowState) -> FlowState:
-        tool_arguments = dict(state["tool_arguments"])
-        tool_arguments.setdefault("artifact_version_id", state["artifact_version_ids"][0])
+        try:
+            spec = self._registry.resolve(state["tool_name"], state["tool_version"])
+        except ToolNotFound:
+            spec = None
+            tool_arguments = dict(state["tool_arguments"])
+        else:
+            tool_arguments = _initial_tool_arguments(state, spec["command_schema"])
         plan = {
             "schema_version": SchemaVersion.VALUE_1_0_0,
             "id": _stable_identifier("plan", state["task_id"], "initial"),
@@ -413,7 +407,7 @@ class Orchestrator:
                 permission_mode=PermissionMode(state["permission_mode"]),
             ),
         )
-        if decision.status is PolicyDecisionStatus.DENIED:
+        if decision.status is PolicyDecisionStatus.DENIED or spec is None:
             raise OrchestrationError(
                 _failure(
                     "initial_job_policy_denied",
@@ -422,7 +416,6 @@ class Orchestrator:
                     details={"reason_codes": list(decision.reason_codes)},
                 )
             )
-        spec = self._registry.resolve(state["tool_name"], state["tool_version"])
         next_state = {
             **state,
             "tool_image_digest": spec["image_digest"],
@@ -445,8 +438,7 @@ class Orchestrator:
             else JobStatus.QUEUED
         )
         spec = self._registry.resolve(state["tool_name"], state["tool_version"])
-        tool_arguments = dict(state["tool_arguments"])
-        tool_arguments.setdefault("artifact_version_id", state["artifact_version_ids"][0])
+        tool_arguments = _initial_tool_arguments(state, spec["command_schema"])
         job = Job(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=job_id,
@@ -512,9 +504,7 @@ class Orchestrator:
                 created_at=_timestamp(self._clock()),
             )
 
-    async def _fail_task(
-        self, task_id: str, failure: StructuredFailure, causation_id: str
-    ) -> None:
+    async def _fail_task(self, task_id: str, failure: StructuredFailure, causation_id: str) -> None:
         async with self._database.transaction() as repositories:
             try:
                 task = await repositories.tasks.get(task_id)
@@ -614,6 +604,16 @@ def _failure(
         retryable=retryable,
         details=cast(JsonObject, dict(details or {})),
     )
+
+
+def _initial_tool_arguments(
+    state: FlowState, command_schema: Mapping[str, object]
+) -> dict[str, object]:
+    arguments = dict(state["tool_arguments"])
+    required = command_schema.get("required")
+    if isinstance(required, list) and "artifact_version_id" in required:
+        arguments.setdefault("artifact_version_id", state["artifact_version_ids"][0])
+    return arguments
 
 
 def _stable_identifier(prefix: str, *parts: str) -> str:

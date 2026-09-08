@@ -85,36 +85,6 @@ _BUILD_FILES: dict[str, str] = {
 class SourceIndexer:
     def __init__(self, settings: SourceIndexerSettings | None = None) -> None:
         self._settings = settings or SourceIndexerSettings()
-        self._languages = {
-            "c": _config(
-                "c",
-                tree_sitter_c.language(),
-                {"function_definition"},
-                {"call_expression"},
-                {"struct_specifier", "union_specifier"},
-            ),
-            "cpp": _config(
-                "cpp",
-                tree_sitter_cpp.language(),
-                {"function_definition"},
-                {"call_expression"},
-                {"class_specifier", "struct_specifier", "namespace_definition"},
-            ),
-            "python": _config(
-                "python",
-                tree_sitter_python.language(),
-                {"function_definition"},
-                {"call"},
-                {"class_definition"},
-            ),
-            "java": _config(
-                "java",
-                tree_sitter_java.language(),
-                {"method_declaration", "constructor_declaration"},
-                {"method_invocation", "object_creation_expression"},
-                {"class_declaration", "interface_declaration", "enum_declaration"},
-            ),
-        }
 
     def index(
         self,
@@ -132,6 +102,7 @@ class SourceIndexer:
         languages: set[str] = set()
         build_systems: set[str] = set()
         parse_errors: dict[str, int] = {}
+        languages_config = _language_configs()
 
         paths = sorted(path for path in source_root.rglob("*") if path.is_file())
         if len(paths) > self._settings.max_files:
@@ -158,7 +129,7 @@ class SourceIndexer:
             if len(data) > self._settings.max_parse_bytes:
                 files.append(_file_record(relative, len(data), digest, language, "too_large"))
                 continue
-            config = self._languages[language]
+            config = languages_config[language]
             tree = config.parser.parse(data)
             status: Literal["indexed", "parse_error"] = (
                 "parse_error" if tree.root_node.has_error else "indexed"
@@ -244,6 +215,41 @@ def _config(
         frozenset(call_types),
         frozenset(class_types),
     )
+
+
+def _language_configs() -> dict[str, _LanguageConfig]:
+    # Parser instances are scoped to one index operation because one executor can
+    # serve multiple jobs concurrently in separate worker threads.
+    return {
+        "c": _config(
+            "c",
+            tree_sitter_c.language(),
+            {"function_definition"},
+            {"call_expression"},
+            {"struct_specifier", "union_specifier"},
+        ),
+        "cpp": _config(
+            "cpp",
+            tree_sitter_cpp.language(),
+            {"function_definition"},
+            {"call_expression"},
+            {"class_specifier", "struct_specifier", "namespace_definition"},
+        ),
+        "python": _config(
+            "python",
+            tree_sitter_python.language(),
+            {"function_definition"},
+            {"call"},
+            {"class_definition"},
+        ),
+        "java": _config(
+            "java",
+            tree_sitter_java.language(),
+            {"method_declaration", "constructor_declaration"},
+            {"method_invocation", "object_creation_expression"},
+            {"class_declaration", "interface_declaration", "enum_declaration"},
+        ),
+    }
 
 
 def _source_function(
@@ -481,9 +487,7 @@ def _capability_profile(
             capabilities.append(
                 Capability(
                     name=f"tree_sitter_{language}",
-                    status=(
-                        CapabilityStatus.UNAVAILABLE if errors else CapabilityStatus.AVAILABLE
-                    ),
+                    status=(CapabilityStatus.UNAVAILABLE if errors else CapabilityStatus.AVAILABLE),
                     tool_name="source-import",
                     reason=(f"parse_errors:{errors}" if errors else None),
                 )

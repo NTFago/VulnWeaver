@@ -4,9 +4,10 @@ import asyncio
 import io
 import stat
 import tarfile
+import time
 import zipfile
 from pathlib import Path
-from typing import cast
+from typing import BinaryIO, cast
 
 import pytest
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -16,11 +17,14 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     SchemaVersion,
+    SourceImportResult,
     validate_contract,
 )
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_source_analysis import (
+    ArchiveFormat,
     ImportLimits,
+    ImportSummary,
     SafeArchiveImporter,
     SourceImportError,
     SourceImportExecutor,
@@ -38,6 +42,77 @@ def zip_bytes(files: dict[str, bytes]) -> io.BytesIO:
             archive.writestr(name, content)
     output.seek(0)
     return output
+
+
+def executor_job(object_ref: str, *, kind: JobKind | str = JobKind.IMPORT) -> Job:
+    return cast(
+        Job,
+        {
+            "schema_version": SchemaVersion.VALUE_1_0_0,
+            "id": "job:t12-async",
+            "task_id": "task:t12-async",
+            "kind": kind,
+            "tool": {
+                "name": "source-import",
+                "version": "1.0.0",
+                "image_digest": "sha256:" + "1" * 64,
+            },
+            "arguments": {"artifact_version_id": "artifact-version:t12-async"},
+            "input_refs": [object_ref],
+            "status": JobStatus.RUNNING,
+            "idempotency_key": "job:t12-async-key",
+            "resource_budget": budget(),
+            "retry_policy": {
+                "max_attempts": 2,
+                "backoff_seconds": 1.0,
+                "retryable_failure_kinds": [],
+            },
+            "attempt": 1,
+            "lease": None,
+            "failure": None,
+            "created_at": "2026-09-08T10:00:00Z",
+            "updated_at": "2026-09-08T10:00:00Z",
+        },
+    )
+
+
+class SlowImporter(SafeArchiveImporter):
+    def extract(
+        self,
+        source: BinaryIO,
+        destination: str | Path,
+        *,
+        filename: str | None = None,
+    ) -> ImportSummary:
+        del source, filename
+        time.sleep(0.1)
+        Path(destination).mkdir()
+        return ImportSummary(ArchiveFormat.ZIP, 0, 0, 0)
+
+
+class ImmediateImporter(SafeArchiveImporter):
+    def extract(
+        self,
+        source: BinaryIO,
+        destination: str | Path,
+        *,
+        filename: str | None = None,
+    ) -> ImportSummary:
+        del source, filename
+        Path(destination).mkdir()
+        return ImportSummary(ArchiveFormat.ZIP, 0, 0, 0)
+
+
+class SlowIndexer(SourceIndexer):
+    def index(
+        self,
+        root: str | Path,
+        artifact_version_id: str,
+        *,
+        created_at: str | None = None,
+    ) -> SourceImportResult:
+        time.sleep(0.1)
+        return super().index(root, artifact_version_id, created_at=created_at)
 
 
 def test_safe_zip_import_and_four_language_index(tmp_path: Path) -> None:
@@ -75,8 +150,7 @@ def test_safe_zip_import_and_four_language_index(tmp_path: Path) -> None:
     assert {"helper", "main", "W.run", "App.run", "App.helper"} <= names
     assert any(call["callee"].endswith("helper") for call in result["calls"])
     assert all(
-        file["path"].startswith(("src/", "pkg/", "CMake", "pyproject"))
-        for file in result["files"]
+        file["path"].startswith(("src/", "pkg/", "CMake", "pyproject")) for file in result["files"]
     )
     available = {
         item["name"]
@@ -87,9 +161,7 @@ def test_safe_zip_import_and_four_language_index(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", ["../escape.py", "/absolute.py", r"C:\\escape.py"])
-def test_zip_path_traversal_and_absolute_paths_are_rejected(
-    tmp_path: Path, path: str
-) -> None:
+def test_zip_path_traversal_and_absolute_paths_are_rejected(tmp_path: Path, path: str) -> None:
     with pytest.raises(SourceImportError) as captured:
         SafeArchiveImporter().extract(zip_bytes({path: b"print('x')"}), tmp_path / "source")
     assert captured.value.code in {"archive_path_traversal", "absolute_archive_path"}
@@ -107,6 +179,19 @@ def test_zip_symlink_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(SourceImportError, match="symlinks") as captured:
         SafeArchiveImporter().extract(output, tmp_path / "source")
     assert captured.value.code == "special_archive_entry"
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"a": b"file", "a/b.py": b"pass"},
+        {"a/b.py": b"pass", "a": b"file"},
+    ],
+)
+def test_zip_file_ancestor_collision_is_rejected(tmp_path: Path, files: dict[str, bytes]) -> None:
+    with pytest.raises(SourceImportError) as captured:
+        SafeArchiveImporter().extract(zip_bytes(files), tmp_path / "source")
+    assert captured.value.code == "archive_path_collision"
 
 
 def test_tar_special_file_is_rejected(tmp_path: Path) -> None:
@@ -177,9 +262,7 @@ def test_indexer_marks_binary_unsupported_and_too_large_files(tmp_path: Path) ->
 
     limited = SourceIndexer(settings=SourceIndexerSettings(max_parse_bytes=1024))
     limited_result = limited.index(root, "artifact-version:t12-limited")
-    limited_statuses = {
-        item["path"]: item["parse_status"] for item in limited_result["files"]
-    }
+    limited_statuses = {item["path"]: item["parse_status"] for item in limited_result["files"]}
     assert limited_statuses["large.py"] == "too_large"
 
 
@@ -225,6 +308,40 @@ def test_source_executor_returns_actionable_archive_failure(tmp_path: Path) -> N
     assert result["failure"]["retryable"] is False
 
 
+def test_source_executor_accepts_plain_string_import_kind(tmp_path: Path) -> None:
+    cancellation = asyncio.Event()
+    cancellation.set()
+    executor = SourceImportExecutor(
+        cast(Database, object()),
+        LocalContentAddressedStore(tmp_path / "artifacts"),
+        scratch_root=tmp_path,
+    )
+    result = asyncio.run(
+        executor.execute(executor_job("cas://unused", kind="import"), cancellation)
+    )
+    assert result["status"] is JobStatus.CANCELLED
+
+
+@pytest.mark.parametrize("slow_phase", ["extract", "index"])
+def test_source_executor_keeps_event_loop_responsive(tmp_path: Path, slow_phase: str) -> None:
+    async def scenario() -> None:
+        store = LocalContentAddressedStore(tmp_path / "artifacts")
+        stored = store.put_stream(io.BytesIO(b"archive"), max_bytes=7)
+        cancellation = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.02, cancellation.set)
+        executor = SourceImportExecutor(
+            cast(Database, object()),
+            store,
+            importer=SlowImporter() if slow_phase == "extract" else ImmediateImporter(),
+            indexer=SlowIndexer(),
+            scratch_root=tmp_path,
+        )
+        result = await executor.execute(executor_job(stored.object_ref), cancellation)
+        assert result["status"] is JobStatus.CANCELLED
+
+    asyncio.run(scenario())
+
+
 def test_source_executor_persists_immutable_derived_index(
     persistence_database_url: str, tmp_path: Path
 ) -> None:
@@ -266,30 +383,30 @@ def test_source_executor_persists_immutable_derived_index(
             job = cast(
                 Job,
                 {
-                "schema_version": SchemaVersion.VALUE_1_0_0,
-                "id": "job:t12-exec",
-                "task_id": "task:t12-exec",
-                "kind": JobKind.IMPORT,
-                "tool": {
-                    "name": "source-import",
-                    "version": "1.0.0",
-                    "image_digest": "sha256:" + "1" * 64,
-                },
-                "arguments": {"artifact_version_id": "artifact-version:t12-exec"},
-                "input_refs": [stored.object_ref],
-                "status": JobStatus.RUNNING,
-                "idempotency_key": "job:t12-exec-key",
-                "resource_budget": budget(),
-                "retry_policy": {
-                    "max_attempts": 2,
-                    "backoff_seconds": 1.0,
-                    "retryable_failure_kinds": [],
-                },
-                "attempt": 0,
-                "lease": None,
-                "failure": None,
-                "created_at": "2026-09-08T10:00:00Z",
-                "updated_at": "2026-09-08T10:00:00Z",
+                    "schema_version": SchemaVersion.VALUE_1_0_0,
+                    "id": "job:t12-exec",
+                    "task_id": "task:t12-exec",
+                    "kind": JobKind.IMPORT,
+                    "tool": {
+                        "name": "source-import",
+                        "version": "1.0.0",
+                        "image_digest": "sha256:" + "1" * 64,
+                    },
+                    "arguments": {"artifact_version_id": "artifact-version:t12-exec"},
+                    "input_refs": [stored.object_ref],
+                    "status": JobStatus.RUNNING,
+                    "idempotency_key": "job:t12-exec-key",
+                    "resource_budget": budget(),
+                    "retry_policy": {
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    "attempt": 0,
+                    "lease": None,
+                    "failure": None,
+                    "created_at": "2026-09-08T10:00:00Z",
+                    "updated_at": "2026-09-08T10:00:00Z",
                 },
             )
             executor = SourceImportExecutor(database, store, scratch_root=tmp_path)
@@ -313,6 +430,12 @@ def test_source_executor_persists_immutable_derived_index(
             replay_job = cast(Job, {**job, "updated_at": "2026-09-08T10:05:00Z"})
             replay = await executor.execute(replay_job, asyncio.Event())
             assert replay == result
+            objects = [
+                path
+                for path in (tmp_path / "artifacts" / "objects" / "sha256").rglob("*")
+                if path.is_file()
+            ]
+            assert len(objects) == 2
         finally:
             await database.dispose()
 

@@ -2,7 +2,7 @@
   "schema_version": "1.0.0",
   "name": "source-import",
   "version": "1.0.0",
-  "image_digest": "sha256:8b756ba9f3560ac88fe24cb33e93a157e82677499f960976f4309e44c8cc38b7",
+  "image_digest": "sha256:a70283a149ef1bb875ae3e736a3c62a3a94f9b01640917c8db90a4e71b453362",
   "risk_level": "low",
   "accepted_artifacts": [
     "source_archive",

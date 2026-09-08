@@ -114,7 +114,7 @@ class SourceImportExecutor:
             )
 
     async def _execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
-        if job["kind"] is not JobKind.IMPORT:
+        if job["kind"] != JobKind.IMPORT:
             raise SourceImportExecutionError(
                 "source_import.invalid_job_kind",
                 "source executor received a non-import job",
@@ -129,20 +129,24 @@ class SourceImportExecutor:
         if cancellation.is_set():
             return _cancelled_result(job["id"])
 
-        scratch = Path(
-            tempfile.mkdtemp(prefix="vulnweaver-source-", dir=self._scratch_root)
-        )
+        scratch = Path(tempfile.mkdtemp(prefix="vulnweaver-source-", dir=self._scratch_root))
         try:
-            with self._store.open(object_ref) as archive_stream:
-                extracted = scratch / "tree"
-                summary = self._importer.extract(archive_stream, extracted)
+            extracted = scratch / "tree"
+            summary = await asyncio.to_thread(
+                self._extract_archive,
+                object_ref,
+                extracted,
+            )
             if cancellation.is_set():
                 return _cancelled_result(job["id"])
-            result = self._indexer.index(
+            result = await asyncio.to_thread(
+                self._indexer.index,
                 extracted,
                 parent_version_id,
                 created_at=job["created_at"],
             )
+            if cancellation.is_set():
+                return _cancelled_result(job["id"])
             derived_version_id = _derived_identifier("artifact-version", job["id"])
             derived_artifact_id = _derived_identifier("artifact", job["id"])
             await self._publish_index(
@@ -164,6 +168,10 @@ class SourceImportExecutor:
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def _extract_archive(self, object_ref: str, extracted: Path):
+        with self._store.open(object_ref) as archive_stream:
+            return self._importer.extract(archive_stream, extracted)
+
     async def _publish_index(
         self,
         job: Job,
@@ -176,6 +184,10 @@ class SourceImportExecutor:
         encoded = json.dumps(
             result, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
+        # ADR-012 intentionally publishes deterministic bytes before metadata. A
+        # failed transaction may leave one safe unreferenced CAS object for later
+        # controlled GC; deleting it here could race with another publisher that
+        # already reused the same digest.
         stored = await _put_bytes(self._store, encoded)
         try:
             async with self._database.transaction() as repositories:
@@ -234,9 +246,7 @@ class SourceImportExecutor:
 
 
 async def _put_bytes(store: LocalContentAddressedStore, value: bytes):
-    return await asyncio.to_thread(
-        store.put_stream, io.BytesIO(value), max_bytes=len(value)
-    )
+    return await asyncio.to_thread(store.put_stream, io.BytesIO(value), max_bytes=len(value))
 
 
 def _tool_identity(job: Job) -> ToolIdentity:

@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 from vulnweaver_contracts import (
+    ArtifactKind,
     JobStatus,
     TaskRequestedEvent,
     TaskStatus,
@@ -33,6 +34,8 @@ def tool_spec(
     *,
     timeout: int = 30,
     approval_required: bool = False,
+    accepted_artifacts: list[str] | None = None,
+    command_schema: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": "1.0.0",
@@ -40,8 +43,17 @@ def tool_spec(
         "version": "1.0.0",
         "image_digest": "sha256:" + "b" * 64,
         "risk_level": "low",
-        "accepted_artifacts": ["source_archive"],
-        "command_schema": {},
+        "accepted_artifacts": accepted_artifacts or ["source_archive"],
+        "command_schema": (
+            command_schema
+            if command_schema is not None
+            else {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["artifact_version_id"],
+                "properties": {"artifact_version_id": {"type": "string"}},
+            }
+        ),
         "output_schema": {},
         "network_policy": {"access": "none", "allowed_hosts": []},
         "filesystem_policy": {
@@ -57,8 +69,8 @@ def tool_spec(
         "timeout_seconds": timeout,
         "retry_policy": {
             "max_attempts": 2,
-            "backoff_seconds": 1.0,
-            "retryable_failure_kinds": [],
+            "backoff_seconds": 2.0,
+            "retryable_failure_kinds": ["dependency"],
         },
     }
 
@@ -215,13 +227,14 @@ def test_task_request_creates_policy_approved_initial_job(
                     "version": "1.0.0",
                     "image_digest": "sha256:" + "b" * 64,
                 }
-                assert job.get("arguments") == {
-                    "artifact_version_id": "artifact-version:t11-main"
+                assert job.get("arguments") == {"artifact_version_id": "artifact-version:t11-main"}
+                assert job["retry_policy"] == {
+                    "max_attempts": 2,
+                    "backoff_seconds": 2.0,
+                    "retryable_failure_kinds": ["dependency"],
                 }
                 outbox = await repositories.outbox.pending()
-                assert any(
-                    message.event["event_type"] == "job.requested" for message in outbox
-                )
+                assert any(message.event["event_type"] == "job.requested" for message in outbox)
 
             checkpoints_list = await checkpoints.list("task:t11-main")
             assert [item.node for item in checkpoints_list] == [
@@ -230,11 +243,75 @@ def test_task_request_creates_policy_approved_initial_job(
                 "authorize_initial_job",
                 "initial_job_persisted",
             ]
-            replay = await orchestrator.handle_message(
-                StreamMessage("events", "1-0", event)
-            )
+            replay = await orchestrator.handle_message(StreamMessage("events", "1-0", event))
             assert replay.status == "already_scheduled"
             assert len(await checkpoints.list("task:t11-main")) == 4
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_binary_tool_without_artifact_argument_gets_no_extra_property(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        try:
+            binary_artifact = artifact(
+                "artifact:t12-binary",
+                project_id="project:t12-binary",
+                current_version_id="artifact-version:t12-binary",
+            )
+            binary_artifact["kind"] = ArtifactKind.ELF
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project("project:t12-binary"))
+                await repositories.artifacts.add(binary_artifact)
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:t12-binary",
+                        artifact_id="artifact:t12-binary",
+                        digest_character="e",
+                    )
+                )
+                await repositories.tasks.create(
+                    task(
+                        "task:t12-binary",
+                        project_id="project:t12-binary",
+                        artifact_version_ids=["artifact-version:t12-binary"],
+                        idempotency_key="task:t12-binary-key",
+                    )
+                )
+            event = requested_event(
+                "task:t12-binary",
+                artifact_version_id="artifact-version:t12-binary",
+                event_id="event:task-requested-t12-binary",
+            )
+            schema: dict[str, object] = {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            }
+            orchestrator = make_orchestrator(
+                database,
+                FakeQueue([]),
+                ToolRegistry(
+                    [
+                        tool_spec(
+                            "binary-import",
+                            accepted_artifacts=["elf"],
+                            command_schema=schema,
+                        )
+                    ]
+                ),
+                InMemoryCheckpointStore(),
+            )
+            result = await orchestrator.handle_message(StreamMessage("events", "5-0", event))
+            assert result.status == "approved"
+            assert result.job_id is not None
+            async with database.transaction() as repositories:
+                job = await repositories.jobs.get(result.job_id)
+                assert job.get("arguments") == {}
         finally:
             await database.dispose()
 
@@ -505,9 +582,7 @@ def test_checkpoint_store_keeps_detached_state() -> None:
     async def scenario() -> None:
         store = InMemoryCheckpointStore()
         state: dict[str, object] = {"task_id": "task:1", "nested": {"value": 1}}
-        saved = await store.save(
-            "task:1", "validate_inputs", state, created_at=NOW
-        )
+        saved = await store.save("task:1", "validate_inputs", state, created_at=NOW)
         cast_state = state["nested"]
         assert saved.sequence == 0
         assert saved.state["task_id"] == "task:1"

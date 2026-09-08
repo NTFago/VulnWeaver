@@ -9,9 +9,9 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；安全导入与源码索引已完成，准备接入静态分析工具
+- **当前阶段**：P2 源码静态分析 MVP 进行中；T12 Review 修复已完成，准备接入静态分析工具
 - **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
-- **最后更新**：2026-09-08 19:34（Asia/Shanghai）
+- **最后更新**：2026-09-08 20:31（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -36,7 +36,7 @@
 | T09 ToolSpec 与 Policy Engine | 已完成 | Codex | 实现精确版本 Tool Registry、JSON ToolSpec 加载、ActionPlan 校验、结构化策略拒绝/许可等待、资源与安全边界校验及可查询审计记录 | 无；持久化审计后端由后续编排/观测任务接入 | 2026-09-08 |
 | T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 已由 T11 接入 | 2026-09-08 |
 | T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
-| T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成有界 ZIP/TAR 安全导入、Git 元数据忽略、C/C++/Python/Java tree-sitter 文件/函数/参数/调用索引与 CapabilityProfile；实现幂等 SourceImportExecutor、Job 工具身份迁移、精确镜像摘要 ToolSpec、analysis-worker 镜像和 Compose 全链路 | 无；Semgrep/cppcheck 工具结果属于 T13，PAIR 导入属于 T14 | 2026-09-08 |
+| T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -93,6 +93,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08 20:31：完成 T12 Review 正确性修复
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/source-analysis/src/vulnweaver_source_analysis/`、`code/packages/orchestrator/src/vulnweaver_orchestrator/flow.py`、`code/tests/source_analysis/test_source_import.py`、`code/tests/orchestrator/test_orchestrator.py`、`code/deploy/tool-specs/source-import.json`、`DEVELOPMENT_STATUS.md`
+- 已完成：将归档解压、tree-sitter 索引和契约校验移入工作线程，避免阻塞 Worker 心跳；每次索引创建独立 Parser 集合以支持并发线程；在写盘前双向拒绝文件/目录祖先路径冲突；JobKind 改用值比较；仅当 ToolSpec `command_schema.required` 声明 `artifact_version_id` 时自动注入；删除无效的 `InitialJobPolicy.retry_policy`，Job 统一使用所选 ToolSpec 的重试策略。
+- 测试与结果：定向源码分析/编排 PostgreSQL 集成测试 27 个通过；Dev Container `pnpm run check` 与 `uv lock --check` 通过，191 个 pytest 全部通过、总覆盖率 86.77%，Ruff/Pyright/TypeScript/Svelte 均通过；重建 orchestrator/analysis-worker 后服务正常启动，ToolSpec、构建镜像与运行容器摘要一致；真实 Compose 任务得到成功 Import Job、3 文件、3 函数、2 调用边及 C/Python 索引，Job 使用 ToolSpec 的 2 秒退避和 timeout/environment/dependency 重试白名单。
+- 问题：Review #5 所述“对象先于数据库事务写入”是 ADR-012 的既定一致性顺序；派生输出确定且 CAS 按摘要去重，回归确认幂等重放不会增加物理对象。事务失败留下的安全未引用对象继续由后续受控 GC 处理，本次不扩展功能范围。
+- 阻碍点：无。
+- 决策：沿用 ADR-012、ADR-015、ADR-016 和 ADR-019；未引入新的重大架构决策。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
 
 ### 2026-09-08 19:34：完成 T12 安全导入与 tree-sitter 源码索引
 
@@ -341,6 +353,7 @@
 | 2026-09-08 | T08 Svelte 工作台与容器交付 | `pnpm run check`、Web 生产构建、`uv lock --check`、Compose 配置解析与 Web 镜像构建 | 通过；147 个测试、89.45% 覆盖率；Svelte 检查 0 错误/0 警告；生产包与 `vulnweaver-web:dev` 镜像构建成功 | Playwright 真实浏览器 E2E 留待 T22 集中执行 |
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
 | 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
+| 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
 
 ## 10. 下一步
 

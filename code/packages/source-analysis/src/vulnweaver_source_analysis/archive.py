@@ -126,9 +126,7 @@ class SafeArchiveImporter:
                 details={"filename": filename or "unknown"},
             ) from error
 
-    def _extract_zip(
-        self, source: BinaryIO, root: Path, archive_bytes: int
-    ) -> ImportSummary:
+    def _extract_zip(self, source: BinaryIO, root: Path, archive_bytes: int) -> ImportSummary:
         try:
             with zipfile.ZipFile(source) as archive:
                 entries = [self._zip_entry(info) for info in archive.infolist()]
@@ -198,9 +196,7 @@ class SafeArchiveImporter:
             )
         unix_mode = (info.external_attr >> 16) & 0xFFFF
         file_type = stat.S_IFMT(unix_mode)
-        if file_type and not (
-            stat.S_ISREG(unix_mode) or stat.S_ISDIR(unix_mode)
-        ):
+        if file_type and not (stat.S_ISREG(unix_mode) or stat.S_ISDIR(unix_mode)):
             raise SourceImportError(
                 "special_archive_entry",
                 "ZIP symlinks and special files are forbidden",
@@ -224,11 +220,10 @@ class SafeArchiveImporter:
             )
         return _Entry(member.name, member.size, None, member.isdir(), member)
 
-    def _validate_entries(
-        self, entries: Iterable[_Entry]
-    ) -> tuple[list[_Entry], int, int]:
+    def _validate_entries(self, entries: Iterable[_Entry]) -> tuple[list[_Entry], int, int]:
         selected: list[_Entry] = []
-        seen: set[str] = set()
+        seen: dict[str, bool] = {}
+        required_directories: set[str] = set()
         files = 0
         total = 0
         skipped = 0
@@ -247,7 +242,24 @@ class SafeArchiveImporter:
                     "archive contains duplicate or case-colliding paths",
                     details={"path": name},
                 )
-            seen.add(collision_key)
+            ancestor_keys = {
+                PurePosixPath(*normalized.parts[:depth]).as_posix().casefold()
+                for depth in range(1, len(normalized.parts))
+            }
+            file_ancestor = next(
+                (key for key in ancestor_keys if seen.get(key) is False),
+                None,
+            )
+            if file_ancestor is not None or (
+                not entry.is_directory and collision_key in required_directories
+            ):
+                raise SourceImportError(
+                    "archive_path_collision",
+                    "archive contains a file path that must also be a directory",
+                    details={"path": name},
+                )
+            seen[collision_key] = entry.is_directory
+            required_directories.update(ancestor_keys)
             normalized_entry = _Entry(
                 name,
                 entry.size,
