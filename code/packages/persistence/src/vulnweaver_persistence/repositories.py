@@ -20,6 +20,10 @@ from vulnweaver_contracts import (
     Evidence,
     EvidenceStrength,
     EvidenceType,
+    Finding,
+    FindingCategory,
+    FindingEvidence,
+    FindingStatus,
     Job,
     JobKind,
     JobRequestedEvent,
@@ -33,6 +37,7 @@ from vulnweaver_contracts import (
     Project,
     QueueEvent,
     RunStatus,
+    Severity,
     StructuredFailure,
     Task,
     TaskResult,
@@ -55,6 +60,8 @@ from vulnweaver_persistence.models import (
     artifact_versions,
     artifacts,
     evidence,
+    finding_evidence,
+    findings,
     job_attempt_failures,
     job_results,
     jobs,
@@ -1280,6 +1287,69 @@ class EvidenceRepository:
         return [_evidence_from_row(row) for row in rows]
 
 
+class FindingRepository:
+    """Idempotent candidate Finding and FindingEvidence storage."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, finding: Finding) -> Finding:
+        validate_contract("Finding", finding)
+        values = {
+            **finding,
+            "schema_version": str(finding["schema_version"]),
+            "category": str(finding["category"]),
+            "severity": str(finding["severity"]),
+            "status": str(finding["status"]),
+            "created_at": _parse_datetime(finding["created_at"]),
+        }
+        statement = insert(findings).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get(finding["id"])
+            if existing != finding:
+                raise EntityConflict(
+                    "finding identifier conflicts with an existing fact",
+                    details={"finding_id": finding["id"]},
+                )
+            return existing
+        return finding
+
+    async def get(self, finding_id: str) -> Finding:
+        row = (
+            (await self._connection.execute(select(findings).where(findings.c.id == finding_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("finding not found", details={"finding_id": finding_id})
+        return _finding_from_row(row)
+
+    async def list_for_task(self, task_id: str) -> list[Finding]:
+        rows = (
+            await self._connection.execute(
+                select(findings)
+                .where(findings.c.task_id == task_id)
+                .order_by(findings.c.created_at, findings.c.id)
+            )
+        ).mappings()
+        return [_finding_from_row(row) for row in rows]
+
+    async def link_evidence(self, relation: FindingEvidence) -> FindingEvidence:
+        validate_contract("FindingEvidence", relation)
+        values = {
+            **relation,
+            "schema_version": str(relation["schema_version"]),
+            "relation": str(relation["relation"]),
+            "created_at": _parse_datetime(relation["created_at"]),
+        }
+        await self._connection.execute(
+            insert(finding_evidence)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["finding_id", "evidence_id", "relation"])
+        )
+        return relation
+
+
 class PairRepository:
     """Idempotent PAIR graph storage and bounded source-query primitives."""
 
@@ -1480,6 +1550,7 @@ class Repositories:
     checkpoints: CheckpointRepository
     pair: PairRepository
     evidence: EvidenceRepository
+    findings: FindingRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1494,6 +1565,7 @@ class Repositories:
         object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
         object.__setattr__(self, "pair", PairRepository(connection))
         object.__setattr__(self, "evidence", EvidenceRepository(connection))
+        object.__setattr__(self, "findings", FindingRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -1646,6 +1718,27 @@ def _task_from_row(row: RowMapping) -> Task:
         resource_budget=row["resource_budget"],
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
+    )
+
+
+def _finding_from_row(row: RowMapping) -> Finding:
+    return Finding(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        task_id=row["task_id"],
+        category=FindingCategory(row["category"]),
+        cwe_id=row["cwe_id"],
+        title=row["title"],
+        severity=Severity(row["severity"]),
+        confidence=float(row["confidence"]),
+        location=row["location"],
+        dataflow=row["dataflow"],
+        status=FindingStatus(row["status"]),
+        evidence_ids=row["evidence_ids"],
+        review_ids=row["review_ids"],
+        poc_ids=row["poc_ids"],
+        fix_suggestion=row["fix_suggestion"],
+        created_at=_format_datetime(row["created_at"]),
     )
 
 

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     Text,
@@ -23,8 +24,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from vulnweaver_contracts import (
     ArtifactKind,
+    EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
+    FindingCategory,
+    FindingStatus,
     JobKind,
     JobStatus,
     PairEdgeType,
@@ -307,6 +311,55 @@ evidence = Table(
     ),
 )
 Index("ix_evidence_type", evidence.c.type)
+
+findings = Table(
+    "findings",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("task_id", IDENTIFIER, ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False),
+    Column("category", String(64), nullable=False),
+    Column("cwe_id", String(128), nullable=False),
+    Column("title", String(4096), nullable=False),
+    Column("severity", String(32), nullable=False),
+    Column("confidence", Float(), nullable=False),
+    Column("location", JSONB, nullable=False),
+    Column("dataflow", JSONB, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("evidence_ids", JSONB, nullable=False),
+    Column("review_ids", JSONB, nullable=False),
+    Column("poc_ids", JSONB, nullable=False),
+    Column("fix_suggestion", Text, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("category", FindingCategory, "category"),
+    _enum_constraint("status", FindingStatus, "status"),
+    CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+)
+
+finding_evidence = Table(
+    "finding_evidence",
+    metadata,
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "finding_id", IDENTIFIER, ForeignKey("findings.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column(
+        "evidence_id", IDENTIFIER, ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column("relation", String(32), nullable=False),
+    Column("weight", Float(), nullable=False),
+    Column("created_by", IDENTIFIER, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("relation", EvidenceRelation, "relation"),
+    CheckConstraint("weight >= 0 AND weight <= 1", name="weight_range"),
+    PrimaryKeyConstraint("finding_id", "evidence_id", "relation", name="pk_finding_evidence"),
+)
+
+Index("ix_findings_task_id", findings.c.task_id)
+Index("ix_findings_status", findings.c.status)
+Index("ix_finding_evidence_evidence_id", finding_evidence.c.evidence_id)
 
 jobs = Table(
     "jobs",

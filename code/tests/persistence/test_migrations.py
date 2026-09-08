@@ -11,6 +11,8 @@ EXPECTED_TABLES = {
     "alembic_version",
     "artifact_versions",
     "evidence",
+    "finding_evidence",
+    "findings",
     "artifacts",
     "jobs",
     "job_results",
