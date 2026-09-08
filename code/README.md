@@ -44,6 +44,12 @@ Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`�
 `queue` 和 `worker`；具体分析 Worker 应复用 `worker` 包提供的租约、心跳、重试、结算与
 优雅停止协议。
 
+## 个人账号与登录
+
+首次启动 API 前，在 `code/secrets/personal_password.txt` 写入一条至少 12 个字符的临时口令。该目录已被 Git 忽略，Compose 只以只读 Secret 挂载它。API 仅在数据库还没有个人账号时读取该文件并保存 Argon2id 哈希；完成首次改密后，重启不再依赖或重新哈希这个文件，可以将其移出部署目录。
+
+浏览器登录使用 `HttpOnly` 会话 Cookie；登录响应同时返回 `csrf_token`，写请求须和可读的 `vulnweaver_csrf` 同站 Cookie 一样，通过 `X-CSRF-Token` 回传。认证请求必须携带 `schema_version: "1.0.0"`，改密还必须携带 `Idempotency-Key`。本地纯 HTTP 调试需设置 `SECURE_COOKIE=false`。
+
 ## 质量门禁
 
 本地与 CI 使用同一组命令：
@@ -52,8 +58,8 @@ Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`�
 pnpm run check
 ```
 
-门禁依次执行 Ruff 代码规则与低级缺陷检查、Pyright 严格类型检查、pytest 全量测试及 90%
-分支覆盖率阈值，随后验证 TypeScript 工作区。CI 在 Pull Request 和 `main` 分支推送时
-运行，并使用 PostgreSQL 16 与 Redis 7 服务执行真实集成测试。
+门禁依次执行 Ruff、Pyright、pytest 与 TypeScript 检查；MVP 阶段总体分支覆盖率阈值为
+80%。日常迭代可只运行受影响模块的测试与静态检查，`pnpm run check` 保留给里程碑、合并和
+CI，并使用 PostgreSQL 16 与 Redis 7 执行关键真实集成测试。
 
 开发容器不挂载 Docker Socket，也不得用于直接运行未知样本、Poc 或利用脚本。
