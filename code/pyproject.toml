@@ -12,6 +12,8 @@ dependencies = [
     "vulnweaver-domain",
     "vulnweaver-persistence",
     "vulnweaver-model-gateway",
+    "vulnweaver-orchestrator",
+    "vulnweaver-orchestrator-service",
     "vulnweaver-queue",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
@@ -33,11 +35,13 @@ package = false
 members = [
     "apps/api",
     "apps/dispatcher",
+    "apps/orchestrator",
     "packages/artifact-store",
     "packages/contracts",
     "packages/domain",
     "packages/persistence",
     "packages/model-gateway",
+    "packages/orchestrator",
     "packages/queue",
     "packages/tool-runtime",
     "packages/worker",
@@ -49,6 +53,8 @@ vulnweaver-api = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
+vulnweaver-orchestrator = { workspace = true }
+vulnweaver-orchestrator-service = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
@@ -68,11 +74,13 @@ exclude = ["**/__pycache__", "**/.venv", "**/node_modules"]
 extraPaths = [
     "apps/api/src",
     "apps/dispatcher/src",
+    "apps/orchestrator/src",
     "packages/artifact-store/src",
     "packages/contracts/src",
     "packages/domain/src",
     "packages/persistence/src",
     "packages/model-gateway/src",
+    "packages/orchestrator/src",
     "packages/queue/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
@@ -98,6 +106,7 @@ source_pkgs = [
     "vulnweaver_domain",
     "vulnweaver_persistence",
     "vulnweaver_model_gateway",
+    "vulnweaver_orchestrator",
     "vulnweaver_queue",
     "vulnweaver_tool_runtime",
     "vulnweaver_worker",
@@ -106,6 +115,7 @@ omit = [
     "*/vulnweaver_api/main.py",
     "*/vulnweaver_dispatcher/main.py",
     "*/vulnweaver_dispatcher/migrate.py",
+    "*/vulnweaver_orchestrator_service/main.py",
     "*/vulnweaver_persistence/alembic/env.py",
     "*/vulnweaver_persistence/alembic/versions/*.py",
 ]

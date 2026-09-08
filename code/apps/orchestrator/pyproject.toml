@@ -1,0 +1,27 @@
+[project]
+name = "vulnweaver-orchestrator-service"
+version = "0.1.0"
+description = "Runnable task-request orchestration service for VulnWeaver"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vulnweaver-orchestrator",
+    "vulnweaver-persistence",
+    "vulnweaver-queue",
+    "vulnweaver-tool-runtime",
+]
+
+[project.scripts]
+vulnweaver-orchestrator = "vulnweaver_orchestrator_service.main:main"
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-orchestrator = { workspace = true }
+vulnweaver-persistence = { workspace = true }
+vulnweaver-queue = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_orchestrator_service"
