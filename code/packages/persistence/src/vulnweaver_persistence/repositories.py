@@ -32,6 +32,7 @@ from vulnweaver_contracts import (
     validate_contract,
 )
 
+from vulnweaver_persistence.api_requests import ApiRequestRepository
 from vulnweaver_persistence.errors import (
     EntityConflict,
     EntityNotFound,
@@ -51,6 +52,7 @@ from vulnweaver_persistence.models import (
     task_events,
     tasks,
 )
+from vulnweaver_persistence.personal_auth import PersonalAuthRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +132,12 @@ class ProjectRepository:
             raise EntityNotFound("project not found", details={"project_id": project_id})
         return _project_from_row(row)
 
+    async def list(self) -> list[Project]:
+        rows = (
+            await self._connection.execute(select(projects).order_by(projects.c.created_at.desc()))
+        ).mappings()
+        return [_project_from_row(row) for row in rows]
+
 
 class ArtifactRepository:
     def __init__(self, connection: AsyncConnection) -> None:
@@ -175,6 +183,26 @@ class ArtifactRepository:
                 details={"artifact_version_id": version_id},
             )
         return _artifact_version_from_row(row)
+
+    async def list_for_project(self, project_id: str) -> list[Artifact]:
+        rows = (
+            await self._connection.execute(
+                select(artifacts)
+                .where(artifacts.c.project_id == project_id)
+                .order_by(artifacts.c.created_at.desc())
+            )
+        ).mappings()
+        return [_artifact_from_row(row) for row in rows]
+
+    async def list_versions(self, artifact_id: str) -> list[ArtifactVersion]:
+        rows = (
+            await self._connection.execute(
+                select(artifact_versions)
+                .where(artifact_versions.c.artifact_id == artifact_id)
+                .order_by(artifact_versions.c.created_at.desc())
+            )
+        ).mappings()
+        return [_artifact_version_from_row(row) for row in rows]
 
     async def add_version(self, version: ArtifactVersion) -> CreateResult[ArtifactVersion]:
         validate_contract("ArtifactVersion", version)
@@ -274,6 +302,47 @@ class TaskRepository:
             raise EntityNotFound("task not found", details={"task_id": task_id})
         return _task_from_row(row)
 
+    async def list(self) -> list[Task]:
+        rows = (
+            await self._connection.execute(select(tasks).order_by(tasks.c.created_at.desc()))
+        ).mappings()
+        return [_task_from_row(row) for row in rows]
+
+    async def list_for_project(self, project_id: str) -> list[Task]:
+        rows = (
+            await self._connection.execute(
+                select(tasks)
+                .where(tasks.c.project_id == project_id)
+                .order_by(tasks.c.created_at.desc())
+            )
+        ).mappings()
+        return [_task_from_row(row) for row in rows]
+
+    async def cancel(self, task_id: str) -> Task:
+        row = (
+            (
+                await self._connection.execute(
+                    update(tasks)
+                    .where(
+                        tasks.c.id == task_id,
+                        tasks.c.status.not_in(("completed", "failed", "cancelled")),
+                    )
+                    .values(
+                        status="cancelled",
+                        result=None,
+                        updated_at=func.now(),
+                        state_version=tasks.c.state_version + 1,
+                    )
+                    .returning(*tasks.c)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is not None:
+            return _task_from_row(row)
+        return await self.get(task_id)
+
 
 class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
@@ -368,6 +437,31 @@ class JobRepository:
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         return _job_from_row(row)
+
+    async def list_for_task(self, task_id: str) -> list[Job]:
+        rows = (
+            await self._connection.execute(
+                select(jobs).where(jobs.c.task_id == task_id).order_by(jobs.c.created_at)
+            )
+        ).mappings()
+        return [_job_from_row(row) for row in rows]
+
+    async def cancel_for_task(self, task_id: str) -> int:
+        result = await self._connection.execute(
+            update(jobs)
+            .where(
+                jobs.c.task_id == task_id,
+                jobs.c.status.not_in(("succeeded", "failed", "cancelled")),
+            )
+            .values(
+                status="cancelled",
+                lease=None,
+                failure=None,
+                updated_at=func.now(),
+                state_version=jobs.c.state_version + 1,
+            )
+        )
+        return result.rowcount
 
     async def claim_lease(
         self,
@@ -748,6 +842,10 @@ class OutboxRepository:
 
         return await self._load_pending(limit=limit, lock=True)
 
+    async def add(self, event: QueueEvent) -> None:
+        validate_contract("QueueEvent", event)
+        await self._connection.execute(insert(outbox_events).values(_outbox_values(event)))
+
     async def _load_pending(self, *, limit: int, lock: bool) -> list[OutboxMessage]:
         if limit < 1 or limit > 1000:
             raise ValueError("outbox batch limit must be between 1 and 1000")
@@ -862,6 +960,28 @@ class TaskEventRepository:
                 details={"event_id": event["event_id"]},
             ) from error
 
+    async def list_after(
+        self, task_id: str, *, after_sequence: int = -1, limit: int = 100
+    ) -> list[QueueEvent]:
+        rows = (
+            await self._connection.execute(
+                select(task_events)
+                .where(task_events.c.task_id == task_id, task_events.c.sequence > after_sequence)
+                .order_by(task_events.c.sequence)
+                .limit(limit)
+            )
+        ).mappings()
+        return [_task_event_from_row(row) for row in rows]
+
+    async def next_sequence(self, task_id: str) -> int:
+        value = await self._connection.scalar(
+            select(func.coalesce(func.max(task_events.c.sequence), -1) + 1).where(
+                task_events.c.task_id == task_id
+            )
+        )
+        assert value is not None
+        return int(value)
+
 
 @dataclass(frozen=True, slots=True)
 class Repositories:
@@ -871,6 +991,8 @@ class Repositories:
     jobs: JobRepository
     outbox: OutboxRepository
     task_events: TaskEventRepository
+    api_requests: ApiRequestRepository
+    personal_auth: PersonalAuthRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -879,6 +1001,8 @@ class Repositories:
         object.__setattr__(self, "jobs", JobRepository(connection))
         object.__setattr__(self, "outbox", OutboxRepository(connection))
         object.__setattr__(self, "task_events", TaskEventRepository(connection))
+        object.__setattr__(self, "api_requests", ApiRequestRepository(connection))
+        object.__setattr__(self, "personal_auth", PersonalAuthRepository(connection))
 
 
 def _project_values(project: Project) -> dict[str, object]:
@@ -1141,12 +1265,12 @@ def _ensure_event_matches_job(job: Job, event: JobRequestedEvent) -> None:
         )
 
 
-def _outbox_values(event: JobRequestedEvent) -> dict[str, object]:
+def _outbox_values(event: QueueEvent) -> dict[str, object]:
     occurred_at = _parse_datetime(event["occurred_at"])
     return {
         "id": event["event_id"],
         "schema_version": event["schema_version"],
-        "aggregate_type": "job",
+        "aggregate_type": "job" if event["event_type"].startswith("job.") else "task",
         "aggregate_id": event["aggregate_id"],
         "event_type": event["event_type"],
         "sequence": event["sequence"],
@@ -1166,6 +1290,23 @@ def _event_from_row(row: RowMapping) -> QueueEvent:
             "event_id": row["id"],
             "event_type": row["event_type"],
             "aggregate_id": row["aggregate_id"],
+            "sequence": row["sequence"],
+            "occurred_at": _format_datetime(row["occurred_at"]),
+            "correlation_id": row["correlation_id"],
+            "causation_id": row["causation_id"],
+            "payload": row["payload"],
+        },
+    )
+
+
+def _task_event_from_row(row: RowMapping) -> QueueEvent:
+    return cast(
+        QueueEvent,
+        {
+            "schema_version": row["schema_version"],
+            "event_id": row["id"],
+            "event_type": row["event_type"],
+            "aggregate_id": row["task_id"],
             "sequence": row["sequence"],
             "occurred_at": _format_datetime(row["occurred_at"]),
             "correlation_id": row["correlation_id"],

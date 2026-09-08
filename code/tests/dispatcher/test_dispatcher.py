@@ -94,8 +94,9 @@ def test_dispatcher_records_retryable_and_terminal_failures(
             assert retry_report.dead_lettered == 0
             retry_row = await _outbox_row(database, "event:t05-retry")
             assert retry_row["publish_attempts"] == 1
-            assert before_retry + timedelta(seconds=2) <= retry_row["available_at"]
-            assert retry_row["available_at"] <= after_retry + timedelta(seconds=2)
+            # PostgreSQL may run in a VM whose wall clock differs slightly from the host.
+            assert before_retry + timedelta(seconds=1) <= retry_row["available_at"]
+            assert retry_row["available_at"] <= after_retry + timedelta(seconds=3)
             assert retry_row["last_error"]["code"] == "queue_unavailable"
 
             await _seed_outbox(database, "dead", "event:t05-dead")

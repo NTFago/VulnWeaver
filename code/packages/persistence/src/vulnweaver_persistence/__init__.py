@@ -11,6 +11,7 @@ from vulnweaver_persistence.errors import (
 )
 from vulnweaver_persistence.migrations import downgrade_database, upgrade_database
 from vulnweaver_persistence.models import metadata
+from vulnweaver_persistence.personal_auth import PersonalAccount, PersonalSession
 from vulnweaver_persistence.repositories import (
     CreateResult,
     JobAttemptFailure,
@@ -36,6 +37,8 @@ __all__ = [
     "JobLeaseClaimOutcome",
     "JobLeaseConflict",
     "OutboxMessage",
+    "PersonalAccount",
+    "PersonalSession",
     "PersistenceError",
     "PersistenceInvariantError",
     "Repositories",

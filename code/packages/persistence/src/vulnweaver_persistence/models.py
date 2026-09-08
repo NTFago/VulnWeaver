@@ -302,3 +302,52 @@ task_events = Table(
     CheckConstraint("sequence >= 0", name="sequence_non_negative"),
     UniqueConstraint("task_id", "sequence", name="uq_task_events_task_sequence"),
 )
+
+api_requests = Table(
+    "api_requests",
+    metadata,
+    Column("scope", String(256), primary_key=True),
+    Column("idempotency_key", String(128), primary_key=True),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("resource_type", String(64), nullable=False),
+    Column("resource_id", IDENTIFIER, nullable=False),
+    Column("response_status", Integer, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    CheckConstraint("response_status BETWEEN 200 AND 299", name="successful_response_status"),
+)
+
+personal_accounts = Table(
+    "personal_accounts",
+    metadata,
+    Column("id", String(32), primary_key=True),
+    Column("username", String(128), nullable=False, unique=True),
+    Column("password_hash", Text, nullable=False),
+    Column("must_change_password", Boolean, nullable=False, server_default=text("false")),
+    Column("password_version", Integer, nullable=False, server_default=text("1")),
+    Column("failed_login_attempts", Integer, nullable=False, server_default=text("0")),
+    Column("locked_until", TIMESTAMP, nullable=True),
+    Column("created_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    Column("updated_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    CheckConstraint("id = 'personal'", name="single_personal_account"),
+    CheckConstraint("password_version > 0", name="password_version_positive"),
+    CheckConstraint("failed_login_attempts >= 0", name="failed_login_attempts_non_negative"),
+)
+
+personal_sessions = Table(
+    "personal_sessions",
+    metadata,
+    Column("token_digest", String(64), primary_key=True),
+    Column(
+        "account_id",
+        String(32),
+        ForeignKey("personal_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("csrf_digest", String(64), nullable=False),
+    Column("password_version", Integer, nullable=False),
+    Column("expires_at", TIMESTAMP, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    Column("revoked_at", TIMESTAMP, nullable=True),
+    CheckConstraint("password_version > 0", name="password_version_positive"),
+)
+Index("ix_personal_sessions_expires_at", personal_sessions.c.expires_at)

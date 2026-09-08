@@ -20,7 +20,7 @@ _SAFE_TEST_DATABASE = re.compile(r"^vulnweaver_test_[0-9a-f]{12}$")
 def persistence_database_url() -> Iterator[str]:
     admin_url = os.environ.get(
         "VULNWEAVER_TEST_ADMIN_DATABASE_URL",
-        "postgresql+psycopg://vulnweaver:vulnweaver_dev_only@127.0.0.1:5432/postgres",
+        "postgresql+psycopg://vulnweaver:vulnweaver_dev_only@127.0.0.1:55432/postgres",
     )
     database_name = f"vulnweaver_test_{uuid.uuid4().hex[:12]}"
     assert _SAFE_TEST_DATABASE.fullmatch(database_name)
@@ -54,7 +54,7 @@ def persistence_database_url() -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
-    url = os.environ.get("VULNWEAVER_TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
+    url = os.environ.get("VULNWEAVER_TEST_REDIS_URL", "redis://127.0.0.1:56379/15")
     client = Redis.from_url(url, decode_responses=True, socket_timeout=1)
     try:
         client.ping()

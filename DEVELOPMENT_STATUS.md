@@ -9,11 +9,11 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T06 Worker 租约与幂等框架已完成）
-- **总体状态**：T06 第二轮正确性修正（租约 fencing、重试退避、许可等待、结算恢复、结果指纹）已完成并通过全量质量门禁
+- **当前阶段**：P1 控制面最小闭环（T07 FastAPI 已完成）
+- **总体状态**：T07 已完成；个人账号登录与 Project、Artifact、Task、Job、事件和下载 API 已通过全量质量门禁
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；CI 分支及已合并历史分支已在本地和远程清理；当前开发分支 `feat/t06-worker-reliability`，基于最新 `main`
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支 `feat/t07-api`，基于 `main` 的 `dbc6137`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：Codex
 
@@ -30,6 +30,7 @@
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无 | 2026-09-07 |
 | T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
+| T07 FastAPI 首批控制面 API | 已完成 | Codex | 交付个人账号 Argon2id 登录、首次改密、登录锁定、摘要会话、CSRF 与全会话撤销；Project/Artifact/Task/Job、流式上传与下载、原子 Task/校验 Job/Outbox/事件创建、取消、HTTP/WebSocket 事件恢复、结构化错误、关联 ID、幂等记录、健康检查及安全容器；无团队、系统管理员、成员、角色或 RBAC | 无；归档展开与炸弹检查按既定边界由 T12 安全导入处理 | 2026-09-08 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -55,7 +56,7 @@
 | D-001 | Python 依赖与工作区工具 | uv / Poetry / pip-tools | 已采用 uv workspace | T01 | 已确认（ADR-008） |
 | D-002 | 前端包管理器 | pnpm / npm | 已采用 pnpm workspace | T01 | 已确认（ADR-008） |
 | D-003 | 首版对象存储 | 本地内容寻址目录 / MinIO | 本地目录，保留 MinIO 接口 | T03 | 已由架构默认 |
-| D-004 | 首版身份认证 | 暂不实现 / 本地单用户 / 完整认证 | 演示环境本地单用户，预留身份上下文 | P1 | 待确认 |
+| D-004 | 首版身份认证 | 个人账号登录，不提供团队或管理员体系 | 项目创建者为唯一所有者；无成员、角色和 RBAC | P1 | 已确认（用户 2026-09-08 明确） |
 
 ## 7. 已确认技术决策（ADR 摘要）
 
@@ -81,6 +82,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08：完成 T07 FastAPI 首批控制面 API
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/apps/api/`、`code/packages/persistence/`、`code/tests/api/`、`code/compose*.yaml`、`code/pyproject.toml`、`code/uv.lock`
+- 已完成：实现严格单个人账号登录与会话安全；项目、工件、任务、Job、事件、内容下载和健康接口；上传恒定内存并校验类型与限额；Task、初始校验 Job、Outbox 与 TaskEvent 同事务写入；写接口支持幂等冲突检测；WebSocket 按事件序号恢复；API 无容器运行时访问路径
+- 测试与结果：`pnpm run check` 通过，142 个测试全部通过，总覆盖率 90.69%；`uv lock --check`、Compose 配置解析、API 镜像构建通过；镜像用户为 `vulnweaver`
+- 问题：FastAPI TestClient 依赖链产生两条上游弃用警告，不影响运行和验收
+- 阻碍点：无
+- 决策：沿用用户确认的个人账号、无团队、无成员、无角色、无 RBAC 边界，不新增 ADR 改写既有架构
+- 下一步：认领 T08，基于 OpenAPI 搭建 Svelte 5 个人工作台并接入 T07 真实接口
 
 ### 2026-09-08：完成 T06 Worker 生命周期第二轮正确性修正
 
@@ -245,9 +258,9 @@
 
 ## 10. 下一步
 
-1. 认领 T07，创建 FastAPI 应用骨架并实现 Project、Artifact、Task 的首批 API。
-2. 复用 T03 仓储与 T04 工件登记服务，保持 API DTO 与 v1.0.0 公共 Schema 一致。
-3. 为创建任务的幂等键、错误响应、上传边界和健康检查补充 API/集成测试。
+1. 认领 T08，创建 Svelte 5 工作台并生成 OpenAPI TypeScript 客户端。
+2. 接入个人登录、首次改密、项目创建、工件上传、任务创建和事件恢复主流程。
+3. 使用 Playwright 验证桌面/移动视口、键盘可达性、加载/空/错误状态和页面重叠。
 
 ## 11. 每次工作结束时的更新模板
 

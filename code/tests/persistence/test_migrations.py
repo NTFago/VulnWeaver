@@ -6,6 +6,7 @@ from sqlalchemy import create_engine, inspect
 from vulnweaver_persistence import metadata
 
 EXPECTED_TABLES = {
+    "api_requests",
     "alembic_version",
     "artifact_versions",
     "artifacts",
@@ -13,6 +14,8 @@ EXPECTED_TABLES = {
     "job_results",
     "job_attempt_failures",
     "outbox_events",
+    "personal_accounts",
+    "personal_sessions",
     "projects",
     "task_events",
     "tasks",

@@ -97,6 +97,39 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  api:
+    image: vulnweaver-api:dev
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+      PERSONAL_USERNAME: ${PERSONAL_USERNAME:-owner}
+      PERSONAL_PASSWORD_FILE: ${PERSONAL_PASSWORD_FILE:-/run/secrets/vulnweaver_personal_password}
+      ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-536870912}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-43200}
+      SECURE_COOKIE: ${SECURE_COOKIE:-true}
+    secrets:
+      - vulnweaver_personal_password
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
 networks:
   control-plane:
     driver: bridge
@@ -104,3 +137,8 @@ networks:
 volumes:
   postgres-data:
   redis-data:
+  artifact-data:
+
+secrets:
+  vulnweaver_personal_password:
+    file: ${PERSONAL_PASSWORD_FILE_HOST:-./secrets/personal_password.txt}

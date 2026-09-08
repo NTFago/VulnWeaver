@@ -1,0 +1,31 @@
+[project]
+name = "vulnweaver-api"
+version = "0.1.0"
+description = "FastAPI control plane for the personal VulnWeaver installation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "argon2-cffi>=25,<26",
+    "fastapi>=0.116,<1",
+    "python-multipart>=0.0.20,<1",
+    "uvicorn[standard]>=0.35,<1",
+    "vulnweaver-artifact-store",
+    "vulnweaver-contracts",
+    "vulnweaver-domain",
+    "vulnweaver-persistence",
+]
+
+[project.scripts]
+vulnweaver-api = "vulnweaver_api.main:main"
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-artifact-store = { workspace = true }
+vulnweaver-contracts = { workspace = true }
+vulnweaver-domain = { workspace = true }
+vulnweaver-persistence = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_api"
