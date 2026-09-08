@@ -350,6 +350,8 @@
         "input_refs": {"type": "array", "items": {"$ref": "#/$defs/ObjectReference"}},
         "decisions": {"type": "array", "items": {"$ref": "#/$defs/DecisionRecord"}},
         "token_usage": {"$ref": "#/$defs/TokenUsage"},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "result_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/ObjectReference"}},
         "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
         "created_at": {"type": "string", "format": "date-time"},
         "updated_at": {"type": "string", "format": "date-time"}

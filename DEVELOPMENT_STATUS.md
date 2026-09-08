@@ -13,7 +13,7 @@
 - **总体状态**：首个可运行控制面 MVP 已形成；已覆盖认证、项目、工件、任务和实时轨迹，实际分析需继续 T09-T15
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t09-tool-policy`，HEAD 为 `658edea`；T06/T07/T08 已完成分支已清理
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t10-model-gateway`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：未分配
 
@@ -34,6 +34,7 @@
 | T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
 | Git 分支清理 | 已完成 | Codex | 确认 T06/T07/T08 均已合并到 `origin/main`，本地 `main` 快进到 `673c477`，删除 3 个本地及 3 个远程已完成分支，并清理过期 `origin/pr/5` 引用 | 无 | 2026-09-08 |
 | T09 ToolSpec 与 Policy Engine | 已完成 | Codex | 实现精确版本 Tool Registry、JSON ToolSpec 加载、ActionPlan 校验、结构化策略拒绝/许可等待、资源与安全边界校验及可查询审计记录 | 无；持久化审计后端由后续编排/观测任务接入 | 2026-09-08 |
+| T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 后端由 T11/M17 接入 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -89,6 +90,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08：完成 T10 模型访问适配与运行记录
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/model-gateway/`、`code/packages/contracts/src/vulnweaver_contracts/schemas/v1/contracts.schema.json`、`code/packages/contracts/src/vulnweaver_contracts/generated.py`、`code/packages/contracts/typescript/index.ts`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/model_gateway/test_model_gateway.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增不依赖厂商 SDK 的 OpenAI 兼容 `chat/completions` HTTP 适配；支持规划、批量审计、复核、报告四类模型档位及远程/本地 fallback；实现有界超时、指数退避重试、全局最小请求间隔限流、HTTP 429/5xx 降级；结构化 JSON 输出契约校验与最多 3 次修复；默认及自定义敏感信息脱敏；安全截断修复上下文；记录提示哈希、输入/结果引用、模型、token、耗时、决策序列和结构化失败到 AgentRun；新增可幂等的内存 AgentRun recorder。AgentRun v1 增加可选 `duration_ms` 与 `result_refs`，保持旧记录兼容。
+- 测试与结果：Dev Container 内 `pnpm run check` 通过；163 个 pytest 全部通过、总覆盖率 87.68%；Ruff 通过、Pyright 0 错误、TypeScript/Svelte 通过、契约生成漂移检查通过、`uv lock --check` 通过；PostgreSQL/Redis 集成测试均通过。
+- 问题：完整检查产生既有 FastAPI/Starlette 上游弃用警告，不影响运行；AgentRun 当前默认内存记录器，数据库迁移和查询适配留给 T11/M17。
+- 阻碍点：无。
+- 决策：AgentRun 新增可选字段而非修改 required 集合，保持 v1 历史任务回放兼容；沿用 ADR-005 的 OpenAI 兼容协议，不引入具体厂商 SDK。
+- 下一步：认领 T11，实现 `task.requested` 消费、LangGraph 编排骨架、检查点和首个经 Policy Engine 校验的 Job。
 
 ### 2026-09-08：完成 T09 ToolSpec 与 Policy Engine
 
@@ -302,8 +315,8 @@
 
 ## 10. 下一步
 
-1. 认领 T10，实现 OpenAI 兼容模型访问适配、超时/重试/结构化输出和 AgentRun 运行记录。
-3. T11 完成后将 `task.requested` 转换为经策略校验的初始 Job，使现有工作台展示真实编排进度。
+1. 认领 T11，实现 `task.requested` 消费、LangGraph 编排骨架、检查点和首个经 Policy Engine 校验的 Job。
+2. T11 完成后将 `task.requested` 转换为经策略校验的初始 Job，使现有工作台展示真实编排进度。
 
 ## 11. 每次工作结束时的更新模板
 

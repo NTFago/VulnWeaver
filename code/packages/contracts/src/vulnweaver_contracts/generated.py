@@ -305,6 +305,8 @@ class AgentRun(TypedDict):
     input_refs: list[ObjectReference]
     decisions: list[DecisionRecord]
     token_usage: TokenUsage
+    duration_ms: NotRequired[int]
+    result_refs: NotRequired[list[ObjectReference]]
     failure: StructuredFailure | None
     created_at: str
     updated_at: str

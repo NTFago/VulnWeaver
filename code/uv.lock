@@ -9,6 +9,7 @@ members = [
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
+    "vulnweaver-model-gateway",
     "vulnweaver-persistence",
     "vulnweaver-queue",
     "vulnweaver-tool-runtime",
@@ -779,6 +780,21 @@ dependencies = [
 requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
 
 [[package]]
+name = "vulnweaver-model-gateway"
+version = "0.1.0"
+source = { editable = "packages/model-gateway" }
+dependencies = [
+    { name = "httpx" },
+    { name = "vulnweaver-contracts" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+]
+
+[[package]]
 name = "vulnweaver-persistence"
 version = "0.1.0"
 source = { editable = "packages/persistence" }
@@ -854,6 +870,7 @@ dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-dispatcher" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-tool-runtime" },
@@ -876,6 +893,7 @@ requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-dispatcher", editable = "apps/dispatcher" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },

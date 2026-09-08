@@ -214,6 +214,8 @@ export interface AgentRun {
   input_refs: Array<ObjectReference>;
   decisions: Array<DecisionRecord>;
   token_usage: TokenUsage;
+  duration_ms?: number;
+  result_refs?: Array<ObjectReference>;
   failure: StructuredFailure | null;
   created_at: string;
   updated_at: string;

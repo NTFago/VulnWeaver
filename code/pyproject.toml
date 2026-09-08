@@ -11,6 +11,7 @@ dependencies = [
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
     "vulnweaver-persistence",
+    "vulnweaver-model-gateway",
     "vulnweaver-queue",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
@@ -36,6 +37,7 @@ members = [
     "packages/contracts",
     "packages/domain",
     "packages/persistence",
+    "packages/model-gateway",
     "packages/queue",
     "packages/tool-runtime",
     "packages/worker",
@@ -46,6 +48,7 @@ vulnweaver-contracts = { workspace = true }
 vulnweaver-api = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-model-gateway = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
@@ -69,6 +72,7 @@ extraPaths = [
     "packages/contracts/src",
     "packages/domain/src",
     "packages/persistence/src",
+    "packages/model-gateway/src",
     "packages/queue/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
@@ -93,6 +97,7 @@ source_pkgs = [
     "vulnweaver_dispatcher",
     "vulnweaver_domain",
     "vulnweaver_persistence",
+    "vulnweaver_model_gateway",
     "vulnweaver_queue",
     "vulnweaver_tool_runtime",
     "vulnweaver_worker",
