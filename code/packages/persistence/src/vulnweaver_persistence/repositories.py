@@ -1250,23 +1250,27 @@ class EvidenceRepository:
 
     async def create(self, item: Evidence) -> Evidence:
         validate_contract("Evidence", item)
+        canonical = cast(
+            Evidence,
+            {**item, "created_at": _canonical_timestamp(item["created_at"])},
+        )
         values = {
-            **item,
-            "schema_version": str(item["schema_version"]),
-            "type": str(item["type"]),
-            "strength": str(item["strength"]),
-            "created_at": _parse_datetime(item["created_at"]),
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "type": str(canonical["type"]),
+            "strength": str(canonical["strength"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
         }
         statement = insert(evidence).values(values).on_conflict_do_nothing(index_elements=["id"])
         if not (await self._connection.execute(statement)).rowcount:
-            existing = await self.get(item["id"])
-            if existing != item:
+            existing = await self.get(canonical["id"])
+            if existing != canonical:
                 raise EntityConflict(
                     "evidence identifier conflicts with an existing fact",
-                    details={"evidence_id": item["id"]},
+                    details={"evidence_id": canonical["id"]},
                 )
             return existing
-        return item
+        return canonical
 
     async def get(self, evidence_id: str) -> Evidence:
         row = (
@@ -1297,24 +1301,28 @@ class FindingRepository:
 
     async def create(self, finding: Finding) -> Finding:
         validate_contract("Finding", finding)
+        canonical = cast(
+            Finding,
+            {**finding, "created_at": _canonical_timestamp(finding["created_at"])},
+        )
         values = {
-            **finding,
-            "schema_version": str(finding["schema_version"]),
-            "category": str(finding["category"]),
-            "severity": str(finding["severity"]),
-            "status": str(finding["status"]),
-            "created_at": _parse_datetime(finding["created_at"]),
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "category": str(canonical["category"]),
+            "severity": str(canonical["severity"]),
+            "status": str(canonical["status"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
         }
         statement = insert(findings).values(values).on_conflict_do_nothing(index_elements=["id"])
         if not (await self._connection.execute(statement)).rowcount:
-            existing = await self.get(finding["id"])
-            if existing != finding:
+            existing = await self.get(canonical["id"])
+            if existing != canonical:
                 raise EntityConflict(
                     "finding identifier conflicts with an existing fact",
-                    details={"finding_id": finding["id"]},
+                    details={"finding_id": canonical["id"]},
                 )
             return existing
-        return finding
+        return canonical
 
     async def get(self, finding_id: str) -> Finding:
         row = (
@@ -1343,36 +1351,55 @@ class FindingRepository:
         confirmation_allowed: bool = False,
     ) -> Review:
         validate_contract("Review", review)
-        finding = await self.get(review["finding_id"])
-        target = review["outcome"]
+        canonical = cast(
+            Review,
+            {**review, "created_at": _canonical_timestamp(review["created_at"])},
+        )
+        finding_row = (
+            (
+                await self._connection.execute(
+                    select(findings)
+                    .where(findings.c.id == canonical["finding_id"])
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if finding_row is None:
+            raise EntityNotFound(
+                "finding not found", details={"finding_id": canonical["finding_id"]}
+            )
+        finding = _finding_from_row(finding_row)
+        target = canonical["outcome"]
         if target.value == "confirmed" and not confirmation_allowed:
             raise PersistenceInvariantError(
                 "finding confirmation requires an evaluated evidence context",
                 details={"finding_id": finding["id"]},
             )
         values = {
-            **review,
-            "schema_version": str(review["schema_version"]),
-            "outcome": str(review["outcome"]),
-            "created_at": _parse_datetime(review["created_at"]),
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "outcome": str(canonical["outcome"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
         }
         statement = insert(reviews).values(values).on_conflict_do_nothing(index_elements=["id"])
         if not (await self._connection.execute(statement)).rowcount:
-            existing = await self.get_review(review["id"])
-            if existing != review:
+            existing = await self.get_review(canonical["id"])
+            if existing != canonical:
                 raise EntityConflict(
                     "review identifier conflicts with existing history",
-                    details={"review_id": review["id"]},
+                    details={"review_id": canonical["id"]},
                 )
-        review_ids = list(finding["review_ids"])
-        if review["id"] not in review_ids:
-            review_ids.append(review["id"])
+        histories = await self.list_reviews(finding["id"])
+        review_ids = [history["id"] for history in histories]
+        latest_status = histories[-1]["outcome"]
         await self._connection.execute(
             update(findings)
             .where(findings.c.id == finding["id"])
-            .values(status=str(target), review_ids=review_ids)
+            .values(status=str(latest_status), review_ids=review_ids)
         )
-        return review
+        return canonical
 
     async def get_review(self, review_id: str) -> Review:
         row = (
@@ -1573,7 +1600,10 @@ class PairRepository:
     async def _insert_or_verify(
         self, table: Table, identifier: str, values: dict[str, object]
     ) -> None:
-        statement = insert(table).values(values).on_conflict_do_nothing(index_elements=["id"])
+        # PAIR tables carry both a primary key and semantic unique identities.
+        # Treat either conflict as an idempotency candidate so no raw IntegrityError
+        # can leak from an otherwise valid graph import.
+        statement = insert(table).values(values).on_conflict_do_nothing()
         inserted = (await self._connection.execute(statement)).rowcount
         if inserted:
             return
@@ -2098,6 +2128,10 @@ def _parse_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timestamps must include an explicit timezone")
     return parsed
+
+
+def _canonical_timestamp(value: str) -> str:
+    return _format_datetime(_parse_datetime(value))
 
 
 def _format_datetime(value: datetime) -> str:

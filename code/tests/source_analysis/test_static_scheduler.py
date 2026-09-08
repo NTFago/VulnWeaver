@@ -1,20 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import json
+import zipfile
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
+    Artifact,
+    ArtifactKind,
+    ArtifactVersion,
     Job,
     JobKind,
     JobStatus,
     SchemaVersion,
     SourceImportResult,
+    StaticAnalysisDiagnostic,
+    StaticToolStatus,
     ToolSpec,
 )
-from vulnweaver_persistence import Database
-from vulnweaver_source_analysis import StaticAnalysisScheduler
+from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_source_analysis import (
+    StaticAnalysisExecutor,
+    StaticAnalysisScheduler,
+    StaticToolOutput,
+)
+
+from tests.persistence.factories import artifact, artifact_version, project, task
 
 
 class _FakeTransaction:
@@ -45,6 +61,49 @@ class _FakeDatabase:
 
     def transaction(self) -> _FakeTransaction:
         return _FakeTransaction(self.repositories)
+
+
+class _DiagnosticAdapter:
+    name = "semgrep"
+
+    def run(
+        self,
+        _root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int = 16 * 1024 * 1024,
+    ) -> StaticToolOutput:
+        del timeout_seconds, max_output_bytes
+        return StaticToolOutput(
+            self.name,
+            "1.0.0",
+            StaticToolStatus.SUCCEEDED,
+            0,
+            b"{}",
+            b"",
+        )
+
+    def parse(
+        self, _output: StaticToolOutput, *, artifact_version_id: str
+    ) -> list[StaticAnalysisDiagnostic]:
+        return [
+            StaticAnalysisDiagnostic(
+                tool_name=self.name,
+                rule_id="rule:test",
+                severity="medium",
+                message="test finding",
+                location={
+                    "artifact_version_id": artifact_version_id,
+                    "path": "src/app.py",
+                    "start_line": 1,
+                    "start_column": 1,
+                    "end_line": 1,
+                    "end_column": 2,
+                },
+                cwe_ids=["CWE-20"],
+                properties={},
+            )
+        ]
 
 
 def _tool_spec(name: str) -> dict[str, object]:
@@ -155,5 +214,117 @@ def test_scheduler_creates_capability_selected_jobs_idempotently() -> None:
             for job in database.jobs.jobs
         )
         assert len(database.jobs.events) == 2
+
+    asyncio.run(scenario())
+
+
+def test_static_result_parent_matches_scanned_source_archive(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "artifacts")
+        try:
+            archive_bytes = io.BytesIO()
+            with zipfile.ZipFile(archive_bytes, "w") as archive:
+                archive.writestr("src/app.py", "value = input()")
+            payload = archive_bytes.getvalue()
+            stored = store.put_stream(io.BytesIO(payload), max_bytes=len(payload))
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project("project:static-lineage"))
+                await repositories.artifacts.add(
+                    artifact(
+                        "artifact:static-lineage",
+                        project_id="project:static-lineage",
+                        current_version_id="artifact-version:static-source",
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:static-source",
+                        artifact_id="artifact:static-lineage",
+                        digest_character="1",
+                    )
+                )
+                await repositories.artifacts.add(
+                    cast(
+                        Artifact,
+                        {
+                            **artifact(
+                                "artifact:static-index",
+                                project_id="project:static-lineage",
+                                current_version_id="artifact-version:static-index",
+                            ),
+                            "kind": ArtifactKind.DERIVED,
+                        },
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    cast(
+                        ArtifactVersion,
+                        {
+                            **artifact_version(
+                                "artifact-version:static-index",
+                                artifact_id="artifact:static-index",
+                                digest_character="2",
+                            ),
+                            "parent_version_id": "artifact-version:static-source",
+                        },
+                    )
+                )
+                await repositories.tasks.create(
+                    task(
+                        "task:static-lineage",
+                        project_id="project:static-lineage",
+                        artifact_version_ids=["artifact-version:static-source"],
+                    )
+                )
+
+            job = cast(
+                Job,
+                {
+                    **_import_job(),
+                    "id": "job:static-lineage",
+                    "task_id": "task:static-lineage",
+                    "kind": JobKind.SOURCE_ANALYSIS,
+                    "tool": {
+                        "name": "semgrep",
+                        "version": "1.0.0",
+                        "image_digest": "sha256:" + "3" * 64,
+                    },
+                    "arguments": {
+                        "artifact_version_id": "artifact-version:static-source",
+                        "source_index_version_id": "artifact-version:static-index",
+                        "languages": ["python"],
+                    },
+                    "input_refs": [stored.object_ref],
+                },
+            )
+            executor = StaticAnalysisExecutor(
+                database,
+                store,
+                adapters={"semgrep": _DiagnosticAdapter()},
+                scratch_root=tmp_path,
+            )
+            result = await executor.execute(job, asyncio.Event())
+
+            assert result["status"] is JobStatus.SUCCEEDED
+            async with database.transaction() as repositories:
+                version = await repositories.artifacts.get_version(
+                    result["produced_artifact_version_ids"][0]
+                )
+                assert version["parent_version_id"] == "artifact-version:static-source"
+                assert (
+                    version["generation_config"]["source_index_version_id"]
+                    == "artifact-version:static-index"
+                )
+                with store.open(version["object_ref"]) as stream:
+                    document = json.load(stream)
+                assert (
+                    document["diagnostics"][0]["location"]["artifact_version_id"]
+                    == version["parent_version_id"]
+                )
+        finally:
+            await database.dispose()
 
     asyncio.run(scenario())

@@ -30,14 +30,15 @@ def test_evidence_repository_is_immutable_and_idempotent(persistence_database_ur
                     "stdout_ref": "cas://sha256/" + "c" * 64,
                     "stderr_ref": None,
                     "replay_recipe": {"kind": "static_analysis", "reproducible": True},
-                    "created_at": "2026-09-08T10:00:00Z",
+                    "created_at": "2026-09-08T10:00:00+00:00",
                 },
             )
+            canonical = cast(Evidence, {**value, "created_at": "2026-09-08T10:00:00Z"})
             async with database.transaction() as repositories:
-                assert await repositories.evidence.create(value) == value
-                assert await repositories.evidence.create(value) == value
-                assert await repositories.evidence.get(value["id"]) == value
-                assert await repositories.evidence.list_for_input(value["input_ref"]) == [value]
+                assert await repositories.evidence.create(value) == canonical
+                assert await repositories.evidence.create(value) == canonical
+                assert await repositories.evidence.get(value["id"]) == canonical
+                assert await repositories.evidence.list_for_input(value["input_ref"]) == [canonical]
         finally:
             await database.dispose()
 

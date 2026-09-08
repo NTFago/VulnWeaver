@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     Artifact,
@@ -29,7 +30,12 @@ from vulnweaver_contracts import (
     validate_contract,
 )
 from vulnweaver_pair import SourcePairImporter
-from vulnweaver_persistence import Database, EntityConflict, EntityNotFound
+from vulnweaver_persistence import (
+    Database,
+    EntityConflict,
+    EntityNotFound,
+    PersistenceError,
+)
 
 from vulnweaver_source_analysis.archive import (
     SafeArchiveImporter,
@@ -121,6 +127,33 @@ class SourceImportExecutor:
                 message=str(error),
                 retryable=False,
             )
+        except IntegrityError as error:
+            return _failed_result(
+                job["id"],
+                code="source_import.persistence_integrity_failed",
+                kind=FailureKind.INTERNAL,
+                message="source import persistence integrity check failed",
+                retryable=False,
+                details={"exception_type": type(error).__name__},
+            )
+        except PersistenceError as error:
+            return _failed_result(
+                job["id"],
+                code=f"source_import.{error.code}",
+                kind=FailureKind.INTERNAL,
+                message=error.message,
+                retryable=error.retryable,
+                details=error.details,
+            )
+        except SQLAlchemyError as error:
+            return _failed_result(
+                job["id"],
+                code="source_import.persistence_unavailable",
+                kind=FailureKind.ENVIRONMENT,
+                message="source import persistence operation failed",
+                retryable=True,
+                details={"exception_type": type(error).__name__},
+            )
 
     async def _execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] != JobKind.IMPORT:
@@ -166,15 +199,46 @@ class SourceImportExecutor:
                 derived_version_id,
                 summary.files,
             )
-            if self._pair_importer is not None:
-                await self._pair_importer.import_source_result(
-                    result,
-                    raw_object_ref=index_object_ref,
-                    tool=_tool_identity(job),
-                    created_at=job["created_at"],
+            try:
+                if self._pair_importer is not None:
+                    await self._pair_importer.import_source_result(
+                        result,
+                        raw_object_ref=index_object_ref,
+                        tool=_tool_identity(job),
+                        created_at=job["created_at"],
+                    )
+                if self._static_scheduler is not None:
+                    await self._static_scheduler.schedule(job, result, derived_version_id)
+            except IntegrityError as error:
+                return _failed_result(
+                    job["id"],
+                    code="source_import.persistence_integrity_failed",
+                    kind=FailureKind.INTERNAL,
+                    message="source index was published but graph persistence failed",
+                    retryable=False,
+                    details={"exception_type": type(error).__name__},
+                    produced_artifact_version_ids=[derived_version_id],
                 )
-            if self._static_scheduler is not None:
-                await self._static_scheduler.schedule(job, result, derived_version_id)
+            except PersistenceError as error:
+                return _failed_result(
+                    job["id"],
+                    code=f"source_import.{error.code}",
+                    kind=FailureKind.INTERNAL,
+                    message=error.message,
+                    retryable=error.retryable,
+                    details=error.details,
+                    produced_artifact_version_ids=[derived_version_id],
+                )
+            except SQLAlchemyError as error:
+                return _failed_result(
+                    job["id"],
+                    code="source_import.persistence_unavailable",
+                    kind=FailureKind.ENVIRONMENT,
+                    message="source index was published but follow-up persistence failed",
+                    retryable=True,
+                    details={"exception_type": type(error).__name__},
+                    produced_artifact_version_ids=[derived_version_id],
+                )
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
@@ -318,12 +382,13 @@ def _failed_result(
     message: str,
     retryable: bool,
     details: Mapping[str, object] | None = None,
+    produced_artifact_version_ids: list[str] | None = None,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         job_id=job_id,
         status=JobStatus.FAILED,
-        produced_artifact_version_ids=[],
+        produced_artifact_version_ids=produced_artifact_version_ids or [],
         evidence_ids=[],
         failure=StructuredFailure(
             code=code,

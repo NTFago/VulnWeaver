@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     Artifact,
@@ -35,7 +36,12 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
-from vulnweaver_persistence import Database, EntityConflict, EntityNotFound
+from vulnweaver_persistence import (
+    Database,
+    EntityConflict,
+    EntityNotFound,
+    PersistenceError,
+)
 
 from vulnweaver_source_analysis.archive import SafeArchiveImporter, SourceImportError
 from vulnweaver_source_analysis.static_tools import (
@@ -107,6 +113,32 @@ class StaticAnalysisExecutor:
             return _failed_result(
                 job["id"], "static_analysis.result_validation_failed", str(error), {}
             )
+        except IntegrityError as error:
+            return _failed_result(
+                job["id"],
+                "static_analysis.persistence_integrity_failed",
+                "static analysis persistence integrity check failed",
+                {"exception_type": type(error).__name__},
+                FailureKind.INTERNAL,
+            )
+        except PersistenceError as error:
+            return _failed_result(
+                job["id"],
+                f"static_analysis.{error.code}",
+                error.message,
+                error.details,
+                FailureKind.INTERNAL,
+                error.retryable,
+            )
+        except SQLAlchemyError as error:
+            return _failed_result(
+                job["id"],
+                "static_analysis.persistence_unavailable",
+                "static analysis persistence operation failed",
+                {"exception_type": type(error).__name__},
+                FailureKind.ENVIRONMENT,
+                True,
+            )
 
     async def _execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] != JobKind.SOURCE_ANALYSIS:
@@ -123,7 +155,7 @@ class StaticAnalysisExecutor:
                 details={"tool_name": tool_name},
             )
         artifact_version_id = _required_argument(job, "artifact_version_id")
-        parent_version_id = (
+        source_index_version_id = (
             _optional_argument(job, "source_index_version_id") or artifact_version_id
         )
         object_ref = _single_input(job)
@@ -142,6 +174,7 @@ class StaticAnalysisExecutor:
                 adapter,
                 extracted,
                 job["resource_budget"]["timeout_seconds"],
+                min(job["resource_budget"]["disk_bytes"], 16 * 1024 * 1024),
                 languages,
             )
             result = _result(
@@ -153,7 +186,13 @@ class StaticAnalysisExecutor:
             )
             validate_contract("StaticAnalysisResult", result)
             derived_version_id = _stable_identifier("artifact-version", job["id"])
-            await self._publish_result(job, result, parent_version_id, derived_version_id)
+            await self._publish_result(
+                job,
+                result,
+                artifact_version_id,
+                source_index_version_id,
+                derived_version_id,
+            )
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
@@ -174,6 +213,7 @@ class StaticAnalysisExecutor:
         adapter: StaticToolAdapter,
         root: Path,
         timeout_seconds: int,
+        max_output_bytes: int,
         languages: set[str],
     ) -> StaticToolOutput:
         supported = {
@@ -190,13 +230,18 @@ class StaticAnalysisExecutor:
                 b"",
                 "language_not_detected",
             )
-        return adapter.run(root, timeout_seconds=timeout_seconds)
+        return adapter.run(
+            root,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
 
     async def _publish_result(
         self,
         job: Job,
         result: StaticAnalysisResult,
         parent_version_id: str,
+        source_index_version_id: str,
         version_id: str,
     ) -> None:
         encoded = json.dumps(
@@ -226,7 +271,11 @@ class StaticAnalysisExecutor:
                     object_ref=stored.object_ref,
                     parent_version_id=parent_version_id,
                     produced_by=_tool_identity(job),
-                    generation_config={"format": "static-analysis-result", "tool": _tool_name(job)},
+                    generation_config={
+                        "format": "static-analysis-result",
+                        "tool": _tool_name(job),
+                        "source_index_version_id": source_index_version_id,
+                    },
                     created_at=job["created_at"],
                 )
                 validate_contract("Artifact", artifact)

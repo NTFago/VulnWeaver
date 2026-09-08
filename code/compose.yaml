@@ -19,6 +19,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     networks:
       - control-plane
+      - analysis-plane
     restart: unless-stopped
 
   redis:
@@ -40,6 +41,7 @@ services:
       - redis-data:/data
     networks:
       - control-plane
+      - analysis-plane
     restart: unless-stopped
 
   migrate:
@@ -199,7 +201,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - control-plane
+      - analysis-plane
     read_only: true
     tmpfs:
       - /tmp
@@ -233,6 +235,9 @@ services:
 networks:
   control-plane:
     driver: bridge
+  analysis-plane:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres-data:

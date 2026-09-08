@@ -20,7 +20,8 @@ from vulnweaver_contracts import (
     SourceImportResult,
     validate_contract,
 )
-from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_pair import SourcePairImporter
+from vulnweaver_persistence import Database, DatabaseSettings, PersistenceInvariantError
 from vulnweaver_source_analysis import (
     ArchiveFormat,
     ImportLimits,
@@ -113,6 +114,11 @@ class SlowIndexer(SourceIndexer):
     ) -> SourceImportResult:
         time.sleep(0.1)
         return super().index(root, artifact_version_id, created_at=created_at)
+
+
+class FailingPairImporter:
+    async def import_source_result(self, *_args: object, **_kwargs: object) -> None:
+        raise PersistenceInvariantError("PAIR persistence rejected the graph")
 
 
 def test_safe_zip_import_and_four_language_index(tmp_path: Path) -> None:
@@ -436,6 +442,63 @@ def test_source_executor_persists_immutable_derived_index(
                 if path.is_file()
             ]
             assert len(objects) == 2
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_source_executor_returns_terminal_failure_after_index_publish(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "artifacts")
+        try:
+            archive = zip_bytes({"src/main.c": b"int main(){return 0;}"}).getvalue()
+            stored = store.put_stream(io.BytesIO(archive), max_bytes=len(archive))
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project("project:partial-import"))
+                await repositories.artifacts.add(
+                    artifact(
+                        "artifact:partial-import",
+                        project_id="project:partial-import",
+                        current_version_id="artifact-version:t12-async",
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:t12-async",
+                        artifact_id="artifact:partial-import",
+                        digest_character="e",
+                    )
+                )
+                await repositories.tasks.create(
+                    task(
+                        "task:t12-async",
+                        project_id="project:partial-import",
+                        artifact_version_ids=["artifact-version:t12-async"],
+                    )
+                )
+
+            job = executor_job(stored.object_ref)
+            executor = SourceImportExecutor(
+                database,
+                store,
+                pair_importer=cast(SourcePairImporter, FailingPairImporter()),
+                scratch_root=tmp_path,
+            )
+            result = await executor.execute(job, asyncio.Event())
+
+            assert result["status"] is JobStatus.FAILED
+            assert result["failure"] is not None
+            assert result["failure"]["code"] == "source_import.persistence_invariant_violation"
+            assert len(result["produced_artifact_version_ids"]) == 1
+            async with database.transaction() as repositories:
+                published = await repositories.artifacts.get_version(
+                    result["produced_artifact_version_ids"][0]
+                )
+                assert published["parent_version_id"] == "artifact-version:t12-async"
         finally:
             await database.dispose()
 

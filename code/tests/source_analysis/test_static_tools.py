@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+import pytest
 from vulnweaver_contracts import Severity, StaticToolStatus
 from vulnweaver_source_analysis import (
     CppcheckAdapter,
@@ -8,6 +12,7 @@ from vulnweaver_source_analysis import (
     parse_cppcheck_output,
     parse_semgrep_output,
 )
+from vulnweaver_source_analysis.static_tools import SubprocessStaticTool
 
 
 def test_semgrep_json_is_normalized_to_contract_diagnostics() -> None:
@@ -67,3 +72,45 @@ def test_missing_executable_becomes_structured_unavailable_result(tmp_path) -> N
     assert output.status is StaticToolStatus.UNAVAILABLE
     assert output.reason == "executable_not_found"
     assert output.exit_code is None
+
+
+@pytest.mark.parametrize("severity", ["information", "portability"])
+def test_cppcheck_lowest_tier_severities_are_informational(severity: str) -> None:
+    raw = (
+        f'<results><errors><error id="notice" severity="{severity}" msg="notice">'
+        '<location file="src/main.c" line="1"/></error></errors></results>'
+    ).encode()
+
+    diagnostics = parse_cppcheck_output(raw, artifact_version_id="artifact-version:source")
+
+    assert diagnostics[0]["severity"] is Severity.INFO
+
+
+def test_subprocess_output_is_killed_at_combined_limit(tmp_path) -> None:
+    adapter = SubprocessStaticTool(
+        "test",
+        sys.executable,
+        ("-c", "import sys; sys.stdout.buffer.write(b'x' * 1048576)"),
+    )
+
+    output = adapter.run(tmp_path, timeout_seconds=5, max_output_bytes=1024)
+
+    assert output.status is StaticToolStatus.FAILED
+    assert output.reason == "output_limit_exceeded"
+    assert len(output.stdout) + len(output.stderr) <= 1024
+
+
+def test_subprocess_does_not_inherit_control_plane_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql://secret")
+    adapter = SubprocessStaticTool(
+        "test",
+        sys.executable,
+        ("-c", "import os; print(os.getenv('DATABASE_URL', 'missing'))"),
+    )
+
+    output = adapter.run(tmp_path, timeout_seconds=5, max_output_bytes=1024)
+
+    assert output.status is StaticToolStatus.SUCCEEDED
+    assert output.stdout.strip() == b"missing"

@@ -8,13 +8,16 @@ version-pinned ToolSpec and image digest.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
+import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 from vulnweaver_contracts import (
     JsonObject,
@@ -40,7 +43,13 @@ class StaticToolOutput:
 class StaticToolAdapter(Protocol):
     name: str
 
-    def run(self, root: Path, *, timeout_seconds: int) -> StaticToolOutput: ...
+    def run(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int = 16 * 1024 * 1024,
+    ) -> StaticToolOutput: ...
 
     def parse(
         self, output: StaticToolOutput, *, artifact_version_id: str
@@ -55,16 +64,25 @@ class SubprocessStaticTool:
         self._executable = executable
         self._arguments = tuple(arguments)
 
-    def run(self, root: Path, *, timeout_seconds: int) -> StaticToolOutput:
+    def run(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int = 16 * 1024 * 1024,
+    ) -> StaticToolOutput:
+        if max_output_bytes < 1:
+            raise ValueError("static tool output limit must be positive")
         command = [self._executable, *self._arguments, "."]
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
-                check=False,
-                capture_output=True,
-                timeout=timeout_seconds,
                 shell=False,
                 cwd=root,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=_tool_environment(),
             )
         except FileNotFoundError:
             return StaticToolOutput(
@@ -76,26 +94,70 @@ class SubprocessStaticTool:
                 b"",
                 "executable_not_found",
             )
-        except subprocess.TimeoutExpired as error:
+        assert process.stdout is not None
+        assert process.stderr is not None
+        budget = _CaptureBudget(max_output_bytes)
+        stdout = bytearray()
+        stderr = bytearray()
+        readers = (
+            threading.Thread(
+                target=_read_bounded,
+                args=(process.stdout, stdout, budget, process),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_read_bounded,
+                args=(process.stderr, stderr, budget, process),
+                daemon=True,
+            ),
+        )
+        for reader in readers:
+            reader.start()
+        timed_out = False
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            process.wait()
+        finally:
+            for reader in readers:
+                reader.join()
+            process.stdout.close()
+            process.stderr.close()
+
+        captured_stdout = bytes(stdout)
+        captured_stderr = bytes(stderr)
+        if budget.exceeded.is_set():
+            return StaticToolOutput(
+                self.name,
+                None,
+                StaticToolStatus.FAILED,
+                process.returncode,
+                captured_stdout,
+                captured_stderr,
+                "output_limit_exceeded",
+            )
+        if timed_out:
             return StaticToolOutput(
                 self.name,
                 None,
                 StaticToolStatus.FAILED,
                 None,
-                _bytes(error.stdout),
-                _bytes(error.stderr),
+                captured_stdout,
+                captured_stderr,
                 "timeout",
             )
         status = (
-            StaticToolStatus.SUCCEEDED if completed.returncode == 0 else StaticToolStatus.FAILED
+            StaticToolStatus.SUCCEEDED if process.returncode == 0 else StaticToolStatus.FAILED
         )
         return StaticToolOutput(
             self.name,
-            _tool_version(self.name, completed.stdout, completed.stderr),
+            _tool_version(self.name, captured_stdout, captured_stderr),
             status,
-            completed.returncode,
-            completed.stdout,
-            completed.stderr,
+            process.returncode,
+            captured_stdout,
+            captured_stderr,
             None if status is StaticToolStatus.SUCCEEDED else "tool_exit_nonzero",
         )
 
@@ -122,7 +184,13 @@ class SemgrepAdapter(SubprocessStaticTool):
             ("--json", "--no-git-ignore", "--metrics", "off", "--config", config),
         )
 
-    def run(self, root: Path, *, timeout_seconds: int) -> StaticToolOutput:
+    def run(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int = 16 * 1024 * 1024,
+    ) -> StaticToolOutput:
         if not self._config_path.is_file():
             return StaticToolOutput(
                 self.name,
@@ -133,7 +201,11 @@ class SemgrepAdapter(SubprocessStaticTool):
                 b"",
                 "rules_not_installed",
             )
-        return super().run(root, timeout_seconds=timeout_seconds)
+        return super().run(
+            root,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
 
 
 class CppcheckAdapter(SubprocessStaticTool):
@@ -287,6 +359,8 @@ def _severity(value: object) -> Severity:
         "medium": Severity.MEDIUM,
         "low": Severity.LOW,
         "info": Severity.INFO,
+        "information": Severity.INFO,
+        "portability": Severity.INFO,
         "style": Severity.INFO,
         "performance": Severity.LOW,
     }.get(normalized, Severity.MEDIUM)
@@ -313,10 +387,50 @@ def _positive_int(value: object) -> int | None:
     return number if number > 0 else None
 
 
-def _bytes(value: bytes | str | None) -> bytes:
-    if value is None:
-        return b""
-    return value if isinstance(value, bytes) else value.encode("utf-8", errors="replace")
+class _CaptureBudget:
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.consumed = 0
+        self.exceeded = threading.Event()
+        self.lock = threading.Lock()
+
+    def take(self, chunk: bytes) -> bytes:
+        with self.lock:
+            remaining = self.limit - self.consumed
+            accepted = chunk[: max(remaining, 0)]
+            self.consumed += len(accepted)
+            if len(accepted) != len(chunk):
+                self.exceeded.set()
+            return accepted
+
+
+def _read_bounded(
+    stream: BinaryIO,
+    output: bytearray,
+    budget: _CaptureBudget,
+    process: subprocess.Popen[bytes],
+) -> None:
+    while chunk := stream.read(64 * 1024):
+        output.extend(budget.take(chunk))
+        if budget.exceeded.is_set():
+            with suppress(OSError):
+                process.kill()
+            return
+
+
+def _tool_environment() -> dict[str, str]:
+    allowed = {
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+        "WINDIR",
+    }
+    return {key: value for key, value in os.environ.items() if key.upper() in allowed}
 
 
 def _tool_version(tool_name: str, stdout: bytes, stderr: bytes) -> str | None:

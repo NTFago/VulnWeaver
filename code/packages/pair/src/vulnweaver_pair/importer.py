@@ -17,6 +17,7 @@ from vulnweaver_contracts import (
     PairNodeKind,
     PairRaw,
     SchemaVersion,
+    SourceCall,
     SourceFunction,
     SourceImportResult,
     ToolIdentity,
@@ -141,33 +142,47 @@ def _functions_and_nodes(
 def _call_edges(
     result: SourceImportResult, source_to_node: Mapping[str, str], raw_id: str
 ) -> list[PairEdge]:
-    by_name: dict[str, str] = {}
+    by_id: dict[str, SourceFunction] = {}
+    by_name: dict[str, list[SourceFunction]] = {}
+    by_qualified_name: dict[str, list[SourceFunction]] = {}
     for source_function in result["functions"]:
-        node_id = source_to_node[source_function["id"]]
-        by_name.setdefault(source_function["name"], node_id)
-        by_name.setdefault(source_function["qualified_name"], node_id)
-    edges: list[PairEdge] = []
+        by_id[source_function["id"]] = source_function
+        by_name.setdefault(source_function["name"], []).append(source_function)
+        by_qualified_name.setdefault(source_function["qualified_name"], []).append(
+            source_function
+        )
+    grouped_calls: dict[tuple[str, str], list[SourceCall]] = {}
     for call in result["calls"]:
-        target = by_name.get(call["callee"])
-        if target is None:
-            target = next(
-                (
-                    node_id
-                    for name, node_id in by_name.items()
-                    if name.endswith(f".{call['callee']}")
-                ),
-                None,
-            )
         source = source_to_node.get(call["caller_id"])
+        caller = by_id.get(call["caller_id"])
+        target_function = _resolve_call_target(
+            call,
+            caller=caller,
+            by_name=by_name,
+            by_qualified_name=by_qualified_name,
+        )
+        target = (
+            source_to_node.get(target_function["id"])
+            if target_function is not None
+            else None
+        )
         if source is None or target is None:
             continue
+        grouped_calls.setdefault((source, target), []).append(call)
+
+    edges: list[PairEdge] = []
+    for (source, target), calls in sorted(grouped_calls.items()):
+        call_sites = [
+            {"callee": call["callee"], "location": call["location"]}
+            for call in sorted(calls, key=_call_sort_key)
+        ]
         edge_id = _stable_id(
             "pair-edge",
             result["artifact_version_id"],
             source,
             target,
-            call["location"]["path"],
-            str(call["location"]["start_line"]),
+            PairEdgeType.CALL.value,
+            "source",
         )
         edges.append(
             PairEdge(
@@ -180,12 +195,60 @@ def _call_edges(
                 scope="source",
                 confidence=1.0,
                 evidence_id=None,
-                attributes=cast(
-                    JsonObject, {"callee": call["callee"], "location": call["location"]}
-                ),
+                attributes=cast(JsonObject, {"call_sites": call_sites, "pair_raw_id": raw_id}),
             )
         )
     return edges
+
+
+def _resolve_call_target(
+    call: SourceCall,
+    *,
+    caller: SourceFunction | None,
+    by_name: Mapping[str, list[SourceFunction]],
+    by_qualified_name: Mapping[str, list[SourceFunction]],
+) -> SourceFunction | None:
+    callee = call["callee"]
+    normalized_callee = callee.replace("::", ".")
+    exact = by_qualified_name.get(normalized_callee, [])
+    if len(exact) == 1:
+        return exact[0]
+
+    bare_name = normalized_callee.rsplit(".", 1)[-1]
+    candidates = by_name.get(bare_name, [])
+    if len(candidates) == 1:
+        return candidates[0]
+    if caller is None or not candidates:
+        return None
+
+    caller_scope = caller["qualified_name"].rsplit(".", 1)[0]
+    if caller_scope != caller["qualified_name"]:
+        same_scope = [
+            candidate
+            for candidate in candidates
+            if candidate["qualified_name"].rsplit(".", 1)[0] == caller_scope
+        ]
+        if len(same_scope) == 1:
+            return same_scope[0]
+
+    same_file = [
+        candidate
+        for candidate in candidates
+        if candidate["location"]["path"] == call["location"]["path"]
+    ]
+    return same_file[0] if len(same_file) == 1 else None
+
+
+def _call_sort_key(call: SourceCall) -> tuple[str, int, int, int, int, str]:
+    location = call["location"]
+    return (
+        location["path"],
+        location["start_line"],
+        location["start_column"],
+        location["end_line"],
+        location["end_column"],
+        call["callee"],
+    )
 
 
 def _signature(source_function: SourceFunction) -> str:

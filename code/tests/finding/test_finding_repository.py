@@ -146,3 +146,104 @@ def test_candidate_finding_and_evidence_link_are_idempotent(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_concurrent_reviews_preserve_complete_ordered_history(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        finding_id = "finding:concurrent-reviews"
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project("project:concurrent-reviews"))
+                await repositories.artifacts.add(
+                    artifact(
+                        "artifact:concurrent-reviews",
+                        project_id="project:concurrent-reviews",
+                        current_version_id="artifact-version:concurrent-reviews",
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:concurrent-reviews",
+                        artifact_id="artifact:concurrent-reviews",
+                        digest_character="d",
+                    )
+                )
+                await repositories.tasks.create(
+                    task(
+                        "task:concurrent-reviews",
+                        project_id="project:concurrent-reviews",
+                        artifact_version_ids=["artifact-version:concurrent-reviews"],
+                    )
+                )
+                await repositories.findings.create(
+                    cast(
+                        Finding,
+                        {
+                            "schema_version": "1.0.0",
+                            "id": finding_id,
+                            "task_id": "task:concurrent-reviews",
+                            "category": FindingCategory.STATIC_ONLY,
+                            "cwe_id": "CWE-20",
+                            "title": "Concurrent review target",
+                            "severity": Severity.MEDIUM,
+                            "confidence": 0.5,
+                            "location": {
+                                "artifact_version_id": "artifact-version:concurrent-reviews",
+                                "path": "src/app.py",
+                                "start_line": 1,
+                                "start_column": 1,
+                                "end_line": 1,
+                                "end_column": 2,
+                            },
+                            "dataflow": [],
+                            "status": FindingStatus.CANDIDATE,
+                            "evidence_ids": [],
+                            "review_ids": [],
+                            "poc_ids": [],
+                            "fix_suggestion": "Validate input",
+                            "created_at": "2026-09-08T10:00:00Z",
+                        },
+                    )
+                )
+
+            reviews = [
+                cast(
+                    Review,
+                    {
+                        "schema_version": "1.0.0",
+                        "id": f"review:concurrent-{index}",
+                        "finding_id": finding_id,
+                        "outcome": outcome,
+                        "rationale": f"review {index}",
+                        "model": "review-model",
+                        "supersedes_review_id": None,
+                        "created_at": f"2026-09-08T10:0{index}:00+00:00",
+                    },
+                )
+                for index, outcome in (
+                    (1, FindingStatus.FALSE_POSITIVE),
+                    (2, FindingStatus.CANDIDATE),
+                )
+            ]
+
+            async def add_review(review: Review) -> None:
+                async with database.transaction() as repositories:
+                    await repositories.findings.add_review(review)
+
+            await asyncio.gather(*(add_review(review) for review in reversed(reviews)))
+
+            async with database.transaction() as repositories:
+                stored = await repositories.findings.get(finding_id)
+                assert stored["review_ids"] == [review["id"] for review in reviews]
+                assert stored["status"] is FindingStatus.CANDIDATE
+                stored_reviews = await repositories.findings.list_reviews(finding_id)
+                assert [review["id"] for review in stored_reviews] == [
+                    review["id"] for review in reviews
+                ]
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
