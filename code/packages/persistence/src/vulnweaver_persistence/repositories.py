@@ -1406,6 +1406,8 @@ def _job_fingerprint(job: Job) -> str:
             "schema_version": job["schema_version"],
             "task_id": job["task_id"],
             "kind": job["kind"],
+            "tool": job.get("tool"),
+            "arguments": job.get("arguments"),
             "input_refs": job["input_refs"],
             "resource_budget": job["resource_budget"],
             "retry_policy": job["retry_policy"],
@@ -1425,7 +1427,7 @@ def _job_values(job: Job, fingerprint: str) -> dict[str, object]:
 
 
 def _job_from_row(row: RowMapping) -> Job:
-    return Job(
+    job = Job(
         schema_version=row["schema_version"],
         id=row["id"],
         task_id=row["task_id"],
@@ -1441,6 +1443,11 @@ def _job_from_row(row: RowMapping) -> Job:
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
     )
+    if row["tool"] is not None:
+        job["tool"] = row["tool"]
+    if row["arguments"] is not None:
+        job["arguments"] = row["arguments"]
+    return job
 
 
 def _worker_result_fingerprint(result: WorkerResult) -> str:

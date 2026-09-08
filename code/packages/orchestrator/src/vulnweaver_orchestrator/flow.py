@@ -52,6 +52,8 @@ class FlowState(TypedDict):
     job_kind: str
     tool_name: str
     tool_version: str
+    tool_image_digest: str
+    tool_retry_policy: RetryPolicy
     tool_arguments: dict[str, object]
     policy_status: str
     policy_reason_codes: list[str]
@@ -383,6 +385,8 @@ class Orchestrator:
         return cast(FlowState, next_state)
 
     async def _authorize_initial_job(self, state: FlowState) -> FlowState:
+        tool_arguments = dict(state["tool_arguments"])
+        tool_arguments.setdefault("artifact_version_id", state["artifact_version_ids"][0])
         plan = {
             "schema_version": SchemaVersion.VALUE_1_0_0,
             "id": _stable_identifier("plan", state["task_id"], "initial"),
@@ -394,7 +398,7 @@ class Orchestrator:
                     "tool_name": state["tool_name"],
                     "tool_version": state["tool_version"],
                     "input_refs": state["object_refs"],
-                    "arguments": state["tool_arguments"],
+                    "arguments": tool_arguments,
                     "expected_output_types": ["artifact", "analysis_result"],
                     "reason": "select the first registered pipeline step for the task input",
                 }
@@ -418,8 +422,12 @@ class Orchestrator:
                     details={"reason_codes": list(decision.reason_codes)},
                 )
             )
+        spec = self._registry.resolve(state["tool_name"], state["tool_version"])
         next_state = {
             **state,
+            "tool_image_digest": spec["image_digest"],
+            "tool_retry_policy": spec["retry_policy"],
+            "tool_arguments": tool_arguments,
             "policy_status": decision.status.value,
             "policy_reason_codes": list(decision.reason_codes),
             "checkpoint_node": "authorize_initial_job",
@@ -436,16 +444,25 @@ class Orchestrator:
             if state["policy_status"] == PolicyDecisionStatus.WAITING_PERMISSION.value
             else JobStatus.QUEUED
         )
+        spec = self._registry.resolve(state["tool_name"], state["tool_version"])
+        tool_arguments = dict(state["tool_arguments"])
+        tool_arguments.setdefault("artifact_version_id", state["artifact_version_ids"][0])
         job = Job(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=job_id,
             task_id=task_id,
             kind=JobKind(state["job_kind"]),
+            tool={
+                "name": state["tool_name"],
+                "version": state["tool_version"],
+                "image_digest": state.get("tool_image_digest", spec["image_digest"]),
+            },
+            arguments=cast(JsonObject, tool_arguments),
             input_refs=state["object_refs"],
             status=status,
             idempotency_key=_stable_identifier("initial", task_id),
             resource_budget=state["resource_budget"],
-            retry_policy=self._initial_policy.retry_policy,
+            retry_policy=state.get("tool_retry_policy", spec["retry_policy"]),
             attempt=0,
             lease=None,
             failure=None,

@@ -115,6 +115,44 @@ export interface SourceLocation {
   end_column: number;
 }
 
+export interface SourceFileRecord {
+  path: string;
+  size_bytes: number;
+  digest: Sha256Digest;
+  language: string | null;
+  parse_status: "indexed" | "unsupported" | "binary" | "too_large" | "parse_error";
+}
+
+export interface SourceParameter {
+  name: string;
+  type: string | null;
+}
+
+export interface SourceFunction {
+  id: Identifier;
+  name: string;
+  qualified_name: string;
+  kind: "function" | "method" | "constructor";
+  language: string;
+  parameters: Array<SourceParameter>;
+  location: SourceLocation;
+}
+
+export interface SourceCall {
+  caller_id: Identifier;
+  callee: string;
+  location: SourceLocation;
+}
+
+export interface SourceImportResult {
+  schema_version: SchemaVersion;
+  artifact_version_id: Identifier;
+  files: Array<SourceFileRecord>;
+  functions: Array<SourceFunction>;
+  calls: Array<SourceCall>;
+  capability_profile: CapabilityProfile;
+}
+
 export interface BinaryLocation {
   artifact_version_id: Identifier;
   image_base?: number;
@@ -192,6 +230,8 @@ export interface Job {
   id: Identifier;
   task_id: Identifier;
   kind: JobKind;
+  tool?: ToolIdentity;
+  arguments?: JsonObject;
   input_refs: Array<ObjectReference>;
   status: JobStatus;
   idempotency_key: IdempotencyKey;

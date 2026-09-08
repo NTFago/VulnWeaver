@@ -1,0 +1,1 @@
+"""Runnable source analysis worker."""

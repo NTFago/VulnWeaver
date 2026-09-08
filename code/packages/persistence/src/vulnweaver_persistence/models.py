@@ -167,6 +167,8 @@ jobs = Table(
         nullable=False,
     ),
     Column("kind", String(32), nullable=False),
+    Column("tool", JSONB(none_as_null=True), nullable=True),
+    Column("arguments", JSONB(none_as_null=True), nullable=True),
     Column("input_refs", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
     Column("idempotency_key", String(128), nullable=False),

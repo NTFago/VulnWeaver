@@ -136,6 +136,75 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  orchestrator:
+    image: vulnweaver-orchestrator:dev
+    build:
+      context: .
+      dockerfile: apps/orchestrator/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_STREAM_NAMESPACE: ${REDIS_STREAM_NAMESPACE:-vulnweaver}
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
+      ORCHESTRATOR_CONSUMER_NAME: ${ORCHESTRATOR_CONSUMER_NAME:-orchestrator-1}
+      ORCHESTRATOR_CONSUMER_GROUP: ${ORCHESTRATOR_CONSUMER_GROUP:-orchestrators}
+      ORCHESTRATOR_READ_BLOCK_MILLISECONDS: ${ORCHESTRATOR_READ_BLOCK_MILLISECONDS:-1000}
+      ORCHESTRATOR_PENDING_IDLE_MILLISECONDS: ${ORCHESTRATOR_PENDING_IDLE_MILLISECONDS:-30000}
+    volumes:
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  analysis-worker:
+    image: vulnweaver-analysis-worker:dev
+    build:
+      context: .
+      dockerfile: apps/analysis-worker/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_STREAM_NAMESPACE: ${REDIS_STREAM_NAMESPACE:-vulnweaver}
+      ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
+      WORKER_CONSUMER_NAME: ${ANALYSIS_WORKER_CONSUMER_NAME:-analysis-worker-1}
+      WORKER_CONSUMER_GROUP: ${ANALYSIS_WORKER_CONSUMER_GROUP:-analysis-workers}
+      WORKER_CONCURRENCY: ${ANALYSIS_WORKER_CONCURRENCY:-1}
+      WORKER_LEASE_SECONDS: ${ANALYSIS_WORKER_LEASE_SECONDS:-120}
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    networks:
+      - control-plane
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
   web:
     image: vulnweaver-web:dev
     build:

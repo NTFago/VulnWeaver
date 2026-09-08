@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-api",
+    "vulnweaver-analysis-worker",
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
@@ -15,6 +16,7 @@ dependencies = [
     "vulnweaver-orchestrator",
     "vulnweaver-orchestrator-service",
     "vulnweaver-queue",
+    "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
@@ -34,6 +36,7 @@ package = false
 [tool.uv.workspace]
 members = [
     "apps/api",
+    "apps/analysis-worker",
     "apps/dispatcher",
     "apps/orchestrator",
     "packages/artifact-store",
@@ -43,6 +46,7 @@ members = [
     "packages/model-gateway",
     "packages/orchestrator",
     "packages/queue",
+    "packages/source-analysis",
     "packages/tool-runtime",
     "packages/worker",
 ]
@@ -50,6 +54,7 @@ members = [
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-api = { workspace = true }
+vulnweaver-analysis-worker = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
@@ -58,6 +63,7 @@ vulnweaver-orchestrator-service = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
+vulnweaver-source-analysis = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
@@ -73,6 +79,7 @@ include = ["apps", "packages"]
 exclude = ["**/__pycache__", "**/.venv", "**/node_modules"]
 extraPaths = [
     "apps/api/src",
+    "apps/analysis-worker/src",
     "apps/dispatcher/src",
     "apps/orchestrator/src",
     "packages/artifact-store/src",
@@ -82,6 +89,7 @@ extraPaths = [
     "packages/model-gateway/src",
     "packages/orchestrator/src",
     "packages/queue/src",
+    "packages/source-analysis/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
 ]
@@ -100,6 +108,7 @@ branch = true
 concurrency = ["thread"]
 source_pkgs = [
     "vulnweaver_api",
+    "vulnweaver_analysis_worker",
     "vulnweaver_artifact_store",
     "vulnweaver_contracts",
     "vulnweaver_dispatcher",
@@ -108,11 +117,13 @@ source_pkgs = [
     "vulnweaver_model_gateway",
     "vulnweaver_orchestrator",
     "vulnweaver_queue",
+    "vulnweaver_source_analysis",
     "vulnweaver_tool_runtime",
     "vulnweaver_worker",
 ]
 omit = [
     "*/vulnweaver_api/main.py",
+    "*/vulnweaver_analysis_worker/main.py",
     "*/vulnweaver_dispatcher/main.py",
     "*/vulnweaver_dispatcher/migrate.py",
     "*/vulnweaver_orchestrator_service/main.py",

@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0.0",
+  "name": "source-import",
+  "version": "1.0.0",
+  "image_digest": "sha256:8b756ba9f3560ac88fe24cb33e93a157e82677499f960976f4309e44c8cc38b7",
+  "risk_level": "low",
+  "accepted_artifacts": [
+    "source_archive",
+    "source_repository"
+  ],
+  "command_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "artifact_version_id"
+    ],
+    "properties": {
+      "artifact_version_id": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    }
+  },
+  "output_schema": {
+    "type": "object"
+  },
+  "network_policy": {
+    "access": "none",
+    "allowed_hosts": []
+  },
+  "filesystem_policy": {
+    "input_read_only": true,
+    "isolated_output": true,
+    "allow_host_paths": false
+  },
+  "resource_limits": {
+    "max_model_tokens": 0,
+    "cpu_millis": 2000,
+    "memory_bytes": 268435456,
+    "disk_bytes": 536870912,
+    "max_tool_concurrency": 1,
+    "max_dynamic_runs": 0,
+    "timeout_seconds": 300
+  },
+  "approval_required": false,
+  "timeout_seconds": 300,
+  "retry_policy": {
+    "max_attempts": 2,
+    "backoff_seconds": 2.0,
+    "retryable_failure_kinds": [
+      "timeout",
+      "environment",
+      "dependency"
+    ]
+  }
+}

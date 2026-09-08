@@ -210,6 +210,14 @@ def test_task_request_creates_policy_approved_initial_job(
                 assert stored_task["status"] is TaskStatus.VALIDATING
                 job = await repositories.jobs.get(result[0].job_id or "")
                 assert job["status"] is JobStatus.QUEUED
+                assert job.get("tool") == {
+                    "name": "source-import",
+                    "version": "1.0.0",
+                    "image_digest": "sha256:" + "b" * 64,
+                }
+                assert job.get("arguments") == {
+                    "artifact_version_id": "artifact-version:t11-main"
+                }
                 outbox = await repositories.outbox.pending()
                 assert any(
                     message.event["event_type"] == "job.requested" for message in outbox

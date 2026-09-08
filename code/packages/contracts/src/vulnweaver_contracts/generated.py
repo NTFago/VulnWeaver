@@ -215,6 +215,39 @@ class SourceLocation(TypedDict):
     end_line: int
     end_column: int
 
+class SourceFileRecord(TypedDict):
+    path: str
+    size_bytes: int
+    digest: Sha256Digest
+    language: str | None
+    parse_status: Literal['indexed', 'unsupported', 'binary', 'too_large', 'parse_error']
+
+class SourceParameter(TypedDict):
+    name: str
+    type: str | None
+
+class SourceFunction(TypedDict):
+    id: Identifier
+    name: str
+    qualified_name: str
+    kind: Literal['function', 'method', 'constructor']
+    language: str
+    parameters: list[SourceParameter]
+    location: SourceLocation
+
+class SourceCall(TypedDict):
+    caller_id: Identifier
+    callee: str
+    location: SourceLocation
+
+class SourceImportResult(TypedDict):
+    schema_version: SchemaVersion
+    artifact_version_id: Identifier
+    files: list[SourceFileRecord]
+    functions: list[SourceFunction]
+    calls: list[SourceCall]
+    capability_profile: CapabilityProfile
+
 class BinaryLocation(TypedDict):
     artifact_version_id: Identifier
     image_base: NotRequired[int]
@@ -284,6 +317,8 @@ class Job(TypedDict):
     id: Identifier
     task_id: Identifier
     kind: JobKind
+    tool: NotRequired[ToolIdentity]
+    arguments: NotRequired[JsonObject]
     input_refs: list[ObjectReference]
     status: JobStatus
     idempotency_key: IdempotencyKey

@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；编排骨架已完成，准备安全导入与源码索引
-- **总体状态**：控制面、策略、模型访问和可恢复编排已形成；实际源码分析需继续 T12-T15
-- **最后更新**：2026-09-08
+- **当前阶段**：P2 源码静态分析 MVP 进行中；安全导入与源码索引已完成，准备接入静态分析工具
+- **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
+- **最后更新**：2026-09-08 19:34（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t11-orchestrator`；T06/T07/T08 已完成分支已清理
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配
+- **当前负责人**：未分配；T12 已完成，下一任务包待认领
 
 ## 3. 开发进度
 
@@ -35,7 +35,8 @@
 | Git 分支清理 | 已完成 | Codex | 确认 T06/T07/T08 均已合并到 `origin/main`，本地 `main` 快进到 `673c477`，删除 3 个本地及 3 个远程已完成分支，并清理过期 `origin/pr/5` 引用 | 无 | 2026-09-08 |
 | T09 ToolSpec 与 Policy Engine | 已完成 | Codex | 实现精确版本 Tool Registry、JSON ToolSpec 加载、ActionPlan 校验、结构化策略拒绝/许可等待、资源与安全边界校验及可查询审计记录 | 无；持久化审计后端由后续编排/观测任务接入 | 2026-09-08 |
 | T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 已由 T11 接入 | 2026-09-08 |
-| T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像 | T12/T16 提供真实镜像摘要 ToolSpec 后在 Compose 启用 orchestrator 服务 | 2026-09-08 |
+| T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
+| T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成有界 ZIP/TAR 安全导入、Git 元数据忽略、C/C++/Python/Java tree-sitter 文件/函数/参数/调用索引与 CapabilityProfile；实现幂等 SourceImportExecutor、Job 工具身份迁移、精确镜像摘要 ToolSpec、analysis-worker 镜像和 Compose 全链路 | 无；Semgrep/cppcheck 工具结果属于 T13，PAIR 导入属于 T14 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -92,6 +93,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08 19:34：完成 T12 安全导入与 tree-sitter 源码索引
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/source-import.json`、`code/packages/contracts/`、`code/packages/orchestrator/`、`code/packages/persistence/`、迁移 `0008_job_tool_identity.py`、`code/tests/source_analysis/`、`code/tests/orchestrator/test_orchestrator.py`、`code/compose.yaml`、`code/pyproject.toml`、`code/uv.lock`、`DEVELOPMENT_STATUS.md`
+- 已完成：安全导入 ZIP/TAR，拒绝路径穿越、绝对路径、符号链接、特殊文件、跨平台危险路径、超限文件和压缩炸弹；忽略 Git hooks、`.gitmodules` 且不执行仓库内容；用 tree-sitter 索引 C/C++/Python/Java 文件、摘要、函数/方法、参数、位置和调用关系，生成语言、构建系统与 CapabilityProfile；SourceImportExecutor 从 CAS 读取原工件并登记带父版本、工具版本和镜像摘要的不可变派生索引；修复 Orchestrator 缺少 `vulnweaver-domain` 容器依赖和策略参数未传入 Job 的缺陷；修复派生工件幂等重放的事务中止与非确定时间戳；启用 orchestrator/analysis-worker Compose 服务。
+- 测试与结果：Dev Container `pnpm run check` 与 `uv lock --check` 通过；185 个 pytest 全部通过，总覆盖率 86.55%，Ruff/Pyright/TypeScript/Svelte 均通过；定向 Orchestrator/源码分析 PostgreSQL 测试 21 个通过；镜像构建成功且 ToolSpec 摘要与 `vulnweaver-analysis-worker:dev` 镜像 ID 一致；隔离 Compose 栈完成“HTTP 上传源码 → task.requested → Orchestrator → Import Job → analysis-worker → 派生索引工件”真实链路，样本得到 3 文件、3 函数、1 调用边及 C/Python/CMake 能力信息；服务以非 root、只读根文件系统、移除全部 capabilities、无 Docker Socket 运行。
+- 问题：Task 在首个 Import Job 成功后仍保持 `VALIDATING`，因为 T13-T15 尚未实现后续静态分析、Finding 聚合与 Task 终态；不影响 T12 导入索引验收。
+- 阻碍点：无。
+- 决策：沿用 ADR-012、ADR-015、ADR-016、ADR-018、ADR-019；未引入新的重大架构决策。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
 
 ### 2026-09-08：完成 T11 LangGraph 主流程与持久化检查点
 
@@ -327,12 +340,13 @@
 | 2026-09-08 | T07 PR #5 审计修正与认证重构 | `pnpm run check`、`uv lock --check`、Compose 配置解析、`docker compose ... build api` | 通过；147 个测试、89.42% 分支覆盖率（MVP 门槛 80%）、Ruff/Pyright/TypeScript 通过，迁移与真实 PostgreSQL/Redis 集成通过，API 镜像构建成功 | 未推送远程分支，GitHub Actions 待推送后触发 |
 | 2026-09-08 | T08 Svelte 工作台与容器交付 | `pnpm run check`、Web 生产构建、`uv lock --check`、Compose 配置解析与 Web 镜像构建 | 通过；147 个测试、89.45% 覆盖率；Svelte 检查 0 错误/0 警告；生产包与 `vulnweaver-web:dev` 镜像构建成功 | Playwright 真实浏览器 E2E 留待 T22 集中执行 |
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
+| 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
 
 ## 10. 下一步
 
-1. 认领 T12，实现安全归档导入、tree-sitter 函数索引、source-import ToolSpec 与 analysis-worker 镜像。
-2. T12 完成后启用 orchestrator Compose 服务，使源码 Task 从上传进入真实导入 Job。
-3. 继续 T13 Semgrep/cppcheck 适配和 T14 PAIR 源码导入。
+1. 认领 T13，实现 Semgrep/cppcheck 适配、结构化工具结果和能力缺失原因。
+2. 扩展编排链路，在源码导入 Job 成功后按 CapabilityProfile 调度静态分析 Job。
+3. T13 完成后继续 T14 PAIR 源码导入与查询。
 
 ## 11. 每次工作结束时的更新模板
 
