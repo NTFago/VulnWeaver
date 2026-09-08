@@ -138,7 +138,16 @@ def render_python(bundle: dict[str, Any]) -> str:
                 lines.append(f"    {property_name}: {annotation}")
             lines.append("")
         else:
-            lines.append(f"type {name} = {_python_type(schema)}")
+            annotation = _python_type(schema)
+            declaration = f"type {name} = {annotation}"
+            if len(declaration) <= 100 or " | " not in annotation:
+                lines.append(declaration)
+            else:
+                lines.append(f"type {name} = (")
+                members = annotation.split(" | ")
+                lines.append(f"    {members[0]}")
+                lines.extend(f"    | {member}" for member in members[1:])
+                lines.append(")")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

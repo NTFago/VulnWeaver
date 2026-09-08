@@ -199,6 +199,51 @@ def test_task_idempotency_and_artifact_digest_deduplication(
     asyncio.run(scenario())
 
 
+def test_concurrent_task_cancellation_has_a_single_state_transition(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        project_id = "project:cancel-race"
+        artifact_id = "artifact:cancel-race"
+        version_id = "artifact-version:cancel-race"
+        task_id = "task:cancel-race"
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project(project_id))
+                await repositories.artifacts.add(
+                    artifact(
+                        artifact_id,
+                        project_id=project_id,
+                        current_version_id=version_id,
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(version_id, artifact_id=artifact_id)
+                )
+                await repositories.tasks.create(
+                    task(
+                        task_id,
+                        project_id=project_id,
+                        artifact_version_ids=[version_id],
+                        idempotency_key="task:cancel-race-key",
+                    )
+                )
+
+            async def cancel_once() -> bool:
+                async with database.transaction() as repositories:
+                    return (await repositories.tasks.cancel(task_id)).changed
+
+            changed = await asyncio.gather(cancel_once(), cancel_once())
+            assert sorted(changed) == [False, True]
+            async with database.transaction() as repositories:
+                assert (await repositories.tasks.get(task_id))["status"] is TaskStatus.CANCELLED
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_repositories_accept_schema_valid_string_enum_values(
     persistence_database_url: str,
 ) -> None:

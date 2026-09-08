@@ -405,6 +405,23 @@ export interface TaskStatusChangedPayload {
   result: TaskResult | null;
 }
 
+export interface TaskRequestedPayload {
+  task_id: Identifier;
+  artifact_version_ids: Array<Identifier>;
+}
+
+export interface TaskRequestedEvent {
+  schema_version: SchemaVersion;
+  event_id: Identifier;
+  event_type: "task.requested";
+  aggregate_id: Identifier;
+  sequence: 0;
+  occurred_at: string;
+  correlation_id: Identifier;
+  causation_id: Identifier | null;
+  payload: TaskRequestedPayload;
+}
+
 export interface JobRequestedEvent {
   schema_version: SchemaVersion;
   event_id: Identifier;
@@ -441,7 +458,7 @@ export interface TaskStatusChangedEvent {
   payload: TaskStatusChangedPayload;
 }
 
-export type QueueEvent = JobRequestedEvent | JobStatusChangedEvent | TaskStatusChangedEvent;
+export type QueueEvent = TaskRequestedEvent | JobRequestedEvent | JobStatusChangedEvent | TaskStatusChangedEvent;
 
 export interface ErrorDetail {
   field: string;
@@ -470,6 +487,40 @@ export interface CreateTaskRequest {
   schema_version: SchemaVersion;
   artifact_version_ids: Array<Identifier>;
   resource_budget: ResourceBudget;
+}
+
+export interface LoginRequest {
+  schema_version: SchemaVersion;
+  username: string;
+  password: string;
+}
+
+export interface PasswordChangeRequest {
+  schema_version: SchemaVersion;
+  current_password: string;
+  new_password: string;
+}
+
+export interface SessionResponse {
+  schema_version: SchemaVersion;
+  username: string;
+  must_change_password: boolean;
+  csrf_token: string;
+}
+
+export interface MeResponse {
+  schema_version: SchemaVersion;
+  username: string;
+  must_change_password: boolean;
+}
+
+export interface ArtifactDetail {
+  artifact: Artifact;
+  versions: Array<ArtifactVersion>;
+}
+
+export interface HealthResponse {
+  status: "ok" | "ready";
 }
 
 export interface WorkerRequest {

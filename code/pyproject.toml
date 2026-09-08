@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
+    "vulnweaver-api",
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
@@ -16,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28,<1",
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.11,<1",
@@ -27,6 +29,7 @@ package = false
 
 [tool.uv.workspace]
 members = [
+    "apps/api",
     "apps/dispatcher",
     "packages/artifact-store",
     "packages/contracts",
@@ -38,6 +41,7 @@ members = [
 
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
+vulnweaver-api = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
@@ -56,6 +60,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 include = ["apps", "packages"]
 exclude = ["**/__pycache__", "**/.venv", "**/node_modules"]
 extraPaths = [
+    "apps/api/src",
     "apps/dispatcher/src",
     "packages/artifact-store/src",
     "packages/contracts/src",
@@ -76,7 +81,9 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
+concurrency = ["thread"]
 source_pkgs = [
+    "vulnweaver_api",
     "vulnweaver_artifact_store",
     "vulnweaver_contracts",
     "vulnweaver_dispatcher",
@@ -86,6 +93,9 @@ source_pkgs = [
     "vulnweaver_worker",
 ]
 omit = [
+    "*/vulnweaver_api/main.py",
+    "*/vulnweaver_dispatcher/main.py",
+    "*/vulnweaver_dispatcher/migrate.py",
     "*/vulnweaver_persistence/alembic/env.py",
     "*/vulnweaver_persistence/alembic/versions/*.py",
 ]

@@ -11,6 +11,7 @@ Thumbs.db
 !.env.example
 *.pem
 *.key
+code/secrets/
 
 # Python
 __pycache__/

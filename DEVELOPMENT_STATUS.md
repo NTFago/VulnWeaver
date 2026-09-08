@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P1 控制面最小闭环（T06 Worker 租约与幂等框架已完成）
-- **总体状态**：T06 第二轮正确性修正（租约 fencing、重试退避、许可等待、结算恢复、结果指纹）已完成并通过全量质量门禁
+- **当前阶段**：P1 控制面最小闭环（T07 已完成，准备 T08）
+- **总体状态**：PR #5 审计问题与个人认证重构已完成；按 MVP 风险分层门禁继续推进前端闭环
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；CI 分支及已合并历史分支已在本地和远程清理；当前开发分支 `feat/t06-worker-reliability`，基于最新 `main`
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支 `feat/t07-api`，基于 `main` 的 `dbc6137`
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex
+- **当前负责人**：未分配
 
 ## 3. 开发进度
 
@@ -30,6 +30,7 @@
 | T05 Redis Streams 与 Outbox Dispatcher | 已完成 | Codex | 主体实现及 Review 修正完成：Dispatcher 改为单条事件独立事务、退避改用数据库时钟；Stream 冗余字段与载荷一致性校验、结构化读取参数错误及双 Dispatcher 真实并发测试已补齐 | 无 | 2026-09-07 |
 | T01.1 CI 质量门禁 | 已完成 | Codex | Ruff/Pyright/pytest/TypeScript 分层门禁固化为 GitHub Actions 必过检查；Pyright strict 6 处类型问题已修正；`pnpm run check` 本地等价验证通过 | 无；GitHub 仓库需将 `Python quality gate` 设为 `main` 必需检查（平台配置） | 2026-09-07 |
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
+| T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -55,7 +56,8 @@
 | D-001 | Python 依赖与工作区工具 | uv / Poetry / pip-tools | 已采用 uv workspace | T01 | 已确认（ADR-008） |
 | D-002 | 前端包管理器 | pnpm / npm | 已采用 pnpm workspace | T01 | 已确认（ADR-008） |
 | D-003 | 首版对象存储 | 本地内容寻址目录 / MinIO | 本地目录，保留 MinIO 接口 | T03 | 已由架构默认 |
-| D-004 | 首版身份认证 | 暂不实现 / 本地单用户 / 完整认证 | 演示环境本地单用户，预留身份上下文 | P1 | 待确认 |
+| D-004 | 首版身份认证 | 个人账号登录，不提供团队或管理员体系 | 项目创建者为唯一所有者；无成员、角色和 RBAC | P1 | 已确认（用户 2026-09-08 明确） |
+| D-005 | MVP 质量门禁 | 风险分层定向验证；里程碑再跑全量 | 覆盖率门槛 80%，保留契约、安全、事务和并发关键检查 | P1 | 已确认（用户 2026-09-08 明确） |
 
 ## 7. 已确认技术决策（ADR 摘要）
 
@@ -77,10 +79,24 @@
 | ADR-014 | CI 使用 Ruff、Pyright 与 pytest 分层门禁，在 PR/`main` 推送/手动触发时以只读权限运行 | 分层覆盖规范、类型与运行行为，把质量检查固化为必过门禁 | `code/docs/adr/014-ci-quality-gate.md` |
 | ADR-015 | PostgreSQL Job 租约作为执行权事实来源，Redis pending 仅负责传输与超时接管 | 防止崩溃、ACK 丢失或重复消息造成同一 Job 并发执行 | `code/docs/adr/015-job-leases-and-pending-recovery.md` |
 | ADR-016 | 最终 WorkerResult 先与 Job 终态事务落库；获准重试的失败按 attempt 追加审计；之后 ACK、保留 pending 或原子转入 dead-letter | 在 PostgreSQL/Redis 无分布式事务时保证结果唯一、失败可追溯并稳定恢复 ACK、死信响应丢失和进程崩溃 | `code/docs/adr/016-worker-result-and-settlement-protocol.md` |
+| ADR-017 | 单个人账号使用 Argon2id、数据库会话、HttpOnly Cookie、会话绑定 CSRF、锁定和幂等改密 | 不引入 RBAC 的前提下建立可多实例、可撤销且抗资源滥用的浏览器认证边界 | `code/docs/adr/017-personal-browser-authentication.md` |
+| ADR-018 | API 只事务登记 `CREATED` Task、`task.requested` 与 Outbox，初始 Job 由编排层创建 | 防止接入层绕过 LangGraph 与 Policy Engine，保持控制面职责边界 | `code/docs/adr/018-task-intake-owned-by-orchestrator.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08：完成 T07 PR #5 审计修正与认证重构
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/apps/api/`、`code/packages/contracts/`、`code/packages/persistence/`、`code/packages/artifact-store/`、`code/tests/`、`code/docs/adr/`、`code/compose.yaml`、根目录设计与开发规则文档
+- 已完成：重构个人账号引导、登录、Cookie/CSRF、锁定、会话上限、改密与登出；认证 DTO 进入 v1 Schema/OpenAPI；上传改为原始流前置限额、服务自有磁盘暂存和有界并发；冲突与未知项目不再发布 CAS 对象；就绪检查覆盖工件库；框架错误统一结构化；Task 创建恢复 API→`task.requested`→编排边界；并发取消只追加一次状态事件；API 内部拆分 Cookie、错误、事件和上传职责
+- 测试与结果：`pnpm run check` 通过，147 个测试全部通过，总覆盖率 89.42%（MVP 门槛 80%）；Ruff、Pyright strict、TypeScript、`uv lock --check`、Compose 配置解析通过；API 镜像构建成功
+- 问题：FastAPI TestClient 依赖链产生两条上游弃用警告，不影响运行和验收
+- 阻碍点：无
+- 决策：ADR-017 固化个人浏览器认证；ADR-018 固化任务接入/编排边界；按用户要求将 MVP 覆盖率门槛降至 80%，重型全量验收集中到里程碑、合并或发布前
+- 下一步：认领 T08，基于 OpenAPI 搭建 Svelte 5 个人工作台并接入 T07 真实接口
 
 ### 2026-09-08：完成 T06 Worker 生命周期第二轮正确性修正
 
@@ -242,12 +258,13 @@
 | 2026-09-07 | T06 Worker 可靠生命周期 | `pnpm run check`；定向执行 Worker/Persistence/Queue 集成测试；`uv lock --check`；Compose 配置解析；重建 Dispatcher 镜像并运行迁移容器 | 通过；121 个全量测试、90.07% 分支覆盖率、Ruff/Pyright/TypeScript 通过；真实 PostgreSQL/Redis 故障注入覆盖结果幂等、ACK/死信响应丢失、重试耗尽、心跳、停止和崩溃接管；迁移退出码 0，Dispatcher 以非 root、只读根文件系统、capabilities 全移除且无宿主绑定挂载运行 | 未构建具体分析 Worker 镜像；由使用 SDK 的 T12/T16/T19/T20 各自交付 |
 | 2026-09-07 | T06 Code Review 回归 | 先运行重复执行与空重试白名单失败用例；再执行 `pnpm run check`、迁移漂移测试、`uv lock --check`、Compose 构建/迁移/安全配置检查 | 通过；127 个测试、90.20% 分支覆盖率；同 owner PEL 往返不重复执行，白名单、追加失败审计、心跳竞态和游标推进均有回归；`0004` 迁移退出码 0 | 具体工具副作用仍须遵守幂等接口；租约真实过期后的新 attempt 接管属于既定至少一次执行语义 |
 | 2026-09-08 | T06 第二轮正确性修正 | 修复遗留 Ruff B904 后 `pnpm run check`（Ruff、Pyright strict、pytest `--cov --cov-fail-under=90`、TypeScript）与 `uv lock --check` | 通过；135 个测试、90.28% 分支覆盖率、Ruff 0 问题、Pyright 0 错误、TypeScript 通过、锁文件一致 | 未在远端 GitHub Actions runner 实跑，需由 PR 触发 |
+| 2026-09-08 | T07 PR #5 审计修正与认证重构 | `pnpm run check`、`uv lock --check`、Compose 配置解析、`docker compose ... build api` | 通过；147 个测试、89.42% 分支覆盖率（MVP 门槛 80%）、Ruff/Pyright/TypeScript 通过，迁移与真实 PostgreSQL/Redis 集成通过，API 镜像构建成功 | 未推送远程分支，GitHub Actions 待推送后触发 |
 
 ## 10. 下一步
 
-1. 认领 T07，创建 FastAPI 应用骨架并实现 Project、Artifact、Task 的首批 API。
-2. 复用 T03 仓储与 T04 工件登记服务，保持 API DTO 与 v1.0.0 公共 Schema 一致。
-3. 为创建任务的幂等键、错误响应、上传边界和健康检查补充 API/集成测试。
+1. 认领 T08，创建 Svelte 5 工作台并生成 OpenAPI TypeScript 客户端。
+2. 接入个人登录、首次改密、项目创建、工件上传、任务创建和事件恢复主流程。
+3. 使用 Playwright 验证桌面/移动视口、键盘可达性、加载/空/错误状态和页面重叠。
 
 ## 11. 每次工作结束时的更新模板
 

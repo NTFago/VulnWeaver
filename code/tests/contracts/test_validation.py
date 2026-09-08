@@ -42,6 +42,26 @@ def test_job_requested_event_validates() -> None:
     )
 
 
+def test_task_requested_event_validates() -> None:
+    validate_contract(
+        "QueueEvent",
+        {
+            "schema_version": "1.0.0",
+            "event_id": "evt:task-requested",
+            "event_type": "task.requested",
+            "aggregate_id": "task:00000001",
+            "sequence": 0,
+            "occurred_at": "2026-09-08T08:00:00Z",
+            "correlation_id": "task:00000001",
+            "causation_id": None,
+            "payload": {
+                "task_id": "task:00000001",
+                "artifact_version_ids": ["artifact-version:00000001"],
+            },
+        },
+    )
+
+
 def test_event_type_and_payload_shape_cannot_be_mixed() -> None:
     with pytest.raises(ContractValidationError):
         validate_contract(
