@@ -18,11 +18,14 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     SchemaVersion,
+    Severity,
     SourceImportResult,
     StaticAnalysisDiagnostic,
     StaticToolStatus,
+    ToolIdentity,
     ToolSpec,
 )
+from vulnweaver_pair import SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_source_analysis import (
     StaticAnalysisExecutor,
@@ -64,7 +67,9 @@ class _FakeDatabase:
 
 
 class _DiagnosticAdapter:
-    name = "semgrep"
+    def __init__(self, name: str = "semgrep", severity: Severity = Severity.MEDIUM) -> None:
+        self.name = name
+        self.severity = severity
 
     def run(
         self,
@@ -90,7 +95,7 @@ class _DiagnosticAdapter:
             StaticAnalysisDiagnostic(
                 tool_name=self.name,
                 rule_id="rule:test",
-                severity="medium",
+                severity=self.severity,
                 message="test finding",
                 location={
                     "artifact_version_id": artifact_version_id,
@@ -280,6 +285,85 @@ def test_static_result_parent_matches_scanned_source_archive(
                     )
                 )
 
+            pair_source_result = cast(
+                SourceImportResult,
+                {
+                    "schema_version": SchemaVersion.VALUE_1_0_0,
+                    "artifact_version_id": "artifact-version:static-source",
+                    "files": [],
+                    "functions": [
+                        {
+                            "id": "source-function:app",
+                            "name": "app",
+                            "qualified_name": "app",
+                            "kind": "function",
+                            "language": "python",
+                            "parameters": [],
+                            "location": {
+                                "artifact_version_id": "artifact-version:static-source",
+                                "path": "src/app.py",
+                                "start_line": 1,
+                                "start_column": 1,
+                                "end_line": 2,
+                                "end_column": 1,
+                            },
+                        },
+                        {
+                            "id": "source-function:sink",
+                            "name": "sink",
+                            "qualified_name": "sink",
+                            "kind": "function",
+                            "language": "python",
+                            "parameters": [],
+                            "location": {
+                                "artifact_version_id": "artifact-version:static-source",
+                                "path": "src/app.py",
+                                "start_line": 4,
+                                "start_column": 1,
+                                "end_line": 5,
+                                "end_column": 1,
+                            },
+                        },
+                    ],
+                    "calls": [
+                        {
+                            "caller_id": "source-function:app",
+                            "callee": "sink",
+                            "location": {
+                                "artifact_version_id": "artifact-version:static-source",
+                                "path": "src/app.py",
+                                "start_line": 1,
+                                "start_column": 1,
+                                "end_line": 1,
+                                "end_column": 2,
+                            },
+                        }
+                    ],
+                    "capability_profile": {
+                        "schema_version": SchemaVersion.VALUE_1_0_0,
+                        "artifact_version_id": "artifact-version:static-source",
+                        "languages": ["python"],
+                        "architectures": [],
+                        "build_systems": [],
+                        "capabilities": [],
+                        "created_at": "2026-09-08T10:00:00Z",
+                    },
+                },
+            )
+            await SourcePairImporter(database).import_source_result(
+                pair_source_result,
+                raw_object_ref="cas://sha256/" + "2" * 64,
+                tool=cast(
+                    ToolIdentity,
+                    {
+                        "name": "source-import",
+                        "version": "1.0.0",
+                        "image_digest": "sha256:" + "4" * 64,
+                    },
+                ),
+                created_at="2026-09-08T10:00:00Z",
+            )
+
             job = cast(
                 Job,
                 {
@@ -324,6 +408,58 @@ def test_static_result_parent_matches_scanned_source_archive(
                     document["diagnostics"][0]["location"]["artifact_version_id"]
                     == version["parent_version_id"]
                 )
+                findings = await repositories.findings.list_for_task("task:static-lineage")
+                assert len(findings) == 1
+                assert findings[0]["evidence_ids"] == result["evidence_ids"]
+                evidence = await repositories.evidence.get(result["evidence_ids"][0])
+                assert evidence["strength"].value == "supporting"
+                assert evidence["artifact_ref"] == version["object_ref"]
+                pair_snapshot = evidence["replay_recipe"]["pair_snapshot"]
+                assert len(pair_snapshot["function_ids"]) == 2
+                assert len(pair_snapshot["node_ids"]) == 2
+                assert len(pair_snapshot["edge_ids"]) == 1
+                assert "test finding" not in json.dumps(evidence["replay_recipe"])
+
+            replay = await executor.execute(job, asyncio.Event())
+            assert replay["evidence_ids"] == result["evidence_ids"]
+
+            cppcheck_job = cast(
+                Job,
+                {
+                    **job,
+                    "id": "job:static-lineage-cppcheck",
+                    "tool": {
+                        "name": "cppcheck",
+                        "version": "2.0.0",
+                        "image_digest": "sha256:" + "5" * 64,
+                    },
+                    "arguments": {
+                        **job["arguments"],
+                        "languages": ["cpp"],
+                    },
+                    "created_at": "2026-09-08T10:01:00Z",
+                    "updated_at": "2026-09-08T10:01:00Z",
+                },
+            )
+            cppcheck_executor = StaticAnalysisExecutor(
+                database,
+                store,
+                adapters={"cppcheck": _DiagnosticAdapter("cppcheck", Severity.HIGH)},
+                scratch_root=tmp_path,
+            )
+            cppcheck_result = await cppcheck_executor.execute(cppcheck_job, asyncio.Event())
+            assert cppcheck_result["status"] is JobStatus.SUCCEEDED
+            assert len(cppcheck_result["evidence_ids"]) == 1
+
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task("task:static-lineage")
+                assert len(findings) == 1
+                assert findings[0]["severity"] is Severity.HIGH
+                assert findings[0]["evidence_ids"] == sorted(
+                    result["evidence_ids"] + cppcheck_result["evidence_ids"]
+                )
+                relations = await repositories.findings.list_evidence_relations(findings[0]["id"])
+                assert len(relations) == 2
         finally:
             await database.dispose()
 

@@ -118,6 +118,21 @@ def test_candidate_finding_and_evidence_link_are_idempotent(
                 )
                 assert await repositories.findings.link_evidence(relation) == relation
                 assert await repositories.findings.link_evidence(relation) == relation
+                contextual = cast(
+                    FindingEvidence,
+                    {
+                        **relation,
+                        "relation": EvidenceRelation.CONTEXTUAL,
+                        "created_at": "2026-09-08T10:00:00+00:00",
+                    },
+                )
+                stored_contextual = await repositories.findings.link_evidence(contextual)
+                assert stored_contextual["created_at"] == "2026-09-08T10:00:00Z"
+                relations = await repositories.findings.list_evidence_relations(finding["id"])
+                assert {item["relation"] for item in relations} == {
+                    EvidenceRelation.SUPPORTS,
+                    EvidenceRelation.CONTEXTUAL,
+                }
                 assert (await repositories.findings.get(finding["id"]))[
                     "status"
                 ] is FindingStatus.CANDIDATE
