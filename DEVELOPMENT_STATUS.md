@@ -13,7 +13,7 @@
 - **总体状态**：首个可运行控制面 MVP 已形成；已覆盖认证、项目、工件、任务和实时轨迹，实际分析需继续 T09-T15
 - **最后更新**：2026-09-08
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支 `feat/t07-api`，基于 `main` 的 `dbc6137`
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前集成分支 `main`，HEAD 为 `673c477`；T06/T07/T08 已完成分支已清理
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：未分配
 
@@ -32,6 +32,7 @@
 | T06 Worker 租约与幂等框架 | 已完成 | Codex | 首轮实现与 Review 修正；第二轮完成租约唯一 fencing token、重试退避写入 PostgreSQL 调度、许可等待不 ACK、fresh/PEL 公平领取轮换、心跳重试与结算异常恢复、结果指纹排序、优雅释放退款，并清理只读领取行锁与死信脚本无效 XPENDING | 无 | 2026-09-08 |
 | T07 FastAPI 首批控制面 API | 已完成 | Codex | 完成 PR #5 审计修正与个人认证重构：版本化 Cookie/CSRF 会话、锁定和有界 Argon2、幂等改密与会话上限；流式上传前置限额、服务自有暂存和冲突无孤儿；API 只投递 `task.requested`；并发取消单次迁移；统一错误、就绪检查、OpenAPI 和 ADR 已补齐 | 无；`task.requested` 消费与初始 Job 创建属于 T11 编排职责 | 2026-09-08 |
 | T08 Svelte 项目与任务页面 | 已完成 | Codex | Svelte 5 工作台接入登录/首次改密、项目授权范围、流式样本上传、任务投递/取消、Job 及 WebSocket 事件恢复；完成响应式状态、同源 Nginx 代理和非 root 容器交付 | 更完整的 Finding/报告/可观测工作台属于 T22 | 2026-09-08 |
+| Git 分支清理 | 已完成 | Codex | 确认 T06/T07/T08 均已合并到 `origin/main`，本地 `main` 快进到 `673c477`，删除 3 个本地及 3 个远程已完成分支，并清理过期 `origin/pr/5` 引用 | 无 | 2026-09-08 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -87,6 +88,17 @@
 
 ## 8. 最近完成记录
 
+### 2026-09-08：清理已合并的本地与远程开发分支
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`DEVELOPMENT_STATUS.md`；Git refs（本地与 `origin`）
+- 已完成：执行 `git fetch --prune origin`；确认 T06、T07、T08 分支均已合并至 `origin/main`；将本地 `main` 快进至 `673c477`；删除本地 `feat/t06-worker-reliability`、`feat/t07-api`、`feat/t08-ui` 及对应远程分支；清理已关闭 PR 的 `origin/pr/5` 跟踪引用
+- 测试与结果：Git 状态、分支合并关系、远程分支列表复核通过；当前仅保留本地 `main` 与远程 `origin/main`
+- 问题：无
+- 阻碍点：无
+- 决策：无新增重大架构决策
+- 下一步：认领 T09，实现 Tool Registry 与 Policy Engine，为 T11 编排提供强制策略门禁
 ### 2026-09-08：完成 T08 Svelte 个人工作台与控制面 MVP
 
 - 负责人：Codex
