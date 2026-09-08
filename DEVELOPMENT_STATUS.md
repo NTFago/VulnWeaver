@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
 - **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入、静态工具和 PAIR 源码查询链路已形成；正在建设 Finding、Evidence 与独立复核路径
-- **最后更新**：2026-09-08 23:10（Asia/Shanghai）
+- **最后更新**：2026-09-08 23:30（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；本地 `main` 已快进至 `b7d687d`；当前开发分支为 `feat/t13-static-tools`；已合并的 T09-T12 本地分支已清理，远端分支未改动
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -40,7 +40,7 @@
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
-| T15 Finding、Evidence 与复核 | 进行中 | 已完成 Evidence v1 关系表迁移 `0010_evidence`、不可变幂等 EvidenceRepository、按 input_ref 查询及容器内迁移测试 | 实现 Finding/FindingEvidence/Review 关系、确认策略门禁和静态结果候选 Finding 投影 | 2026-09-08 |
+| T15 Finding、Evidence 与复核 | 进行中 | 已完成 Evidence v1 关系表迁移 `0010_evidence`、不可变幂等 EvidenceRepository、Finding/FindingEvidence 候选关系迁移 `0011_finding_candidates`、候选 Finding 查询与 Evidence 链接仓储；容器内 PostgreSQL 迁移和定向测试通过 | 实现 Review 历史、确认策略门禁和静态结果候选 Finding 投影 | 2026-09-08 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -97,6 +97,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-08 23:30：完成 T15 第二检查点——候选 Finding 关系持久化
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/`、`code/tests/finding/`、`code/tests/persistence/test_migrations.py`
+- 已完成：新增 `0011_finding_candidates` 迁移和 `findings`/`finding_evidence` 表；实现候选 Finding 创建、按 Task 查询、FindingEvidence 幂等链接；保留候选状态，不允许该检查点直接确认漏洞。
+- 测试与结果：使用 `vulnweaver-dev-1` 容器执行；容器内 Evidence/Finding/迁移定向测试 3 个通过；Ruff 和变更持久化模块 Pyright 通过；Compose 主 PostgreSQL 已升级到 `0011_finding_candidates`，三张新表已确认存在。
+- 问题：Review 历史、确认策略调用和静态诊断到候选 Finding 的投影尚未接入。
+- 阻碍点：无
+- 决策：Finding 默认只保存 `candidate`；确认必须由后续 Review 结合 EvidencePolicy 完成。
+- 下一步：实现 Review 历史与确认策略门禁，再将 `StaticAnalysisResult` 投影为 Finding/Evidence。
 
 ### 2026-09-08 23:10：完成 T15 第一检查点——Evidence 持久化
 
@@ -424,7 +436,7 @@
 
 ## 10. 下一步
 
-1. 认领 T15，实现 Finding、Evidence、Review 持久化与确认策略门禁。
+1. 继续 T15，实现 Review 历史与确认策略门禁。
 2. 将 `StaticAnalysisResult` 与 PAIR 函数/边引用接入候选 Finding 生成。
 3. 实现独立复核上下文、证据快照和 Task 聚合状态更新。
 
