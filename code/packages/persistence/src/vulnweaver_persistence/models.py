@@ -361,6 +361,29 @@ Index("ix_findings_task_id", findings.c.task_id)
 Index("ix_findings_status", findings.c.status)
 Index("ix_finding_evidence_evidence_id", finding_evidence.c.evidence_id)
 
+reviews = Table(
+    "reviews",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "finding_id", IDENTIFIER, ForeignKey("findings.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column("outcome", String(32), nullable=False),
+    Column("rationale", Text, nullable=False),
+    Column("model", String(256), nullable=False),
+    Column(
+        "supersedes_review_id",
+        IDENTIFIER,
+        ForeignKey("reviews.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("outcome", FindingStatus, "outcome"),
+)
+Index("ix_reviews_finding_id", reviews.c.finding_id)
+
 jobs = Table(
     "jobs",
     metadata,

@@ -36,6 +36,7 @@ from vulnweaver_contracts import (
     PermissionMode,
     Project,
     QueueEvent,
+    Review,
     RunStatus,
     Severity,
     StructuredFailure,
@@ -45,6 +46,7 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
+from vulnweaver_domain import ConfirmationContext, evaluate_confirmation, transition_finding
 
 from vulnweaver_persistence.api_requests import ApiRequestRepository
 from vulnweaver_persistence.errors import (
@@ -72,6 +74,7 @@ from vulnweaver_persistence.models import (
     pair_nodes,
     pair_raw,
     projects,
+    reviews,
     task_events,
     tasks,
 )
@@ -1334,6 +1337,69 @@ class FindingRepository:
         ).mappings()
         return [_finding_from_row(row) for row in rows]
 
+    async def add_review(
+        self,
+        review: Review,
+        *,
+        confirmation: ConfirmationContext | None = None,
+    ) -> Review:
+        validate_contract("Review", review)
+        finding = await self.get(review["finding_id"])
+        target = review["outcome"]
+        if target.value == "confirmed":
+            if confirmation is None:
+                raise PersistenceInvariantError(
+                    "finding confirmation requires an evaluated evidence context",
+                    details={"finding_id": finding["id"]},
+                )
+            decision = evaluate_confirmation(confirmation)
+            transition_finding(finding["status"], target, confirmation=decision)
+        else:
+            transition_finding(finding["status"], target)
+        values = {
+            **review,
+            "schema_version": str(review["schema_version"]),
+            "outcome": str(review["outcome"]),
+            "created_at": _parse_datetime(review["created_at"]),
+        }
+        statement = insert(reviews).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get_review(review["id"])
+            if existing != review:
+                raise EntityConflict(
+                    "review identifier conflicts with existing history",
+                    details={"review_id": review["id"]},
+                )
+        review_ids = list(finding["review_ids"])
+        if review["id"] not in review_ids:
+            review_ids.append(review["id"])
+        await self._connection.execute(
+            update(findings)
+            .where(findings.c.id == finding["id"])
+            .values(status=str(target), review_ids=review_ids)
+        )
+        return review
+
+    async def get_review(self, review_id: str) -> Review:
+        row = (
+            (await self._connection.execute(select(reviews).where(reviews.c.id == review_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("review not found", details={"review_id": review_id})
+        return _review_from_row(row)
+
+    async def list_reviews(self, finding_id: str) -> list[Review]:
+        rows = (
+            await self._connection.execute(
+                select(reviews)
+                .where(reviews.c.finding_id == finding_id)
+                .order_by(reviews.c.created_at, reviews.c.id)
+            )
+        ).mappings()
+        return [_review_from_row(row) for row in rows]
+
     async def link_evidence(self, relation: FindingEvidence) -> FindingEvidence:
         validate_contract("FindingEvidence", relation)
         values = {
@@ -1738,6 +1804,19 @@ def _finding_from_row(row: RowMapping) -> Finding:
         review_ids=row["review_ids"],
         poc_ids=row["poc_ids"],
         fix_suggestion=row["fix_suggestion"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
+def _review_from_row(row: RowMapping) -> Review:
+    return Review(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        finding_id=row["finding_id"],
+        outcome=FindingStatus(row["outcome"]),
+        rationale=row["rationale"],
+        model=row["model"],
+        supersedes_review_id=row["supersedes_review_id"],
         created_at=_format_datetime(row["created_at"]),
     )
 

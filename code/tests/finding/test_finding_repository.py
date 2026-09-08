@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import cast
 
+import pytest
 from vulnweaver_contracts import (
     Evidence,
     EvidenceRelation,
@@ -12,10 +13,12 @@ from vulnweaver_contracts import (
     FindingCategory,
     FindingEvidence,
     FindingStatus,
+    Review,
     Severity,
     ToolIdentity,
 )
-from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_domain import ConfirmationContext, EvidenceAssessment
+from vulnweaver_persistence import Database, DatabaseSettings, PersistenceInvariantError
 
 from tests.persistence.factories import artifact, artifact_version, project, task
 
@@ -119,6 +122,39 @@ def test_candidate_finding_and_evidence_link_are_idempotent(
                 assert (await repositories.findings.get(finding["id"]))[
                     "status"
                 ] is FindingStatus.CANDIDATE
+                review = cast(
+                    Review,
+                    {
+                        "schema_version": "1.0.0",
+                        "id": "review:finding",
+                        "finding_id": finding["id"],
+                        "outcome": FindingStatus.CONFIRMED,
+                        "rationale": "Independent review agrees with the tool evidence.",
+                        "model": "review-model",
+                        "supersedes_review_id": None,
+                        "created_at": "2026-09-08T10:01:00Z",
+                    },
+                )
+                with pytest.raises(PersistenceInvariantError):
+                    await repositories.findings.add_review(review)
+                await repositories.findings.add_review(
+                    review,
+                    confirmation=ConfirmationContext(
+                        category=FindingCategory.STATIC_ONLY,
+                        evidence=(
+                            EvidenceAssessment(
+                                EvidenceType.TOOL_OUTPUT, EvidenceStrength.STRONG, True
+                            ),
+                        ),
+                        established_facts=frozenset(
+                            {"independent_tool_evidence", "independent_review_agreement"}
+                        ),
+                    ),
+                )
+                assert (await repositories.findings.get(finding["id"]))[
+                    "status"
+                ] is FindingStatus.CONFIRMED
+                assert len(await repositories.findings.list_reviews(finding["id"])) == 1
                 assert len(await repositories.findings.list_for_task("task:finding")) == 1
         finally:
             await database.dispose()

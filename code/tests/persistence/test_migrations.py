@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "pair_nodes",
     "pair_raw",
     "projects",
+    "reviews",
     "task_events",
     "tasks",
 }
