@@ -62,6 +62,51 @@ def test_task_requested_event_validates() -> None:
     )
 
 
+def test_static_analysis_result_validates_structured_tool_outcomes() -> None:
+    validate_contract(
+        "StaticAnalysisResult",
+        {
+            "schema_version": "1.0.0",
+            "artifact_version_id": "artifact-version:source",
+            "diagnostics": [
+                {
+                    "tool_name": "semgrep",
+                    "rule_id": "python.lang.security.audit.eval-detected",
+                    "severity": "high",
+                    "message": "Use of eval on untrusted input",
+                    "location": {
+                        "artifact_version_id": "artifact-version:source",
+                        "path": "src/app.py",
+                        "start_line": 4,
+                        "start_column": 5,
+                        "end_line": 4,
+                        "end_column": 18,
+                    },
+                    "cwe_ids": ["CWE-95"],
+                    "properties": {"confidence": "high"},
+                }
+            ],
+            "tool_runs": [
+                {
+                    "tool_name": "semgrep",
+                    "tool_version": "1.130.0",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "reason": None,
+                },
+                {
+                    "tool_name": "cppcheck",
+                    "tool_version": None,
+                    "status": "unavailable",
+                    "exit_code": None,
+                    "reason": "language_not_detected",
+                },
+            ],
+            "created_at": "2026-09-08T13:10:00Z",
+        },
+    )
+
+
 def test_event_type_and_payload_shape_cannot_be_mixed() -> None:
     with pytest.raises(ContractValidationError):
         validate_contract(
@@ -151,3 +196,44 @@ def test_unknown_contract_version_is_rejected() -> None:
     ensure_supported_version("1.0.0")
     with pytest.raises(ContractValidationError):
         ensure_supported_version("2.0.0")
+
+
+def test_pair_source_contracts_validate() -> None:
+    location = {
+        "artifact_version_id": "artifact-version:pair",
+        "path": "src/main.c",
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 10,
+    }
+    validate_contract(
+        "PairFunction",
+        {
+            "schema_version": "1.0.0",
+            "id": "pair-function:main",
+            "artifact_version_id": "artifact-version:pair",
+            "name": "main",
+            "symbol": "main",
+            "language": "c",
+            "source_location": location,
+            "binary_location": None,
+            "signature": "main()",
+            "attributes": {"kind": "function"},
+        },
+    )
+    validate_contract(
+        "PairEdge",
+        {
+            "schema_version": "1.0.0",
+            "id": "pair-edge:call",
+            "artifact_version_id": "artifact-version:pair",
+            "source_node_id": "pair-node:main",
+            "target_node_id": "pair-node:helper",
+            "type": "call",
+            "scope": "source",
+            "confidence": 1.0,
+            "evidence_id": None,
+            "attributes": {},
+        },
+    )

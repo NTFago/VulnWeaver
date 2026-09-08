@@ -11,6 +11,7 @@ dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
+    "vulnweaver-pair",
     "vulnweaver-persistence",
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
@@ -42,6 +43,7 @@ members = [
     "packages/artifact-store",
     "packages/contracts",
     "packages/domain",
+    "packages/pair",
     "packages/persistence",
     "packages/model-gateway",
     "packages/orchestrator",
@@ -56,6 +58,7 @@ vulnweaver-contracts = { workspace = true }
 vulnweaver-api = { workspace = true }
 vulnweaver-analysis-worker = { workspace = true }
 vulnweaver-domain = { workspace = true }
+vulnweaver-pair = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
 vulnweaver-orchestrator = { workspace = true }
@@ -87,6 +90,7 @@ extraPaths = [
     "packages/domain/src",
     "packages/persistence/src",
     "packages/model-gateway/src",
+    "packages/pair/src",
     "packages/orchestrator/src",
     "packages/queue/src",
     "packages/source-analysis/src",
@@ -115,6 +119,7 @@ source_pkgs = [
     "vulnweaver_domain",
     "vulnweaver_persistence",
     "vulnweaver_model_gateway",
+    "vulnweaver_pair",
     "vulnweaver_orchestrator",
     "vulnweaver_queue",
     "vulnweaver_source_analysis",

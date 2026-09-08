@@ -1,0 +1,17 @@
+rules:
+  - id: vulnweaver.python.eval
+    languages: [python]
+    message: Avoid eval on untrusted input
+    severity: ERROR
+    metadata:
+      cwe: [CWE-95]
+    patterns:
+      - pattern: eval(...)
+  - id: vulnweaver.c.unsafe-strcpy
+    languages: [c, cpp]
+    message: strcpy may write past the destination buffer
+    severity: WARNING
+    metadata:
+      cwe: [CWE-120]
+    patterns:
+      - pattern: strcpy(...)

@@ -9,10 +9,12 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     String,
     Table,
     Text,
@@ -22,8 +24,15 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from vulnweaver_contracts import (
     ArtifactKind,
+    EvidenceRelation,
+    EvidenceStrength,
+    EvidenceType,
+    FindingCategory,
+    FindingStatus,
     JobKind,
     JobStatus,
+    PairEdgeType,
+    PairNodeKind,
     PermissionMode,
     RunStatus,
     TaskResult,
@@ -124,6 +133,126 @@ artifact_versions = Table(
     UniqueConstraint("artifact_id", "digest", name="uq_artifact_versions_artifact_digest"),
 )
 
+pair_functions = Table(
+    "pair_functions",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("name", String(2048), nullable=False),
+    Column("symbol", String(2048), nullable=True),
+    Column("language", String(128), nullable=False),
+    Column("source_location", JSONB(none_as_null=True), nullable=True),
+    Column("binary_location", JSONB(none_as_null=True), nullable=True),
+    Column("signature", Text, nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    UniqueConstraint("artifact_version_id", "id", name="uq_pair_functions_version_id"),
+)
+
+pair_nodes = Table(
+    "pair_nodes",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "function_id",
+        IDENTIFIER,
+        ForeignKey("pair_functions.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("kind", String(32), nullable=False),
+    Column("location", JSONB(none_as_null=True), nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("kind", PairNodeKind, "kind"),
+    UniqueConstraint("artifact_version_id", "id", name="uq_pair_nodes_version_id"),
+)
+
+pair_edges = Table(
+    "pair_edges",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "source_node_id",
+        IDENTIFIER,
+        ForeignKey("pair_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "target_node_id",
+        IDENTIFIER,
+        ForeignKey("pair_nodes.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("type", String(32), nullable=False),
+    Column("scope", String(128), nullable=False),
+    Column("confidence", Float(), nullable=False),
+    Column("evidence_id", IDENTIFIER, nullable=True),
+    Column("attributes", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("type", PairEdgeType, "type"),
+    CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+    UniqueConstraint(
+        "artifact_version_id",
+        "source_node_id",
+        "target_node_id",
+        "type",
+        "scope",
+        name="uq_pair_edges_identity",
+    ),
+)
+
+pair_raw = Table(
+    "pair_raw",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "artifact_version_id",
+        IDENTIFIER,
+        ForeignKey("artifact_versions.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("tool", JSONB, nullable=False),
+    Column("format", String(128), nullable=False),
+    Column("object_ref", Text, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    UniqueConstraint(
+        "artifact_version_id", "tool", "format", "object_ref", name="uq_pair_raw_identity"
+    ),
+)
+
+Index("ix_pair_functions_artifact_version_id", pair_functions.c.artifact_version_id)
+Index("ix_pair_functions_source_path", pair_functions.c.source_location["path"].as_string())
+Index("ix_pair_nodes_function_id", pair_nodes.c.function_id)
+Index("ix_pair_nodes_artifact_version_id", pair_nodes.c.artifact_version_id)
+Index("ix_pair_edges_source_node_id", pair_edges.c.source_node_id)
+Index("ix_pair_edges_target_node_id", pair_edges.c.target_node_id)
+Index("ix_pair_raw_artifact_version_id", pair_raw.c.artifact_version_id)
+
 tasks = Table(
     "tasks",
     metadata,
@@ -154,6 +283,106 @@ tasks = Table(
     ),
     UniqueConstraint("project_id", "idempotency_key", name="uq_tasks_project_idempotency"),
 )
+
+evidence = Table(
+    "evidence",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("type", String(64), nullable=False),
+    Column("strength", String(32), nullable=False),
+    Column("artifact_ref", Text, nullable=False),
+    Column("digest", DIGEST, nullable=False),
+    Column("tool", JSONB(none_as_null=True), nullable=True),
+    Column("input_ref", Text, nullable=False),
+    Column("command_hash", DIGEST, nullable=True),
+    Column("exit_code", Integer, nullable=True),
+    Column("stdout_ref", Text, nullable=True),
+    Column("stderr_ref", Text, nullable=True),
+    Column("replay_recipe", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("type", EvidenceType, "type"),
+    _enum_constraint("strength", EvidenceStrength, "strength"),
+    CheckConstraint("digest ~ '^sha256:[0-9a-f]{64}$'", name="sha256_digest"),
+    CheckConstraint(
+        "command_hash IS NULL OR command_hash ~ '^sha256:[0-9a-f]{64}$'",
+        name="command_sha256_digest",
+    ),
+)
+Index("ix_evidence_type", evidence.c.type)
+
+findings = Table(
+    "findings",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("task_id", IDENTIFIER, ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False),
+    Column("category", String(64), nullable=False),
+    Column("cwe_id", String(128), nullable=False),
+    Column("title", String(4096), nullable=False),
+    Column("severity", String(32), nullable=False),
+    Column("confidence", Float(), nullable=False),
+    Column("location", JSONB, nullable=False),
+    Column("dataflow", JSONB, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("evidence_ids", JSONB, nullable=False),
+    Column("review_ids", JSONB, nullable=False),
+    Column("poc_ids", JSONB, nullable=False),
+    Column("fix_suggestion", Text, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("category", FindingCategory, "category"),
+    _enum_constraint("status", FindingStatus, "status"),
+    CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+)
+
+finding_evidence = Table(
+    "finding_evidence",
+    metadata,
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "finding_id", IDENTIFIER, ForeignKey("findings.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column(
+        "evidence_id", IDENTIFIER, ForeignKey("evidence.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column("relation", String(32), nullable=False),
+    Column("weight", Float(), nullable=False),
+    Column("created_by", IDENTIFIER, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("relation", EvidenceRelation, "relation"),
+    CheckConstraint("weight >= 0 AND weight <= 1", name="weight_range"),
+    PrimaryKeyConstraint("finding_id", "evidence_id", "relation", name="pk_finding_evidence"),
+)
+
+Index("ix_findings_task_id", findings.c.task_id)
+Index("ix_findings_status", findings.c.status)
+Index("ix_finding_evidence_evidence_id", finding_evidence.c.evidence_id)
+
+reviews = Table(
+    "reviews",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column(
+        "finding_id", IDENTIFIER, ForeignKey("findings.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column("outcome", String(32), nullable=False),
+    Column("rationale", Text, nullable=False),
+    Column("model", String(256), nullable=False),
+    Column(
+        "supersedes_review_id",
+        IDENTIFIER,
+        ForeignKey("reviews.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("outcome", FindingStatus, "outcome"),
+)
+Index("ix_reviews_finding_id", reviews.c.finding_id)
 
 jobs = Table(
     "jobs",

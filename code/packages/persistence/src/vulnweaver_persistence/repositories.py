@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import RowMapping, func, select, text, update
+from sqlalchemy import RowMapping, Table, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -17,15 +17,28 @@ from vulnweaver_contracts import (
     Artifact,
     ArtifactKind,
     ArtifactVersion,
+    Evidence,
+    EvidenceStrength,
+    EvidenceType,
+    Finding,
+    FindingCategory,
+    FindingEvidence,
+    FindingStatus,
     Job,
     JobKind,
     JobRequestedEvent,
     JobStatus,
     Lease,
+    PairEdge,
+    PairFunction,
+    PairNode,
+    PairRaw,
     PermissionMode,
     Project,
     QueueEvent,
+    Review,
     RunStatus,
+    Severity,
     StructuredFailure,
     Task,
     TaskResult,
@@ -47,12 +60,20 @@ from vulnweaver_persistence.models import (
     agent_runs,
     artifact_versions,
     artifacts,
+    evidence,
+    finding_evidence,
+    findings,
     job_attempt_failures,
     job_results,
     jobs,
     orchestration_checkpoints,
     outbox_events,
+    pair_edges,
+    pair_functions,
+    pair_nodes,
+    pair_raw,
     projects,
+    reviews,
     task_events,
     tasks,
 )
@@ -1221,7 +1242,391 @@ class TaskEventRepository:
         return int(value)
 
 
-@dataclass(frozen=True, slots=True)
+class EvidenceRepository:
+    """Immutable, idempotent Evidence fact storage."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, item: Evidence) -> Evidence:
+        validate_contract("Evidence", item)
+        canonical = cast(
+            Evidence,
+            {**item, "created_at": _canonical_timestamp(item["created_at"])},
+        )
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "type": str(canonical["type"]),
+            "strength": str(canonical["strength"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        statement = insert(evidence).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get(canonical["id"])
+            if existing != canonical:
+                raise EntityConflict(
+                    "evidence identifier conflicts with an existing fact",
+                    details={"evidence_id": canonical["id"]},
+                )
+            return existing
+        return canonical
+
+    async def get(self, evidence_id: str) -> Evidence:
+        row = (
+            (await self._connection.execute(select(evidence).where(evidence.c.id == evidence_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("evidence not found", details={"evidence_id": evidence_id})
+        return _evidence_from_row(row)
+
+    async def list_for_input(self, input_ref: str) -> list[Evidence]:
+        rows = (
+            await self._connection.execute(
+                select(evidence)
+                .where(evidence.c.input_ref == input_ref)
+                .order_by(evidence.c.created_at, evidence.c.id)
+            )
+        ).mappings()
+        return [_evidence_from_row(row) for row in rows]
+
+
+class FindingRepository:
+    """Idempotent candidate Finding and FindingEvidence storage."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, finding: Finding) -> Finding:
+        validate_contract("Finding", finding)
+        canonical = cast(
+            Finding,
+            {**finding, "created_at": _canonical_timestamp(finding["created_at"])},
+        )
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "category": str(canonical["category"]),
+            "severity": str(canonical["severity"]),
+            "status": str(canonical["status"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        statement = insert(findings).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get(canonical["id"])
+            if existing != canonical:
+                raise EntityConflict(
+                    "finding identifier conflicts with an existing fact",
+                    details={"finding_id": canonical["id"]},
+                )
+            return existing
+        return canonical
+
+    async def get(self, finding_id: str) -> Finding:
+        row = (
+            (await self._connection.execute(select(findings).where(findings.c.id == finding_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("finding not found", details={"finding_id": finding_id})
+        return _finding_from_row(row)
+
+    async def list_for_task(self, task_id: str) -> list[Finding]:
+        rows = (
+            await self._connection.execute(
+                select(findings)
+                .where(findings.c.task_id == task_id)
+                .order_by(findings.c.created_at, findings.c.id)
+            )
+        ).mappings()
+        return [_finding_from_row(row) for row in rows]
+
+    async def add_review(
+        self,
+        review: Review,
+        *,
+        confirmation_allowed: bool = False,
+    ) -> Review:
+        validate_contract("Review", review)
+        canonical = cast(
+            Review,
+            {**review, "created_at": _canonical_timestamp(review["created_at"])},
+        )
+        finding_row = (
+            (
+                await self._connection.execute(
+                    select(findings)
+                    .where(findings.c.id == canonical["finding_id"])
+                    .with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if finding_row is None:
+            raise EntityNotFound(
+                "finding not found", details={"finding_id": canonical["finding_id"]}
+            )
+        finding = _finding_from_row(finding_row)
+        target = canonical["outcome"]
+        if target.value == "confirmed" and not confirmation_allowed:
+            raise PersistenceInvariantError(
+                "finding confirmation requires an evaluated evidence context",
+                details={"finding_id": finding["id"]},
+            )
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "outcome": str(canonical["outcome"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        statement = insert(reviews).values(values).on_conflict_do_nothing(index_elements=["id"])
+        if not (await self._connection.execute(statement)).rowcount:
+            existing = await self.get_review(canonical["id"])
+            if existing != canonical:
+                raise EntityConflict(
+                    "review identifier conflicts with existing history",
+                    details={"review_id": canonical["id"]},
+                )
+        histories = await self.list_reviews(finding["id"])
+        review_ids = [history["id"] for history in histories]
+        latest_status = histories[-1]["outcome"]
+        await self._connection.execute(
+            update(findings)
+            .where(findings.c.id == finding["id"])
+            .values(status=str(latest_status), review_ids=review_ids)
+        )
+        return canonical
+
+    async def get_review(self, review_id: str) -> Review:
+        row = (
+            (await self._connection.execute(select(reviews).where(reviews.c.id == review_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("review not found", details={"review_id": review_id})
+        return _review_from_row(row)
+
+    async def list_reviews(self, finding_id: str) -> list[Review]:
+        rows = (
+            await self._connection.execute(
+                select(reviews)
+                .where(reviews.c.finding_id == finding_id)
+                .order_by(reviews.c.created_at, reviews.c.id)
+            )
+        ).mappings()
+        return [_review_from_row(row) for row in rows]
+
+    async def link_evidence(self, relation: FindingEvidence) -> FindingEvidence:
+        validate_contract("FindingEvidence", relation)
+        values = {
+            **relation,
+            "schema_version": str(relation["schema_version"]),
+            "relation": str(relation["relation"]),
+            "created_at": _parse_datetime(relation["created_at"]),
+        }
+        await self._connection.execute(
+            insert(finding_evidence)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["finding_id", "evidence_id", "relation"])
+        )
+        return relation
+
+
+class PairRepository:
+    """Idempotent PAIR graph storage and bounded source-query primitives."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def import_graph(
+        self,
+        functions: list[PairFunction],
+        nodes: list[PairNode],
+        edges: list[PairEdge],
+        raw: PairRaw | None,
+        *,
+        created_at: datetime,
+    ) -> None:
+        for function in functions:
+            validate_contract("PairFunction", function)
+            await self._insert_or_verify(
+                pair_functions,
+                function["id"],
+                {
+                    **function,
+                    "schema_version": str(function["schema_version"]),
+                    "created_at": created_at,
+                },
+            )
+        for node in nodes:
+            validate_contract("PairNode", node)
+            await self._insert_or_verify(
+                pair_nodes,
+                node["id"],
+                {
+                    **node,
+                    "schema_version": str(node["schema_version"]),
+                    "kind": str(node["kind"]),
+                    "created_at": created_at,
+                },
+            )
+        for edge in edges:
+            validate_contract("PairEdge", edge)
+            await self._insert_or_verify(
+                pair_edges,
+                edge["id"],
+                {
+                    **edge,
+                    "schema_version": str(edge["schema_version"]),
+                    "type": str(edge["type"]),
+                    "created_at": created_at,
+                },
+            )
+        if raw is not None:
+            validate_contract("PairRaw", raw)
+            await self._insert_or_verify(
+                pair_raw,
+                raw["id"],
+                {**raw, "schema_version": str(raw["schema_version"]), "created_at": created_at},
+            )
+
+    async def list_functions(self, artifact_version_id: str) -> list[PairFunction]:
+        rows = (
+            await self._connection.execute(
+                select(pair_functions)
+                .where(pair_functions.c.artifact_version_id == artifact_version_id)
+                .order_by(pair_functions.c.name, pair_functions.c.id)
+            )
+        ).mappings()
+        return [_pair_function_from_row(row) for row in rows]
+
+    async def get_function(self, function_id: str) -> PairFunction:
+        row = (
+            (
+                await self._connection.execute(
+                    select(pair_functions).where(pair_functions.c.id == function_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("PAIR function not found", details={"function_id": function_id})
+        return _pair_function_from_row(row)
+
+    async def functions_at_location(
+        self, artifact_version_id: str, path: str, line: int
+    ) -> list[PairFunction]:
+        rows = (
+            await self._connection.execute(
+                select(pair_functions)
+                .where(
+                    pair_functions.c.artifact_version_id == artifact_version_id,
+                    pair_functions.c.source_location["path"].as_string() == path,
+                )
+                .order_by(pair_functions.c.id)
+            )
+        ).mappings()
+        values = [_pair_function_from_row(row) for row in rows]
+        return [
+            value
+            for value in values
+            if value["source_location"] is not None
+            and value["source_location"]["start_line"]
+            <= line
+            <= value["source_location"]["end_line"]
+        ]
+
+    async def neighborhood(
+        self, artifact_version_id: str, function_id: str, *, depth: int = 1
+    ) -> dict[str, object]:
+        if depth < 0 or depth > 8:
+            raise ValueError("PAIR neighborhood depth must be between 0 and 8")
+        nodes = list(
+            (
+                await self._connection.execute(
+                    select(pair_nodes).where(
+                        pair_nodes.c.artifact_version_id == artifact_version_id
+                    )
+                )
+            ).mappings()
+        )
+        edges = list(
+            (
+                await self._connection.execute(
+                    select(pair_edges).where(
+                        pair_edges.c.artifact_version_id == artifact_version_id
+                    )
+                )
+            ).mappings()
+        )
+        node_values = [_pair_node_from_row(row) for row in nodes]
+        edge_values = [_pair_edge_from_row(row) for row in edges]
+        function_nodes = {node["id"] for node in node_values if node["function_id"] == function_id}
+        selected_nodes = set(function_nodes)
+        for _ in range(depth):
+            for edge in edge_values:
+                if (
+                    edge["source_node_id"] in selected_nodes
+                    or edge["target_node_id"] in selected_nodes
+                ):
+                    selected_nodes.update({edge["source_node_id"], edge["target_node_id"]})
+        selected_edges = [
+            edge
+            for edge in edge_values
+            if edge["source_node_id"] in selected_nodes and edge["target_node_id"] in selected_nodes
+        ]
+        selected_function_ids = {
+            node["function_id"]
+            for node in node_values
+            if node["id"] in selected_nodes and node["function_id"]
+        }
+        functions = [
+            function
+            for function in await self.list_functions(artifact_version_id)
+            if function["id"] in selected_function_ids
+        ]
+        return {
+            "functions": functions,
+            "nodes": [node for node in node_values if node["id"] in selected_nodes],
+            "edges": selected_edges,
+        }
+
+    async def _insert_or_verify(
+        self, table: Table, identifier: str, values: dict[str, object]
+    ) -> None:
+        # PAIR tables carry both a primary key and semantic unique identities.
+        # Treat either conflict as an idempotency candidate so no raw IntegrityError
+        # can leak from an otherwise valid graph import.
+        statement = insert(table).values(values).on_conflict_do_nothing()
+        inserted = (await self._connection.execute(statement)).rowcount
+        if inserted:
+            return
+        existing = (
+            (
+                await self._connection.execute(select(table).where(table.c.id == identifier))  # type: ignore[attr-defined]
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if existing is None:
+            raise PersistenceInvariantError(
+                "PAIR row disappeared during idempotent import", details={"id": identifier}
+            )
+        for key, value in values.items():
+            if key in {"created_at"}:
+                continue
+            if existing[key] != value:
+                raise EntityConflict(
+                    "PAIR row conflicts with existing identity", details={"id": identifier}
+                )
+
+
 class Repositories:
     projects: ProjectRepository
     artifacts: ArtifactRepository
@@ -1233,6 +1638,9 @@ class Repositories:
     personal_auth: PersonalAuthRepository
     agent_runs: AgentRunRepository
     checkpoints: CheckpointRepository
+    pair: PairRepository
+    evidence: EvidenceRepository
+    findings: FindingRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1245,6 +1653,9 @@ class Repositories:
         object.__setattr__(self, "personal_auth", PersonalAuthRepository(connection))
         object.__setattr__(self, "agent_runs", AgentRunRepository(connection))
         object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
+        object.__setattr__(self, "pair", PairRepository(connection))
+        object.__setattr__(self, "evidence", EvidenceRepository(connection))
+        object.__setattr__(self, "findings", FindingRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -1397,6 +1808,101 @@ def _task_from_row(row: RowMapping) -> Task:
         resource_budget=row["resource_budget"],
         created_at=_format_datetime(row["created_at"]),
         updated_at=_format_datetime(row["updated_at"]),
+    )
+
+
+def _finding_from_row(row: RowMapping) -> Finding:
+    return Finding(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        task_id=row["task_id"],
+        category=FindingCategory(row["category"]),
+        cwe_id=row["cwe_id"],
+        title=row["title"],
+        severity=Severity(row["severity"]),
+        confidence=float(row["confidence"]),
+        location=row["location"],
+        dataflow=row["dataflow"],
+        status=FindingStatus(row["status"]),
+        evidence_ids=row["evidence_ids"],
+        review_ids=row["review_ids"],
+        poc_ids=row["poc_ids"],
+        fix_suggestion=row["fix_suggestion"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
+def _review_from_row(row: RowMapping) -> Review:
+    return Review(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        finding_id=row["finding_id"],
+        outcome=FindingStatus(row["outcome"]),
+        rationale=row["rationale"],
+        model=row["model"],
+        supersedes_review_id=row["supersedes_review_id"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
+def _evidence_from_row(row: RowMapping) -> Evidence:
+    return Evidence(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        type=EvidenceType(row["type"]),
+        strength=EvidenceStrength(row["strength"]),
+        artifact_ref=row["artifact_ref"],
+        digest=row["digest"],
+        tool=row["tool"],
+        input_ref=row["input_ref"],
+        command_hash=row["command_hash"],
+        exit_code=row["exit_code"],
+        stdout_ref=row["stdout_ref"],
+        stderr_ref=row["stderr_ref"],
+        replay_recipe=row["replay_recipe"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
+def _pair_function_from_row(row: RowMapping) -> PairFunction:
+    return PairFunction(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        name=row["name"],
+        symbol=row["symbol"],
+        language=row["language"],
+        source_location=row["source_location"],
+        binary_location=row["binary_location"],
+        signature=row["signature"],
+        attributes=row["attributes"],
+    )
+
+
+def _pair_node_from_row(row: RowMapping) -> PairNode:
+    return PairNode(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        function_id=row["function_id"],
+        kind=row["kind"],
+        location=row["location"],
+        attributes=row["attributes"],
+    )
+
+
+def _pair_edge_from_row(row: RowMapping) -> PairEdge:
+    return PairEdge(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        artifact_version_id=row["artifact_version_id"],
+        source_node_id=row["source_node_id"],
+        target_node_id=row["target_node_id"],
+        type=row["type"],
+        scope=row["scope"],
+        confidence=float(row["confidence"]),
+        evidence_id=row["evidence_id"],
+        attributes=row["attributes"],
     )
 
 
@@ -1622,6 +2128,10 @@ def _parse_datetime(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timestamps must include an explicit timezone")
     return parsed
+
+
+def _canonical_timestamp(value: str) -> str:
+    return _format_datetime(_parse_datetime(value))
 
 
 def _format_datetime(value: datetime) -> str:

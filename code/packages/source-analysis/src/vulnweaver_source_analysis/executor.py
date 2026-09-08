@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     Artifact,
@@ -28,13 +29,23 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
-from vulnweaver_persistence import Database, EntityConflict, EntityNotFound
+from vulnweaver_pair import SourcePairImporter
+from vulnweaver_persistence import (
+    Database,
+    EntityConflict,
+    EntityNotFound,
+    PersistenceError,
+)
 
 from vulnweaver_source_analysis.archive import (
     SafeArchiveImporter,
     SourceImportError,
 )
 from vulnweaver_source_analysis.indexer import SourceIndexer
+from vulnweaver_source_analysis.static_executor import (
+    StaticAnalysisExecutor,
+    StaticAnalysisScheduler,
+)
 
 
 class SourceImportExecutionError(RuntimeError):
@@ -67,12 +78,16 @@ class SourceImportExecutor:
         importer: SafeArchiveImporter | None = None,
         indexer: SourceIndexer | None = None,
         scratch_root: str | Path | None = None,
+        static_scheduler: StaticAnalysisScheduler | None = None,
+        pair_importer: SourcePairImporter | None = None,
     ) -> None:
         self._database = database
         self._store = store
         self._importer = importer or SafeArchiveImporter()
         self._indexer = indexer or SourceIndexer()
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
+        self._static_scheduler = static_scheduler
+        self._pair_importer = pair_importer
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         try:
@@ -112,6 +127,33 @@ class SourceImportExecutor:
                 message=str(error),
                 retryable=False,
             )
+        except IntegrityError as error:
+            return _failed_result(
+                job["id"],
+                code="source_import.persistence_integrity_failed",
+                kind=FailureKind.INTERNAL,
+                message="source import persistence integrity check failed",
+                retryable=False,
+                details={"exception_type": type(error).__name__},
+            )
+        except PersistenceError as error:
+            return _failed_result(
+                job["id"],
+                code=f"source_import.{error.code}",
+                kind=FailureKind.INTERNAL,
+                message=error.message,
+                retryable=error.retryable,
+                details=error.details,
+            )
+        except SQLAlchemyError as error:
+            return _failed_result(
+                job["id"],
+                code="source_import.persistence_unavailable",
+                kind=FailureKind.ENVIRONMENT,
+                message="source import persistence operation failed",
+                retryable=True,
+                details={"exception_type": type(error).__name__},
+            )
 
     async def _execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] != JobKind.IMPORT:
@@ -149,7 +191,7 @@ class SourceImportExecutor:
                 return _cancelled_result(job["id"])
             derived_version_id = _derived_identifier("artifact-version", job["id"])
             derived_artifact_id = _derived_identifier("artifact", job["id"])
-            await self._publish_index(
+            index_object_ref = await self._publish_index(
                 job,
                 result,
                 parent_version_id,
@@ -157,6 +199,46 @@ class SourceImportExecutor:
                 derived_version_id,
                 summary.files,
             )
+            try:
+                if self._pair_importer is not None:
+                    await self._pair_importer.import_source_result(
+                        result,
+                        raw_object_ref=index_object_ref,
+                        tool=_tool_identity(job),
+                        created_at=job["created_at"],
+                    )
+                if self._static_scheduler is not None:
+                    await self._static_scheduler.schedule(job, result, derived_version_id)
+            except IntegrityError as error:
+                return _failed_result(
+                    job["id"],
+                    code="source_import.persistence_integrity_failed",
+                    kind=FailureKind.INTERNAL,
+                    message="source index was published but graph persistence failed",
+                    retryable=False,
+                    details={"exception_type": type(error).__name__},
+                    produced_artifact_version_ids=[derived_version_id],
+                )
+            except PersistenceError as error:
+                return _failed_result(
+                    job["id"],
+                    code=f"source_import.{error.code}",
+                    kind=FailureKind.INTERNAL,
+                    message=error.message,
+                    retryable=error.retryable,
+                    details=error.details,
+                    produced_artifact_version_ids=[derived_version_id],
+                )
+            except SQLAlchemyError as error:
+                return _failed_result(
+                    job["id"],
+                    code="source_import.persistence_unavailable",
+                    kind=FailureKind.ENVIRONMENT,
+                    message="source index was published but follow-up persistence failed",
+                    retryable=True,
+                    details={"exception_type": type(error).__name__},
+                    produced_artifact_version_ids=[derived_version_id],
+                )
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
@@ -300,12 +382,13 @@ def _failed_result(
     message: str,
     retryable: bool,
     details: Mapping[str, object] | None = None,
+    produced_artifact_version_ids: list[str] | None = None,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         job_id=job_id,
         status=JobStatus.FAILED,
-        produced_artifact_version_ids=[],
+        produced_artifact_version_ids=produced_artifact_version_ids or [],
         evidence_ids=[],
         failure=StructuredFailure(
             code=code,
@@ -315,3 +398,18 @@ def _failed_result(
             details=cast(JsonObject, dict(details or {})),
         ),
     )
+
+
+class AnalysisJobExecutor:
+    """Route trusted tool identities to their concrete worker executors."""
+
+    def __init__(self, source: SourceImportExecutor, static: StaticAnalysisExecutor) -> None:
+        self._source = source
+        self._static = static
+
+    async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
+        tool = job.get("tool")
+        name = tool.get("name") if isinstance(tool, Mapping) else None
+        if name == "source-import":
+            return await self._source.execute(job, cancellation)
+        return await self._static.execute(job, cancellation)

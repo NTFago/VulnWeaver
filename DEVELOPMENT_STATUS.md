@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；T12 Review 修复已完成，准备接入静态分析工具
-- **总体状态**：控制面、策略、模型访问、可恢复编排和源码导入索引链路已形成；实际漏洞分析需继续 T13-T15
-- **最后更新**：2026-09-08 20:46（Asia/Shanghai）
+- **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
+- **总体状态**：控制面、策略、模型访问、可恢复编排、源码导入、静态工具和 PAIR 源码查询链路已形成；正在建设 Finding、Evidence 与独立复核路径
+- **最后更新**：2026-09-09 00:40（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；集成基线为 `main`，当前开发分支为 `feat/t12-source-import`；T06/T07/T08 已完成分支已清理
+- **版本管理**：Git；远端 `origin` 指向 `NTFago/VulnWeaver`；当前开发分支为 `feat/t15-finding`，未推送或合并本轮修复
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配；T01.2 已完成，下一任务包待认领
+- **当前负责人**：Codex；已认领 T15，正在实现 Finding、Evidence 与复核持久化
 
 ## 3. 开发进度
 
@@ -38,6 +38,10 @@
 | T10 模型访问适配与运行记录 | 已完成 | Codex | 实现 OpenAI 兼容 HTTP 适配、规划/审计/复核/报告模型档位路由、超时/重试/限流/远程失败降级、结构化输出修复、可配置脱敏和 AgentRun 记录 | 无；持久化 AgentRun 已由 T11 接入 | 2026-09-08 |
 | T11 LangGraph 主流程与检查点 | 已完成 | Codex | 实现可恢复 LangGraph 节点、真实 Redis `task.requested` 消费、fresh/PEL 公平接管、输入归属校验、源码/二进制管线选择、Policy Engine 门禁、等待许可和初始 Job/Outbox 事务登记；新增 AgentRun/Checkpoint 迁移与仓储及可运行服务镜像；T12 已提供源码 ToolSpec 并在 Compose 启用 | T16 提供二进制 ToolSpec 后启用二进制首个 Job | 2026-09-08 |
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
+| T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
+| T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
+| T15 Finding、Evidence 与复核 | 进行中 | Codex | 已完成 Evidence `0010`、候选 Finding/FindingEvidence `0011`、Review 历史 `0012` 关系表与仓储；Review 默认拒绝无确认授权的 `confirmed` 状态，保留 Review 历史并更新 Finding 状态；容器内迁移/策略定向测试通过 | 将领域 ConfirmationContext 从编排层接入 Review，并实现 StaticAnalysisResult/PAIR 到候选 Finding/Evidence 的投影 | 2026-09-08 |
+| T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
@@ -94,6 +98,90 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 00:40：完成 T15-R1 静态分析与 PAIR 审计修正
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/pair/`、`code/packages/persistence/`、`code/packages/source-analysis/`、`code/packages/orchestrator/`、`code/tests/pair/`、`code/tests/evidence/`、`code/tests/finding/`、`code/tests/source_analysis/`、`code/compose.yaml`
+- 已完成：撤销不存在模块的 Orchestrator 导出；PAIR 将同一 caller/target 的多调用点聚合成一个关系边并在 `call_sites` 保留位置，使用限定名、调用者作用域和同文件唯一候选解析目标，歧义不再按插入顺序误连；Review 使用 `FOR UPDATE` 串行化并按有序不可变历史重建 `review_ids`/状态；Evidence/Finding/Review 时间戳统一规范化；源码导入和静态执行将持久化异常转为结构化 WorkerResult，已发布索引在后续失败时仍写入结果；静态结果改以实际扫描的源码归档为父版本并记录索引版本；子进程输出总量限制为预算与 16 MiB 的较小值，最低级 cppcheck 严重度修正为 info；工具子进程清理控制面凭据环境，分析 Worker 只接入禁外网的内部网络。
+- 测试与结果：定向 PostgreSQL 测试 33 个通过；`pnpm run check` 全量 208 个测试通过、总覆盖率 85.79%，Ruff/Pyright/TypeScript/Svelte 检查通过；Compose 配置解析和 analysis-worker 镜像构建通过；运行态验证 Worker 仅有 `analysis-plane`、可连接 PostgreSQL，连接外部 `1.1.1.1:53` 返回不可达。
+- 问题：无
+- 阻碍点：无
+- 决策：无新增 ADR；保持静态工具由固定参数适配器执行，并在当前 Worker 部署边界增加内部网络和最小环境防护。
+- 下一步：继续 T15 的 StaticAnalysisResult/PAIR 到候选 Finding/Evidence 投影及 ConfirmationContext 编排。
+
+### 2026-09-08 23:42：完成 T15 第三检查点——Review 历史与确认门禁
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/`、`code/tests/finding/`、`code/tests/persistence/test_migrations.py`
+- 已完成：新增 `0012_review_history` 迁移和 Review 表；实现 Review 历史查询与 Finding 状态更新；`confirmed` Review 必须由上层传入 `confirmation_allowed=True`，Persistence 层不自行信任模型输出；不满足授权时结构化拒绝并保持 Candidate 状态。
+- 测试与结果：现有 Dev Container 内 PostgreSQL 服务名配置下，Finding/Review/迁移定向测试 3 个通过；Ruff 通过；主 PostgreSQL 已升级至 `0012_review_history`，`reviews` 表已确认存在；修复 Persistence 对 Domain 包的错误运行时依赖，Dispatcher 迁移容器可正常启动。
+- 问题：静态诊断到候选 Finding/Evidence 的投影尚未接入；ConfirmationContext 仍需由上层复核编排生成。
+- 阻碍点：无
+- 决策：Persistence 只接受显式 `confirmation_allowed`，避免执行层自行把模型或 Review 文本解释为确认依据。
+- 下一步：实现静态工具/PAIR 结果到候选 Finding/Evidence 的确定性投影，并在编排层调用领域 ConfirmationPolicy。
+
+### 2026-09-08 23:30：完成 T15 第二检查点——候选 Finding 关系持久化
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/`、`code/tests/finding/`、`code/tests/persistence/test_migrations.py`
+- 已完成：新增 `0011_finding_candidates` 迁移和 `findings`/`finding_evidence` 表；实现候选 Finding 创建、按 Task 查询、FindingEvidence 幂等链接；保留候选状态，不允许该检查点直接确认漏洞。
+- 测试与结果：使用 `vulnweaver-dev-1` 容器执行；容器内 Evidence/Finding/迁移定向测试 3 个通过；Ruff 和变更持久化模块 Pyright 通过；Compose 主 PostgreSQL 已升级到 `0011_finding_candidates`，三张新表已确认存在。
+- 问题：Review 历史、确认策略调用和静态诊断到候选 Finding 的投影尚未接入。
+- 阻碍点：无
+- 决策：Finding 默认只保存 `candidate`；确认必须由后续 Review 结合 EvidencePolicy 完成。
+- 下一步：实现 Review 历史与确认策略门禁，再将 `StaticAnalysisResult` 投影为 Finding/Evidence。
+
+### 2026-09-08 23:10：完成 T15 第一检查点——Evidence 持久化
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/`、`code/tests/evidence/`、`code/tests/persistence/test_migrations.py`
+- 已完成：新增 `0010_evidence` 迁移和 `evidence` 事实表；实现不可变、按 ID 幂等的 `EvidenceRepository.create/get/list_for_input`；增加 SHA-256、Evidence 类型/强度和可选命令摘要约束；补充迁移无漂移与 Evidence 重放测试。
+- 测试与结果：使用现有 Dev Container `vulnweaver-dev-1`，设置容器内 PostgreSQL 服务名 `postgres` 执行；Evidence/迁移定向测试 3 个通过，Ruff 通过；未使用宿主机临时 Python 环境。
+- 问题：Finding/FindingEvidence/Review 尚未实现。
+- 阻碍点：无
+- 决策：Evidence 作为不可变事实保存；确认、复核和 Finding 状态迁移留在后续检查点。
+- 下一步：在同一迁移链路上实现 Finding/FindingEvidence 的最小候选导入和查询，再加入 Review 策略门禁。
+
+### 2026-09-08 22:46：完成 T14 PAIR 源码导入与查询
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/contracts/`、`code/packages/pair/`、`code/packages/persistence/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/*.json`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/pair/`、`code/tests/persistence/`、`code/tests/contracts/`
+- 已完成：新增 `PairFunction`、`PairNode`、`PairEdge`、`PairRaw` v1 契约；新增 PostgreSQL `pair_functions`、`pair_nodes`、`pair_edges`、`pair_raw` 表及索引；实现幂等 PAIR 仓储、源码函数/调用边导入、函数列表、源码位置和有界调用邻域查询；源码导入 Worker 成功后自动导入 PAIR；节点、函数和边保存 `pair_raw_id`，原始结果绑定工具身份与工件版本。
+- 测试与结果：全量 pytest **198 个通过**、1 个既有 Starlette 弃用警告；T14/迁移/契约定向测试 14 个通过；Ruff 全仓库通过；变更 Python 模块 Pyright 0 错误；contracts TypeScript `tsc --noEmit` 通过；契约生成检查、`uv lock --check`、Compose 配置解析通过；数据库已升级至 `0009_pair_tables`；analysis-worker 镜像构建成功，最终摘要为 `sha256:0041518fd3398da354721fd5b0557ba6e01e553e460724399283dbb29a021897`，Worker 以 UID 10001 启动。
+- 问题：Windows 工作区含中文路径时直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；验证继续使用无 editable 临时环境。
+- 阻碍点：无
+- 决策：无新增重大架构决策；PAIR 关系表沿用 PostgreSQL 事实源，原始输出仍通过 CAS 工件引用保存。
+- 下一步：认领 T15，实现 Finding、Evidence、Review 持久化与静态工具/PAIR 结果消费。
+
+### 2026-09-08 22:16：完成 T13 Semgrep/cppcheck 适配与静态 Job 链路
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/`、`code/compose.yaml`、`code/uv.lock`、`code/tests/contracts/`、`code/tests/source_analysis/`
+- 已完成：新增 `StaticAnalysisDiagnostic`、`StaticToolRun`、`StaticAnalysisResult` v1 契约；实现固定可审计参数、无 Shell 的 Semgrep/cppcheck 适配与 JSON/XML 归一化；统一高/中/低严重性、CWE、源码位置、工具版本、退出码及 `executable_not_found`/`rules_not_installed`/`language_not_detected` 等能力缺失原因；源码导入成功后按语言能力创建 Semgrep/cppcheck 静态分析 Job，使用确定性幂等键和同事务 Outbox；静态结果按父版本、工具身份和镜像摘要登记为不可变派生工件；分析 Worker 镜像安装 Semgrep 1.130.0 与 cppcheck 2.17.1，关闭 Semgrep metrics/version check，并挂载只读 ToolSpec/rule 配置。
+- 测试与结果：Ruff 全仓库通过；变更文件 Pyright 0 错误；契约 TypeScript `tsc --noEmit` 通过；契约/静态适配/调度/源码导入定向测试 30 个通过；全量 pytest 196 个通过、1 个既有 Starlette 弃用警告；`uv lock --check`、Compose 配置解析通过；`docker compose ... build analysis-worker` 成功，镜像摘要为 `sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68`，容器以 UID 10001 启动，真实 Semgrep/cppcheck 样本扫描产生结构化输出。
+- 问题：Windows 工作区含中文路径时，直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；本轮使用无 editable 的临时环境执行验证，不改变项目代码约束。
+- 阻碍点：无
+- 决策：无新增重大架构决策；沿用 ADR-012/013/015/016/019 的不可变工件、Outbox、租约、Worker 结算和可恢复编排语义。
+- 下一步：认领 T14，实现 PAIR 源码导入与按函数/调用邻域查询，并为 T15 Finding/Evidence 消费静态工具结果预留稳定输入。
+
+### 2026-09-08 21:10：认领 T13 并清理本地开发分支
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`DEVELOPMENT_STATUS.md`；后续实现预计位于 `code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/packages/orchestrator/`、`code/deploy/tool-specs/` 及对应测试
+- 已完成：刷新远端引用，确认 T09-T12 四条本地功能分支均已进入 `origin/main`；本地 `main` 快进至 `b7d687d` 后删除旧分支，并创建 `feat/t13-static-tools`；完成 T13 架构、模块边界和现有实现核查
+- 测试与结果：Git 合并关系检查通过；工作树在开始实现前无未提交改动
+- 问题：无
+- 阻碍点：无
+- 决策：沿用既有 ToolSpec、Policy Engine、Worker 可靠结算和原始工件不可变约束，不新增重大架构决策
+- 下一步：先添加失败优先的 Semgrep/cppcheck 适配器测试，再实现结构化结果、能力缺失和静态分析 Job 执行入口
 
 ### 2026-09-08 20:46：完成 T01.2 CI 触发去重
 
@@ -367,13 +455,16 @@
 | 2026-09-08 | T11 LangGraph 编排与检查点 | Dev Container `pnpm run check`；定向 PostgreSQL/Redis 编排、迁移和恢复测试；Dispatcher 迁移镜像；Orchestrator 镜像构建与用户检查 | 通过；171 个测试、87.53% 覆盖率；真实 task.requested 消费/ACK、中间节点恢复、Job/Outbox 幂等、策略拒绝/许可等待通过；数据库升级至 0007；镜像 UID 10001 | T12/T16 提供真实 ToolSpec 镜像摘要后再加入 Compose 常驻服务 |
 | 2026-09-08 | T12 安全导入、源码索引与 Compose 链路 | Dev Container `pnpm run check`、`uv lock --check`；定向 Orchestrator/源码分析测试；Compose 配置、镜像构建、摘要比对、安全属性检查及隔离栈真实 HTTP 任务链路 | 通过；185 个测试、总覆盖率 86.55%；C/C++/Python/Java 索引和 ZIP/TAR 安全边界通过；真实 Job 成功并登记带父版本及精确工具镜像身份的派生索引工件 | Semgrep/cppcheck、PAIR、Finding 与 Task 最终聚合分别属于 T13-T15 |
 | 2026-09-08 | T12 Review 正确性回归 | 定向源码分析/编排 PostgreSQL 测试；Dev Container `pnpm run check`、`uv lock --check`；重建并重启 orchestrator/analysis-worker；镜像摘要比对；真实 Compose 源码任务 | 通过；27 个定向测试、191 个全量测试、86.77% 覆盖率；慢解压/索引不阻塞事件循环，祖先路径冲突被拒绝，binary ToolSpec 无额外参数，真实 Import Job 成功并生成索引 | 未新增受控 CAS GC；沿用 ADR-012 的安全未引用对象保留语义 |
+| 2026-09-08 | T14 PAIR 源码导入与查询 | T14/迁移/契约定向测试；Windows Selector 下全量 pytest；Ruff/Pyright/TypeScript；`uv lock --check`；Compose 配置解析、0009 迁移与 analysis-worker 镜像构建/启动 | 通过；14 个定向测试、198 个全量测试通过；迁移无 metadata drift；数据库 revision 为 `0009_pair_tables`；Worker 以 UID 10001 启动 | 未在远端 GitHub Actions runner 实跑；T15 Finding/Evidence 尚未实现 |
+| 2026-09-08 | T13 静态工具与 Job 链路 | 变更文件 Ruff/Pyright；契约 TypeScript `tsc --noEmit`；契约、静态适配、调度、源码导入定向测试；Windows Selector 下全量 pytest；`uv lock --check`；Compose 配置解析与 `docker compose ... build analysis-worker`；容器内 Semgrep/cppcheck 样本扫描 | 通过；Ruff 全仓库、Pyright 变更文件、TypeScript 契约均无错误；30 个定向测试、196 个全量测试通过；镜像和真实工具扫描通过 | 未在远端 GitHub Actions runner 实跑；T14/T15 尚未覆盖 PAIR/Finding 消费 |
 | 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
+| 2026-09-09 | T15-R1 静态分析与 PAIR 审计修正 | 定向 PostgreSQL/静态工具测试；Dev Container `pnpm run check`；Compose config；analysis-worker 构建、网络检查及内外连通性探测 | 通过；33 个定向集成测试；全量 208 个测试、85.79% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；Worker 可访问内部 PostgreSQL且外网不可达 | 远端 CI 尚未运行 |
 
 ## 10. 下一步
 
-1. 认领 T13，实现 Semgrep/cppcheck 适配、结构化工具结果和能力缺失原因。
-2. 扩展编排链路，在源码导入 Job 成功后按 CapabilityProfile 调度静态分析 Job。
-3. T13 完成后继续 T14 PAIR 源码导入与查询。
+1. 继续 T15，将 `StaticAnalysisResult` 与 PAIR 函数/边引用接入候选 Finding/Evidence 生成。
+2. 在编排层生成 ConfirmationContext 并调用 Review 门禁。
+3. 实现独立复核上下文、证据快照和 Task 聚合状态更新。
 
 ## 11. 每次工作结束时的更新模板
 

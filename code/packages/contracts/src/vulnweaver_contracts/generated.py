@@ -151,9 +151,31 @@ class CapabilityStatus(StrEnum):
     AVAILABLE = 'available'
     UNAVAILABLE = 'unavailable'
 
+class StaticToolStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    UNAVAILABLE = 'unavailable'
+    FAILED = 'failed'
+
 class AnnotationTargetKind(StrEnum):
     FUNCTION = 'function'
     FINDING = 'finding'
+
+class PairNodeKind(StrEnum):
+    FUNCTION = 'function'
+    BASIC_BLOCK = 'basic_block'
+    INSTRUCTION = 'instruction'
+    PARAMETER = 'parameter'
+    VARIABLE = 'variable'
+    MEMORY_OBJECT = 'memory_object'
+    SOURCE_LOCATION = 'source_location'
+
+class PairEdgeType(StrEnum):
+    CALL = 'call'
+    CONTROL_FLOW = 'control_flow'
+    DEF_USE = 'def_use'
+    DATA_FLOW = 'data_flow'
+    TAINT = 'taint'
+    XREF = 'xref'
 
 type Identifier = str
 
@@ -247,6 +269,71 @@ class SourceImportResult(TypedDict):
     functions: list[SourceFunction]
     calls: list[SourceCall]
     capability_profile: CapabilityProfile
+
+class StaticAnalysisDiagnostic(TypedDict):
+    tool_name: Identifier
+    rule_id: str
+    severity: Severity
+    message: str
+    location: SourceLocation
+    cwe_ids: list[str]
+    properties: JsonObject
+
+class StaticToolRun(TypedDict):
+    tool_name: Identifier
+    tool_version: str | None
+    status: StaticToolStatus
+    exit_code: int | None
+    reason: str | None
+
+class StaticAnalysisResult(TypedDict):
+    schema_version: SchemaVersion
+    artifact_version_id: Identifier
+    diagnostics: list[StaticAnalysisDiagnostic]
+    tool_runs: list[StaticToolRun]
+    created_at: str
+
+class PairFunction(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    name: str
+    symbol: str | None
+    language: str
+    source_location: SourceLocation | None
+    binary_location: BinaryLocation | None
+    signature: str | None
+    attributes: JsonObject
+
+class PairNode(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    function_id: Identifier | None
+    kind: PairNodeKind
+    location: SourceLocation | BinaryLocation | None
+    attributes: JsonObject
+
+class PairEdge(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    source_node_id: Identifier
+    target_node_id: Identifier
+    type: PairEdgeType
+    scope: str
+    confidence: float
+    evidence_id: Identifier | None
+    attributes: JsonObject
+
+class PairRaw(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    tool: ToolIdentity
+    format: str
+    object_ref: ObjectReference
+    created_at: str
 
 class BinaryLocation(TypedDict):
     artifact_version_id: Identifier

@@ -88,6 +88,10 @@
       "type": "string",
       "enum": ["available", "unavailable"]
     },
+    "StaticToolStatus": {
+      "type": "string",
+      "enum": ["succeeded", "unavailable", "failed"]
+    },
     "AnnotationTargetKind": {
       "type": "string",
       "enum": ["function", "finding"]
@@ -263,6 +267,118 @@
         "functions": {"type": "array", "items": {"$ref": "#/$defs/SourceFunction"}},
         "calls": {"type": "array", "items": {"$ref": "#/$defs/SourceCall"}},
         "capability_profile": {"$ref": "#/$defs/CapabilityProfile"}
+      }
+    },
+    "StaticAnalysisDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "rule_id", "severity", "message", "location", "cwe_ids", "properties"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "rule_id": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "severity": {"$ref": "#/$defs/Severity"},
+        "message": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "location": {"$ref": "#/$defs/SourceLocation"},
+        "cwe_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "properties": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "StaticToolRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "tool_version", "status", "exit_code", "reason"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/StaticToolStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "StaticAnalysisResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "diagnostics", "tool_runs", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/StaticAnalysisDiagnostic"}},
+        "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/StaticToolRun"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "PairNodeKind": {
+      "type": "string",
+      "enum": ["function", "basic_block", "instruction", "parameter", "variable", "memory_object", "source_location"]
+    },
+    "PairEdgeType": {
+      "type": "string",
+      "enum": ["call", "control_flow", "def_use", "data_flow", "taint", "xref"]
+    },
+    "PairFunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_version_id", "name", "symbol", "language", "source_location", "binary_location", "signature", "attributes"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "symbol": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 2048}, {"type": "null"}]},
+        "language": {"type": "string", "minLength": 1, "maxLength": 128},
+        "source_location": {"anyOf": [{"$ref": "#/$defs/SourceLocation"}, {"type": "null"}]},
+        "binary_location": {"anyOf": [{"$ref": "#/$defs/BinaryLocation"}, {"type": "null"}]},
+        "signature": {"anyOf": [{"type": "string", "maxLength": 8192}, {"type": "null"}]},
+        "attributes": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "PairNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_version_id", "function_id", "kind", "location", "attributes"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "function_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "kind": {"$ref": "#/$defs/PairNodeKind"},
+        "location": {"anyOf": [{"$ref": "#/$defs/SourceLocation"}, {"$ref": "#/$defs/BinaryLocation"}, {"type": "null"}]},
+        "attributes": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "PairEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_version_id", "source_node_id", "target_node_id", "type", "scope", "confidence", "evidence_id", "attributes"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "source_node_id": {"$ref": "#/$defs/Identifier"},
+        "target_node_id": {"$ref": "#/$defs/Identifier"},
+        "type": {"$ref": "#/$defs/PairEdgeType"},
+        "scope": {"type": "string", "minLength": 1, "maxLength": 128},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidence_id": {"anyOf": [{"$ref": "#/$defs/Identifier"}, {"type": "null"}]},
+        "attributes": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "PairRaw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_version_id", "tool", "format", "object_ref", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "tool": {"$ref": "#/$defs/ToolIdentity"},
+        "format": {"type": "string", "minLength": 1, "maxLength": 128},
+        "object_ref": {"$ref": "#/$defs/ObjectReference"},
+        "created_at": {"type": "string", "format": "date-time"}
       }
     },
     "BinaryLocation": {
@@ -891,6 +1007,10 @@
     {"$ref": "#/$defs/ToolSpec"},
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/SourceImportResult"},
+    {"$ref": "#/$defs/PairFunction"},
+    {"$ref": "#/$defs/PairNode"},
+    {"$ref": "#/$defs/PairEdge"},
+    {"$ref": "#/$defs/PairRaw"},
     {"$ref": "#/$defs/QueueEvent"},
     {"$ref": "#/$defs/ErrorResponse"},
     {"$ref": "#/$defs/CreateProjectRequest"},
