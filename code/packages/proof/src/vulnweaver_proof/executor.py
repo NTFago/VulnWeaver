@@ -9,7 +9,11 @@ from typing import Protocol, cast
 from vulnweaver_contracts import (
     SCHEMA_VERSION,
     ArtifactKind,
+    FailureKind,
     FindingStatus,
+    Job,
+    JobKind,
+    JobStatus,
     Poc,
     PocKind,
     PocResult,
@@ -18,9 +22,13 @@ from vulnweaver_contracts import (
     SandboxRequest,
     SandboxResult,
     SandboxStatus,
+    SchemaVersion,
+    StructuredFailure,
+    WorkerResult,
     validate_contract,
 )
 from vulnweaver_domain import evaluate_exploit_eligibility
+from vulnweaver_persistence import Database
 
 
 class ProofSandbox(Protocol):
@@ -29,6 +37,75 @@ class ProofSandbox(Protocol):
 
 class ProofExecutionError(ValueError):
     """Raised when a proof request is malformed or its tool binding is unsafe."""
+
+
+class ProofJobExecutor:
+    """Adapt the proof service to the durable Worker execution contract."""
+
+    def __init__(self, database: Database, service: ProofExecutionService) -> None:
+        self._database = database
+        self._service = service
+
+    async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
+        if job["kind"] not in {JobKind.PROOF, JobKind.EXPLOIT}:
+            return _worker_failure(job, "proof.invalid_job_kind", FailureKind.VALIDATION)
+        arguments = job.get("arguments")
+        raw_request = arguments.get("proof_request") if isinstance(arguments, dict) else None
+        if not isinstance(raw_request, dict):
+            return _worker_failure(job, "proof.request_required", FailureKind.VALIDATION)
+        request = cast(ProofRequest, raw_request)
+        kind = PocKind.EXPLOIT if job["kind"] is JobKind.EXPLOIT else PocKind.PROOF_OF_CONCEPT
+        try:
+            async with self._database.transaction() as repositories:
+                finding = await repositories.findings.get(request["finding_id"])
+                task = await repositories.tasks.get(finding["task_id"])
+                project = await repositories.projects.get(task["project_id"])
+                poc = await self._service.run(
+                    request,
+                    finding_status=finding["status"],
+                    exploit_validation_enabled=project["exploit_validation_enabled"],
+                    cancellation=cancellation,
+                    kind=kind,
+                )
+                await repositories.pocs.create(poc)
+        except (ProofExecutionError, TypeError, ValueError) as error:
+            return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
+        status = JobStatus.CANCELLED if poc["status"] is PocStatus.CANCELLED else (
+            JobStatus.SUCCEEDED if poc["status"] is PocStatus.COMPLETED else JobStatus.FAILED
+        )
+        return WorkerResult(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            job_id=job["id"],
+            status=status,
+            produced_artifact_version_ids=[],
+            evidence_ids=[],
+            failure=None if status is not JobStatus.FAILED else StructuredFailure(
+                code=f"proof.{poc['result'] or 'failed'}",
+                kind=(
+                    FailureKind.POLICY
+                    if poc["result"] is PocResult.POLICY_DENIED
+                    else FailureKind.TOOL
+                ),
+                message="proof execution did not complete successfully",
+                retryable=False,
+                details={},
+            ),
+        )
+
+
+def _worker_failure(
+    job: Job, code: str, kind: FailureKind, message: str = "proof job rejected"
+) -> WorkerResult:
+    return WorkerResult(
+        schema_version=SchemaVersion.VALUE_1_0_0,
+        job_id=job["id"],
+        status=JobStatus.FAILED,
+        produced_artifact_version_ids=[],
+        evidence_ids=[],
+        failure=StructuredFailure(
+            code=code, kind=kind, message=message, retryable=False, details={}
+        ),
+    )
 
 
 class ProofExecutionService:
