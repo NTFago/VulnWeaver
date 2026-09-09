@@ -286,6 +286,7 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     finding_id = "finding:t15-api"
     evidence_id = "evidence:t15-api"
     function_id = "pair-function:t15-api"
+    binary_function_id = "pair-function:t17-api"
 
     async def seed() -> None:
         database = client.app.state.database
@@ -364,7 +365,25 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
                         binary_location=None,
                         signature="main()",
                         attributes={},
-                    )
+                    ),
+                    PairFunction(
+                        schema_version="1.0.0",
+                        id=binary_function_id,
+                        artifact_version_id=version_id,
+                        name="z_binary_main",
+                        symbol="z_binary_main",
+                        language="x86_64",
+                        source_location=None,
+                        binary_location={
+                            "artifact_version_id": version_id,
+                            "image_base": 0x400000,
+                            "virtual_address": 0x401000,
+                            "file_offset": None,
+                            "instruction_end": 0x401010,
+                        },
+                        signature=None,
+                        attributes={},
+                    ),
                 ],
                 [],
                 [],
@@ -378,6 +397,12 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     assert evidence[0]["relation"]["relation"] == "supports"
     assert client.get(f"/api/tasks/{task_id}/agent-runs").json() == []
     assert client.get(f"/api/tasks/{task_id}/pair").json()[0]["id"] == function_id
+    located = client.get(f"/api/tasks/{task_id}/pair/address/{0x401004}")
+    assert located.status_code == 200
+    assert [item["id"] for item in located.json()] == [binary_function_id]
+    invalid_address = client.get(f"/api/tasks/{task_id}/pair/address/-1")
+    assert invalid_address.status_code == 422
+    assert invalid_address.json()["error_code"] == "invalid_binary_address"
 
     annotation_headers = {
         "X-CSRF-Token": csrf,
@@ -662,9 +687,7 @@ def test_repeated_login_failures_lock_personal_account(client: TestClient) -> No
     assert locked.json()["message"] == "invalid username or password"
 
 
-def test_active_sessions_are_bounded(
-    client: TestClient, persistence_database_url: str
-) -> None:
+def test_active_sessions_are_bounded(client: TestClient, persistence_database_url: str) -> None:
     _login_and_change_password(client)
     oldest_token = client.cookies[SESSION_COOKIE]
     for _ in range(2):

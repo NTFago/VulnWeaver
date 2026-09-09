@@ -355,7 +355,7 @@ export interface BinaryLocation {
   artifact_version_id: Identifier;
   image_base?: number;
   virtual_address: number;
-  file_offset: number;
+  file_offset: number | null;
   instruction_end?: number;
 }
 

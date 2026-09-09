@@ -1211,6 +1211,7 @@ source = { editable = "packages/binary-analysis" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
 ]
 
@@ -1218,6 +1219,7 @@ dependencies = [
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
 ]
 

@@ -563,7 +563,7 @@
         "artifact_version_id": {"$ref": "#/$defs/Identifier"},
         "image_base": {"type": "integer", "minimum": 0},
         "virtual_address": {"type": "integer", "minimum": 0},
-        "file_offset": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
         "instruction_end": {"type": "integer", "minimum": 0}
       }
     },

@@ -539,6 +539,27 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 functions.extend(await repositories.pair.list_functions(version_id))
             return functions
 
+    @app.get("/api/tasks/{task_id}/pair/address/{address}")
+    async def task_pair_at_address(
+        task_id: str,
+        address: int,
+        _: Annotated[str, Depends(require_account)],
+    ) -> list[PairFunction]:
+        if address < 0:
+            raise ApiInputError(
+                "invalid_binary_address",
+                "binary address must be non-negative",
+                "address",
+            )
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            functions: list[PairFunction] = []
+            for version_id in task["artifact_version_ids"]:
+                functions.extend(
+                    await repositories.pair.functions_at_address(version_id, address)
+                )
+            return functions
+
     @app.get("/api/tasks/{task_id}/findings")
     async def task_findings(
         task_id: str, _: Annotated[str, Depends(require_account)]

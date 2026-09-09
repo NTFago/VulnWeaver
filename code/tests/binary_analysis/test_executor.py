@@ -38,6 +38,7 @@ from vulnweaver_contracts import (
     TaskStatus,
     validate_contract,
 )
+from vulnweaver_pair import BinaryPairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 
 from tests.binary_analysis.samples import elf64_sample
@@ -258,6 +259,7 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
                 store,
                 adapters=(_NormalizedAdapter(), _FailedGhidraAdapter()),
                 upx=_UnpacksUpx(),
+                pair_importer=BinaryPairImporter(database),
                 scratch_root=tmp_path,
             )
             result = await executor.execute(job, asyncio.Event())
@@ -270,6 +272,13 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
                 assert unpacked_version["parent_version_id"] == version_id
                 assert result_version["parent_version_id"] == unpacked_version_id
                 assert result_version["produced_by"]["name"] == "binary-import"
+                pair_functions = await repositories.pair.list_functions(version_id)
+                assert [item["name"] for item in pair_functions] == ["main"]
+                assert pair_functions[0]["binary_location"] is not None
+                assert (
+                    pair_functions[0]["binary_location"]["artifact_version_id"]
+                    == unpacked_version_id
+                )
             with store.open(result_version["object_ref"]) as stream:
                 document = json.load(stream)
             validate_contract("BinaryAnalysisResult", document)

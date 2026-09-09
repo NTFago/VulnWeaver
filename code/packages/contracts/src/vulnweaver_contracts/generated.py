@@ -460,7 +460,7 @@ class BinaryLocation(TypedDict):
     artifact_version_id: Identifier
     image_base: NotRequired[int]
     virtual_address: int
-    file_offset: int
+    file_offset: int | None
     instruction_end: NotRequired[int]
 
 type FindingLocation = SourceLocation | BinaryLocation

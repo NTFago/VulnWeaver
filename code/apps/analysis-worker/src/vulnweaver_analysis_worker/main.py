@@ -24,7 +24,7 @@ from vulnweaver_orchestrator import (
     ReviewJobScheduler,
     TaskAggregateSettlementHook,
 )
-from vulnweaver_pair import SourcePairImporter
+from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
 from vulnweaver_source_analysis import (
@@ -87,6 +87,7 @@ async def _run() -> None:
         ghidra_script_directory=os.environ.get("GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"),
         angr_enabled=_environment_bool("ANGR_ENABLED", False),
         upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
+        pair_importer=BinaryPairImporter(database),
     )
     executor = AnalysisJobExecutor(
         source_executor,

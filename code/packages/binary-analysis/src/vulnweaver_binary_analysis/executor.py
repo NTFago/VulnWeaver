@@ -33,6 +33,7 @@ from vulnweaver_contracts import (
     WorkerResult,
     validate_contract,
 )
+from vulnweaver_pair import BinaryPairImporter, BinaryPairImportError
 from vulnweaver_persistence import Database, EntityConflict, EntityNotFound, PersistenceError
 
 from vulnweaver_binary_analysis.headers import (
@@ -85,6 +86,7 @@ class BinaryImportExecutor:
         limits: BinaryAnalysisLimits | None = None,
         adapters: Sequence[BinaryToolAdapter] | None = None,
         upx: UpxUnpacker | None = None,
+        pair_importer: BinaryPairImporter | None = None,
         scratch_root: str | Path | None = None,
     ) -> None:
         self._database = database
@@ -92,6 +94,7 @@ class BinaryImportExecutor:
         self._limits = limits or BinaryAnalysisLimits()
         self._adapters = tuple(adapters) if adapters is not None else (ObjdumpAdapter(),)
         self._upx = upx or UpxAdapter()
+        self._pair_importer = pair_importer
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
 
     @classmethod
@@ -107,6 +110,7 @@ class BinaryImportExecutor:
         ghidra_script_directory: str | Path | None = None,
         angr_enabled: bool = False,
         upx_executable: str = "upx",
+        pair_importer: BinaryPairImporter | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
@@ -118,6 +122,7 @@ class BinaryImportExecutor:
                 AngrAdapter(angr_enabled),
             ),
             upx=UpxAdapter(upx_executable),
+            pair_importer=pair_importer,
             scratch_root=scratch_root,
         )
 
@@ -311,6 +316,45 @@ class BinaryImportExecutor:
                 },
             )
             produced.append(result_version_id)
+            if cancellation.is_set():
+                return _cancelled_result(job["id"], produced)
+            if self._pair_importer is not None:
+                try:
+                    await self._pair_importer.import_binary_result(
+                        result,
+                        raw_object_ref=stored_result.object_ref,
+                        tool=_tool_identity(job),
+                        created_at=job["created_at"],
+                    )
+                except BinaryPairImportError as error:
+                    return _failed_result(
+                        job["id"],
+                        code="binary_import.pair_validation_failed",
+                        kind=FailureKind.INTERNAL,
+                        message=str(error),
+                        retryable=False,
+                        produced_artifact_version_ids=produced,
+                    )
+                except IntegrityError as error:
+                    return _failed_result(
+                        job["id"],
+                        code="binary_import.pair_integrity_failed",
+                        kind=FailureKind.INTERNAL,
+                        message="binary result was published but PAIR integrity validation failed",
+                        retryable=False,
+                        details={"exception_type": type(error).__name__},
+                        produced_artifact_version_ids=produced,
+                    )
+                except (PersistenceError, SQLAlchemyError) as error:
+                    return _failed_result(
+                        job["id"],
+                        code="binary_import.pair_persistence_failed",
+                        kind=FailureKind.ENVIRONMENT,
+                        message="binary result was published but PAIR persistence failed",
+                        retryable=True,
+                        details={"exception_type": type(error).__name__},
+                        produced_artifact_version_ids=produced,
+                    )
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 job_id=job["id"],
@@ -616,12 +660,13 @@ def _failed_result(
     message: str,
     retryable: bool,
     details: Mapping[str, object] | None = None,
+    produced_artifact_version_ids: list[str] | None = None,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         job_id=job_id,
         status=JobStatus.FAILED,
-        produced_artifact_version_ids=[],
+        produced_artifact_version_ids=produced_artifact_version_ids or [],
         evidence_ids=[],
         failure=StructuredFailure(
             code=code,
