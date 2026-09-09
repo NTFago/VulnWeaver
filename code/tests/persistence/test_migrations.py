@@ -7,6 +7,7 @@ from vulnweaver_persistence import metadata
 
 EXPECTED_TABLES = {
     "agent_runs",
+    "annotations",
     "api_requests",
     "alembic_version",
     "artifact_versions",

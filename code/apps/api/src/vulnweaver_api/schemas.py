@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from vulnweaver_contracts import Artifact, ArtifactVersion
+from vulnweaver_contracts import (
+    AnnotationTargetKind,
+    Artifact,
+    ArtifactVersion,
+    Evidence,
+    FindingEvidence,
+    FindingStatus,
+    Severity,
+)
 
 
 class StrictModel(BaseModel):
@@ -74,6 +82,30 @@ class CreateTaskBody(StrictModel):
     schema_version: Literal["1.0.0"]
     artifact_version_ids: list[str] = Field(min_length=1)
     resource_budget: ResourceBudgetModel
+
+
+class CreateAnnotationBody(StrictModel):
+    schema_version: Literal["1.0.0"]
+    target_kind: AnnotationTargetKind
+    target_id: str = Field(min_length=1, max_length=128)
+    labels: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(
+        default_factory=list, max_length=128
+    )
+    note: str = Field(default="", max_length=8192)
+    severity_override: Severity | None = None
+    supersedes_annotation_id: str | None = Field(default=None, max_length=128)
+
+
+class ReviewFindingBody(StrictModel):
+    schema_version: Literal["1.0.0"]
+    outcome: FindingStatus
+    rationale: str = Field(min_length=1, max_length=8192)
+    supersedes_review_id: str | None = Field(default=None, max_length=128)
+
+
+class FindingEvidenceDetail(StrictModel):
+    relation: FindingEvidence
+    evidence: Evidence
 
 
 class ArtifactDetail(StrictModel):

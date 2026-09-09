@@ -111,6 +111,7 @@ async def test_success_uses_openai_shape_redacts_secrets_and_records_agent_run()
         output_contract="JsonObject",
         input_refs=["cas://source"],
         result_refs=["cas://result"],
+        max_output_tokens=321,
     )
 
     assert result.succeeded
@@ -120,6 +121,7 @@ async def test_success_uses_openai_shape_redacts_secrets_and_records_agent_run()
     assert result.agent_run.get("result_refs") == ["cas://result"]
     assert result.agent_run["token_usage"] == {"input_tokens": 4, "output_tokens": 3}
     assert "top-secret" not in str(transport.requests[0][2])
+    assert transport.requests[0][2]["max_tokens"] == 321
     assert "secret-key" not in str(result.agent_run)
     assert recorder.get("run:1") == result.agent_run
 

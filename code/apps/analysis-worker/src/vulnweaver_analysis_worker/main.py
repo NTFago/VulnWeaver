@@ -10,6 +10,19 @@ import sys
 from types import FrameType
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_model_gateway import (
+    ModelEndpoint,
+    ModelGateway,
+    ModelGatewaySettings,
+    ModelRoute,
+    ModelTier,
+)
+from vulnweaver_orchestrator import (
+    IndependentModelReviewer,
+    ReviewJobExecutor,
+    ReviewJobScheduler,
+    TaskAggregateSettlementHook,
+)
 from vulnweaver_pair import SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
@@ -53,6 +66,8 @@ async def _run() -> None:
         if spec["name"] in {"semgrep", "cppcheck"}
     }
     scheduler = StaticAnalysisScheduler(database, static_specs)
+    review_scheduler = ReviewJobScheduler(database)
+    review_executor, model_gateway = _review_executor(database, store)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -68,6 +83,7 @@ async def _run() -> None:
             store,
             scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
         ),
+        review_executor,
     )
     worker = ReliableWorker(
         database,
@@ -83,6 +99,7 @@ async def _run() -> None:
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
+        settlement_hook=TaskAggregateSettlementHook(review_scheduler),
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -93,6 +110,8 @@ async def _run() -> None:
         LOGGER.info("analysis_worker_started")
         await worker.run(stop)
     finally:
+        if model_gateway is not None:
+            await model_gateway.close()
         await queue.close()
         await database.dispose()
         LOGGER.info("analysis_worker_stopped")
@@ -108,6 +127,38 @@ def _required_environment(name: str) -> str:
 def _environment_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     return default if value is None else int(value)
+
+
+def _review_executor(
+    database: Database, store: LocalContentAddressedStore
+) -> tuple[ReviewJobExecutor, ModelGateway | None]:
+    base_url = os.environ.get("REVIEW_MODEL_BASE_URL", "").strip()
+    model = os.environ.get("REVIEW_MODEL_NAME", "").strip()
+    if not base_url and not model:
+        return ReviewJobExecutor(None), None
+    if not base_url or not model:
+        raise RuntimeError(
+            "REVIEW_MODEL_BASE_URL and REVIEW_MODEL_NAME must be configured together"
+        )
+    endpoint = ModelEndpoint(
+        name="review-model",
+        base_url=base_url,
+        models={ModelTier.REVIEW: model},
+        api_key=os.environ.get("REVIEW_MODEL_API_KEY") or None,
+        timeout_seconds=float(os.environ.get("REVIEW_MODEL_TIMEOUT_SECONDS", "60")),
+        max_attempts=_environment_int("REVIEW_MODEL_MAX_ATTEMPTS", 2),
+    )
+    gateway = ModelGateway(
+        ModelGatewaySettings(
+            routes={ModelTier.REVIEW: ModelRoute(primary=endpoint)},
+            max_repair_attempts=_environment_int("REVIEW_MODEL_REPAIR_ATTEMPTS", 1),
+            min_request_interval_seconds=float(
+                os.environ.get("REVIEW_MODEL_MIN_INTERVAL_SECONDS", "0")
+            ),
+        )
+    )
+    reviewer = IndependentModelReviewer(database, gateway, store)
+    return ReviewJobExecutor(reviewer), gateway
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
-- **总体状态**：结构化独立复核已接入校验归属与摘要的有界源码片段，缺失/截断时禁止确认或判为误报；R2/R3 已移植到正常 `main` 历史并通过合并门禁。尚未接入自动复核消费、Task 聚合与人工 Annotation，系统整体仍未完成。
-- **最后更新**：2026-09-09 10:02（Asia/Shanghai）
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；T13/T14/T15 已完成
+- **总体状态**：T15 已完成；静态分析全部终止后自动创建幂等 REVIEW Job，模型调用受 Job 租约、attempt 与 Task token 预算约束，Job 终态事务同步聚合 Task 并追加状态事件；函数/Finding Annotation、人工复核和 Finding/Evidence/PAIR/AgentRun 查询 API 已交付。
+- **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`。已确认独立快照根提交 `fe91646` 与 `origin/main@e9f7914` 的文件树完全一致；R2/R3 已经由 `feat/t15-review-model-main` 无冲突移植并快进到本地 `main`，原始 `feat/t15-review-model` 保留作为可回退检查点，远端 `main` 尚未推送。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t15-completion` 基于 `main@b948b89` 完成并验证 T15 收尾，尚未合并或推送。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：未分配；T15 R2/R3 Git 历史整合已完成，下一包为复核自动调度与 Task 聚合
+- **当前负责人**：无；T15-R4 已完成，下一任务包待认领
 
 ## 3. 开发进度
 
@@ -40,11 +40,12 @@
 | T12 安全导入与 tree-sitter 索引 | 已完成 | Codex | 完成安全导入、tree-sitter 索引、SourceImportExecutor、ToolSpec、analysis-worker 和 Compose 全链路；Review 修复将解压/索引移出事件循环、拒绝文件/目录祖先冲突、按 ToolSpec 必填项注入参数、兼容字符串 JobKind，并以 ToolSpec 作为重试策略唯一来源 | 无；受控未引用对象 GC 属于工件存储后续运维能力，Semgrep/cppcheck 属于 T13 | 2026-09-08 |
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
-| T15 Finding、Evidence 与复核 | 进行中 | Codex | 当前快照已完成 Evidence/Finding/Review 迁移、静态候选去重投影与确认门禁；本轮 T15-R2 已增加结构化模型独立复核、不可变结论工件与原子审计登记 | R3 已接入有界源码读取；剩余复核 Job 自动调度、Task 聚合与人工 Annotation/API；完成 P2 验收 | 2026-09-09 |
+| T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
 | T15 R2/R3 Git 历史整合 | 已完成 | Codex | 核对快照基线与 `origin/main` 文件树一致，从 `origin/main@e9f7914` 创建正常历史分支并无冲突移植 3 个提交；Docker 全量门禁、锁文件、Compose 配置及受影响镜像构建均通过，本地 `main` 快进到整合结果 | 无；远端 `main` 尚未推送 | 2026-09-09 |
+| T15-R4 自动复核、Task 聚合与 Annotation/API | 已完成 | Codex | 最后一个静态 Job 终止时同事务为去重 Findings 创建 REVIEW Job/Outbox；执行器传递稳定 attempt 身份和 `max_model_tokens`；Worker 结算 hook 聚合 Task 并追加事件；0014 新增追加式 Annotation；补齐 Finding/Evidence、PAIR、AgentRun、Annotation 与人工 Review API | 无 | 2026-09-09 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -55,7 +56,7 @@
 | Q-002 | 首版开发环境是否必须同时支持 Windows Worker 未明确 | 影响 P4 的本机验收范围 | 先冻结跨平台消息协议，Windows 执行节点在 Linux MVP 后实现 | 待处理 | 未分配 |
 | Q-003 | Windows Python 3.12 在含中文的工作区路径中以 GBK 读取 uv editable `.pth`，会导致启动失败 | 影响 Windows 宿主直接使用默认 editable workspace；Dev Container/Linux 不受影响 | Windows 本机使用 `uv sync --no-editable`，验证命令使用 `uv run --no-sync`；等待 Python/uv 上游兼容或迁移到纯 ASCII 路径 | 待处理 | 未分配 |
 | Q-004 | 现有 Evidence 仓储测试与 Finding 测试共用固定 input_ref，先运行 Finding 再运行 Evidence 时出现顺序依赖 | 非标准目录顺序下 1 个原有断言失败，不是本轮复核行为回归 | 按正常目录顺序 91 个测试全通过；后续将原有测试数据改为独立命名空间，不放宽断言 | 待处理 | 未分配 |
-| Q-005 | 复核尚未由 Job 租约自动调度，源码只含位置附近片段，不含完整调用邻域 | 不能据此宣称完整独立审计或 P2 已验收；并发调用可能重复消耗 token，落库仍唯一 | R3 已补有界源码读取/归属/摘要校验及截断门禁；下一包接入租约、预算、Outbox，按需补充调用邻域 | 待处理 | Codex |
+| Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
 
 ## 5. 当前阻碍点
 
@@ -102,6 +103,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 11:05：完成 T15-R4 自动复核、Task 聚合与 Annotation/API
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/orchestrator/`、`code/packages/worker/`、`code/packages/model-gateway/`、`code/packages/persistence/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/apps/api/`、Compose/环境示例、锁文件及对应测试
+- 已完成：所有静态分析 Job 终止后，在 Worker 终态结算事务中为当前去重 Finding 创建唯一 REVIEW Job 与 Outbox，避免复核早于并行工具证据；模型调用受租约 attempt 与 Task `max_model_tokens` 约束，未配置模型形成可见结构化失败；Task 从 Job/Finding 事实聚合并按合法阶段追加事件；新增 `0014_annotations` 迁移、追加式函数/Finding 标注、人工复核和 Finding/Evidence/PAIR/AgentRun 查询 API。
+- 测试与结果：Dev Container 全量 `pnpm run check` 为 250 passed、覆盖率 85.79%，Ruff/Pyright/TypeScript/Svelte 全通过；定向复核/聚合/API/迁移/Worker 测试 52 passed；`uv lock --check` 与 Compose 配置通过；API、analysis-worker、migrate 镜像构建成功；开发数据库升级到 `0014_annotations`，API `/health/ready` 返回 ready，analysis-worker 非 root、只读根文件系统且无 Docker Socket。
+- 问题：首次全量运行未传容器内 PostgreSQL/Redis 地址，109 个集成测试被跳过并导致覆盖率不足；用正确服务地址重跑后全部通过。新增 API 样本最初与既有 Evidence 固定输入引用碰撞，改为独立测试引用后全量通过。仅保留既有 Starlette/AnyIO 弃用警告和 analysis-worker 未被覆盖率导入警告。
+- 阻碍点：无。
+- 决策：无新增 ADR；沿用 ADR-013/015/016/019 的 Outbox、租约、结算和恢复语义，Annotation 为既定 M15 追加历史。
+- 下一步：配置一个 analysis-plane 可达的 OpenAI 兼容复核模型，用 C/C++/Python/Java 无害样本执行 P2 端到端验收；随后认领 T16。
 
 ### 2026-09-09 10:02：完成 T15 R2/R3 Git 历史整合
 
@@ -208,24 +221,13 @@
 - 决策：无新增重大架构决策；PAIR 关系表沿用 PostgreSQL 事实源，原始输出仍通过 CAS 工件引用保存。
 - 下一步：认领 T15，实现 Finding、Evidence、Review 持久化与静态工具/PAIR 结果消费。
 
-### 2026-09-08 22:16：完成 T13 Semgrep/cppcheck 适配与静态 Job 链路
-
-- 负责人：Codex
-- 状态：已完成
-- 修改文件：`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/`、`code/compose.yaml`、`code/uv.lock`、`code/tests/contracts/`、`code/tests/source_analysis/`
-- 已完成：新增 `StaticAnalysisDiagnostic`、`StaticToolRun`、`StaticAnalysisResult` v1 契约；实现固定可审计参数、无 Shell 的 Semgrep/cppcheck 适配与 JSON/XML 归一化；统一高/中/低严重性、CWE、源码位置、工具版本、退出码及 `executable_not_found`/`rules_not_installed`/`language_not_detected` 等能力缺失原因；源码导入成功后按语言能力创建 Semgrep/cppcheck 静态分析 Job，使用确定性幂等键和同事务 Outbox；静态结果按父版本、工具身份和镜像摘要登记为不可变派生工件；分析 Worker 镜像安装 Semgrep 1.130.0 与 cppcheck 2.17.1，关闭 Semgrep metrics/version check，并挂载只读 ToolSpec/rule 配置。
-- 测试与结果：Ruff 全仓库通过；变更文件 Pyright 0 错误；契约 TypeScript `tsc --noEmit` 通过；契约/静态适配/调度/源码导入定向测试 30 个通过；全量 pytest 196 个通过、1 个既有 Starlette 弃用警告；`uv lock --check`、Compose 配置解析通过；`docker compose ... build analysis-worker` 成功，镜像摘要为 `sha256:4cfc83f73948a3dd2cddada0d8553361c7a97660353d642362d0e72eddf68b68`，容器以 UID 10001 启动，真实 Semgrep/cppcheck 样本扫描产生结构化输出。
-- 问题：Windows 工作区含中文路径时，直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；本轮使用无 editable 的临时环境执行验证，不改变项目代码约束。
-- 阻碍点：无
-- 决策：无新增重大架构决策；沿用 ADR-012/013/015/016/019 的不可变工件、Outbox、租约、Worker 结算和可恢复编排语义。
-- 下一步：认领 T14，实现 PAIR 源码导入与按函数/调用邻域查询，并为 T15 Finding/Evidence 消费静态工具结果预留稳定输入。
-
 较早记录见 `code/docs/progress/2026-09-09-supplied-snapshot-history.md`，仅来自本次指定快照。
 
 ## 9. 验证记录
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | T15-R4 自动复核、聚合与 Annotation/API | Dev Container 内以 Compose 服务地址运行 `pnpm run check`；定向复核/聚合/API/迁移/Worker 测试；`uv lock --check`；Compose 配置；构建 API/analysis-worker/migrate；实际迁移、ready 与容器安全属性检查 | 250 passed，覆盖率 85.79%；所有静态和前端检查通过；定向 52 passed；数据库 revision `0014_annotations`；API ready，服务镜像启动成功 | 未配置真实复核模型，未跑四语言完整 P2 E2E；首次无效全量运行因容器地址错误跳过 109 项，已纠正重跑 |
 | 2026-09-09 | T15 R2/R3 Git 历史整合 | Dev Container 内设置 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 为 Compose 服务地址后运行 `pnpm run check`；`uv lock --check`；Compose `config --quiet`；构建 `orchestrator`、`analysis-worker` | 246 passed，覆盖率 86.68%；Ruff/Pyright/TypeScript/Svelte 无错误；锁文件、Compose 配置及两个受影响镜像构建通过 | 未运行完整浏览器 E2E 或真实模型调用；远端 CI 尚未运行 |
 | 2026-09-09 | T15-R3 全量回归 | Windows Selector 启动 pytest，参数 `-q -p no:cacheprovider --tb=short --cov --cov-report=term --cov-fail-under=80`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright` | 246 passed，86.64%；Ruff/Pyright 无错误；真实临时 PostgreSQL/Redis 与契约测试通过 | 未验证服务镜像、完整 E2E 和真实模型；analysis-worker 入口未被覆盖率导入 |
 | 2026-09-09 | T15-R2 当前快照验收 | `.venv/Scripts/python.exe -c "import asyncio, pytest; asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()); raise SystemExit(pytest.main(['tests/contracts','tests/domain','tests/evidence','tests/finding','tests/model_gateway','tests/orchestrator','tests/persistence/test_repositories.py','tests/persistence/test_migrations.py','-q','-p','no:cacheprovider','--tb=short']))"`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright`；`pnpm run check:typescript`；`uv lock --check` | 91 passed；Ruff 无问题，Pyright 0 错误，Svelte 0 错误/警告，契约与锁文件一致 | 未执行全量覆盖率、镜像、E2E 或真实模型调用；先 Finding 后 Evidence 的非标准顺序触发原有 Q-004 |
@@ -266,10 +268,9 @@
 
 ## 10. 下一步
 
-1. 在本次指定目录继续 `feat/t15-review-model`，从 `code/packages/orchestrator/src/vulnweaver_orchestrator/model_reviews.py` 接入静态分析成功后的复核 Job；复用既有 Worker 租约、预算、Outbox 与 attempt 身份，不在消息回调中无锁直接重复调用模型。
-2. R3 已提供有界且校验摘要的源码片段；后续按实际复核需要增加函数调用邻域，继续隔离审计推理。缺失或截断时保持 `unverifiable`，不得把模型结论自身升级为强证据。
-3. 根据 Job/Finding/Review 聚合 Task 状态及 `PARTIAL`，实现函数/Finding Annotation 和对应 API 查询；随后核对 M15/P2 验收。
-4. 里程碑补跑 Linux/Dev Container 全量覆盖率、服务镜像和源码主流程 E2E；T16 及 P3-P5 尚未交付，不将本轮检查点标为系统构建完成。
+1. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，用 C/C++/Python/Java 无害样本验证 Function 索引、候选 Finding、独立复核、Evidence 链和 Task 终态，完成 P2 端到端验收。
+2. 根据真实复核召回效果决定是否把 PAIR 调用关系扩展为跨函数源码邻域；继续保持摘要校验、大小限制和缺失/截断时 `unverifiable` 门禁。
+3. 认领 T16，按 M08/M09 实现 ELF/PE 安全导入、基础信息识别和反汇编规范化；T16 及 P3-P5 尚未交付，不将 T15 完成表述为系统整体完成。
 
 ## 11. 每次工作结束时的更新模板
 

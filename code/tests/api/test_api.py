@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,19 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from vulnweaver_api import ApiSettings, create_app
 from vulnweaver_api.auth import SESSION_COOKIE, token_digest
+from vulnweaver_contracts import (
+    Evidence,
+    EvidenceRelation,
+    EvidenceStrength,
+    EvidenceType,
+    Finding,
+    FindingCategory,
+    FindingEvidence,
+    FindingStatus,
+    PairFunction,
+    Severity,
+)
+from vulnweaver_persistence import Database
 from vulnweaver_persistence.models import personal_sessions
 
 if sys.platform == "win32":
@@ -243,6 +257,185 @@ def test_upload_task_event_and_content_flow(client: TestClient) -> None:
         0,
         1,
     ]
+
+
+def test_finding_evidence_review_and_annotation_api_are_auditable(
+    client: TestClient,
+) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf)
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "artifact:t15-api",
+        },
+        content=b"PK\x03\x04harmless",
+    )
+    version_id = upload.json()["versions"][0]["id"]
+    created_task = client.post(
+        f"/api/projects/{project['id']}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:t15-api"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version_id],
+            "resource_budget": _budget(),
+        },
+    ).json()
+    task_id = created_task["id"]
+    finding_id = "finding:t15-api"
+    evidence_id = "evidence:t15-api"
+    function_id = "pair-function:t15-api"
+
+    async def seed() -> None:
+        database = client.app.state.database
+        assert isinstance(database, Database)
+        async with database.transaction() as repositories:
+            evidence = Evidence(
+                schema_version="1.0.0",
+                id=evidence_id,
+                type=EvidenceType.TOOL_OUTPUT,
+                strength=EvidenceStrength.SUPPORTING,
+                artifact_ref="cas://sha256/" + "a" * 64,
+                digest="sha256:" + "a" * 64,
+                tool=None,
+                input_ref="cas://sha256/" + "e" * 64,
+                command_hash=None,
+                exit_code=0,
+                stdout_ref=None,
+                stderr_ref=None,
+                replay_recipe={"kind": "safe-test", "reproducible": False},
+                created_at="2026-09-09T00:00:00Z",
+            )
+            finding = Finding(
+                schema_version="1.0.0",
+                id=finding_id,
+                task_id=task_id,
+                category=FindingCategory.STATIC_ONLY,
+                cwe_id="CWE-20",
+                title="candidate",
+                severity=Severity.MEDIUM,
+                confidence=0.5,
+                location={
+                    "artifact_version_id": version_id,
+                    "path": "src/app.py",
+                    "start_line": 1,
+                    "start_column": 1,
+                    "end_line": 1,
+                    "end_column": 2,
+                },
+                dataflow=[],
+                status=FindingStatus.CANDIDATE,
+                evidence_ids=[],
+                review_ids=[],
+                poc_ids=[],
+                fix_suggestion="validate input",
+                created_at="2026-09-09T00:00:00Z",
+            )
+            relation = FindingEvidence(
+                schema_version="1.0.0",
+                finding_id=finding_id,
+                evidence_id=evidence_id,
+                relation=EvidenceRelation.SUPPORTS,
+                weight=0.5,
+                created_by="tool:test",
+                created_at="2026-09-09T00:00:00Z",
+            )
+            await repositories.evidence.create(evidence)
+            await repositories.findings.create(finding)
+            await repositories.findings.link_evidence(relation)
+            await repositories.pair.import_graph(
+                [
+                    PairFunction(
+                        schema_version="1.0.0",
+                        id=function_id,
+                        artifact_version_id=version_id,
+                        name="main",
+                        symbol="main",
+                        language="python",
+                        source_location={
+                            "artifact_version_id": version_id,
+                            "path": "src/app.py",
+                            "start_line": 1,
+                            "start_column": 1,
+                            "end_line": 1,
+                            "end_column": 2,
+                        },
+                        binary_location=None,
+                        signature="main()",
+                        attributes={},
+                    )
+                ],
+                [],
+                [],
+                None,
+                created_at=datetime(2026, 9, 9, tzinfo=UTC),
+            )
+
+    asyncio.run(seed())
+    assert client.get(f"/api/tasks/{task_id}/findings").json()[0]["id"] == finding_id
+    evidence = client.get(f"/api/findings/{finding_id}/evidence").json()
+    assert evidence[0]["relation"]["relation"] == "supports"
+    assert client.get(f"/api/tasks/{task_id}/agent-runs").json() == []
+    assert client.get(f"/api/tasks/{task_id}/pair").json()[0]["id"] == function_id
+
+    annotation_headers = {
+        "X-CSRF-Token": csrf,
+        "Idempotency-Key": "annotation:t15-api",
+    }
+    annotation_body = {
+        "schema_version": "1.0.0",
+        "target_kind": "finding",
+        "target_id": finding_id,
+        "labels": ["needs-review", "needs-review"],
+        "note": "manual triage",
+        "severity_override": "high",
+        "supersedes_annotation_id": None,
+    }
+    annotation = client.post(
+        f"/api/tasks/{task_id}/annotations",
+        headers=annotation_headers,
+        json=annotation_body,
+    )
+    assert annotation.status_code == 201
+    assert annotation.json()["labels"] == ["needs-review"]
+    replay = client.post(
+        f"/api/tasks/{task_id}/annotations",
+        headers=annotation_headers,
+        json=annotation_body,
+    )
+    assert replay.json()["id"] == annotation.json()["id"]
+    assert client.get(f"/api/tasks/{task_id}/annotations").json() == [annotation.json()]
+
+    function_annotation = client.post(
+        f"/api/tasks/{task_id}/annotations",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "annotation:t15-function",
+        },
+        json={
+            **annotation_body,
+            "target_kind": "function",
+            "target_id": function_id,
+            "labels": ["entrypoint"],
+            "severity_override": None,
+        },
+    )
+    assert function_annotation.status_code == 201
+    assert function_annotation.json()["target_kind"] == "function"
+
+    review = client.patch(
+        f"/api/findings/{finding_id}/review",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "review:t15-api"},
+        json={
+            "schema_version": "1.0.0",
+            "outcome": "disputed",
+            "rationale": "manual evidence is inconclusive",
+            "supersedes_review_id": None,
+        },
+    )
+    assert review.status_code == 201
+    assert review.json()["outcome"] == "disputed"
 
 
 def test_openapi_lists_control_plane_and_cookie_auth(client: TestClient) -> None:

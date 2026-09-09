@@ -21,6 +21,7 @@ from vulnweaver_persistence import (
     JobLeaseClaimOutcome,
     JobLeaseConflict,
     PersistenceInvariantError,
+    Repositories,
 )
 from vulnweaver_queue import RedisStreamsClient, StreamMessage
 
@@ -29,6 +30,12 @@ LOGGER = logging.getLogger("vulnweaver.worker")
 
 class JobExecutor(Protocol):
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult: ...
+
+
+class JobSettlementHook(Protocol):
+    async def after_terminal(
+        self, repositories: Repositories, job: Job, result: WorkerResult
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,11 +77,13 @@ class ReliableWorker:
         queue: RedisStreamsClient,
         executor: JobExecutor,
         settings: WorkerSettings,
+        settlement_hook: JobSettlementHook | None = None,
     ) -> None:
         self._database = database
         self._queue = queue
         self._executor = executor
         self._settings = settings
+        self._settlement_hook = settlement_hook
 
     async def run(self, stop: asyncio.Event) -> None:
         """Consume until stopped, then drain or safely release in-flight leases."""
@@ -347,6 +356,8 @@ class ReliableWorker:
                 owner=self._settings.consumer_name,
                 fencing_token=fencing_token,
             )
+            if self._settlement_hook is not None:
+                await self._settlement_hook.after_terminal(repositories, job, result)
         if result["status"] is JobStatus.FAILED and failure is not None:
             await self._queue.dead_letter(
                 message.stream,
@@ -376,6 +387,8 @@ class ReliableWorker:
                 owner=self._settings.consumer_name,
                 fencing_token=fencing_token,
             )
+            if self._settlement_hook is not None:
+                await self._settlement_hook.after_terminal(repositories, job, result)
         await self._queue.dead_letter(
             message.stream,
             self._settings.consumer_group,
@@ -387,6 +400,20 @@ class ReliableWorker:
     async def _settle_existing_terminal(self, message: StreamMessage, job: Job) -> None:
         if job["status"] is JobStatus.WAITING_PERMISSION:
             return
+        if (
+            self._settlement_hook is not None
+            and job["status"] in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED}
+        ):
+            result = WorkerResult(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                job_id=job["id"],
+                status=job["status"],
+                produced_artifact_version_ids=[],
+                evidence_ids=[],
+                failure=job["failure"],
+            )
+            async with self._database.transaction() as repositories:
+                await self._settlement_hook.after_terminal(repositories, job, result)
         if job["status"] is JobStatus.FAILED and job["failure"] is not None:
             await self._queue.dead_letter(
                 message.stream,

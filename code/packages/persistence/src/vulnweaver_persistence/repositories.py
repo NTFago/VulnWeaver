@@ -14,6 +14,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
 from vulnweaver_contracts import (
     AgentRun,
+    Annotation,
+    AnnotationTargetKind,
     Artifact,
     ArtifactKind,
     ArtifactVersion,
@@ -59,6 +61,7 @@ from vulnweaver_persistence.errors import (
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_persistence.models import (
     agent_runs,
+    annotations,
     artifact_versions,
     artifacts,
     evidence,
@@ -1582,6 +1585,109 @@ class FindingRepository:
         return [_finding_evidence_from_row(row) for row in rows]
 
 
+class AnnotationRepository:
+    """Append-only human labels and corrections for one Task fact."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, annotation: Annotation) -> CreateResult[Annotation]:
+        validate_contract("Annotation", annotation)
+        canonical = cast(
+            Annotation,
+            {**annotation, "created_at": _canonical_timestamp(annotation["created_at"])},
+        )
+        task = await TaskRepository(self._connection).get(canonical["task_id"], for_update=True)
+        if canonical["target_kind"] == AnnotationTargetKind.FINDING:
+            finding = await FindingRepository(self._connection).get(canonical["target_id"])
+            if finding["task_id"] != task["id"]:
+                raise PersistenceInvariantError(
+                    "annotation target does not belong to its task",
+                    details={"target_id": canonical["target_id"]},
+                )
+        else:
+            function = await PairRepository(self._connection).get_function(
+                canonical["target_id"]
+            )
+            if function["artifact_version_id"] not in task["artifact_version_ids"]:
+                raise PersistenceInvariantError(
+                    "annotation target does not belong to its task inputs",
+                    details={"target_id": canonical["target_id"]},
+                )
+        supersedes_id = canonical["supersedes_annotation_id"]
+        if supersedes_id is not None:
+            superseded = await self.get(supersedes_id)
+            if (
+                superseded["task_id"] != canonical["task_id"]
+                or superseded["target_kind"] != canonical["target_kind"]
+                or superseded["target_id"] != canonical["target_id"]
+            ):
+                raise PersistenceInvariantError(
+                    "annotation may only supersede history for the same target",
+                    details={"supersedes_annotation_id": supersedes_id},
+                )
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "target_kind": str(canonical["target_kind"]),
+            "severity_override": (
+                str(canonical["severity_override"])
+                if canonical["severity_override"] is not None
+                else None
+            ),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        try:
+            inserted = (
+                await self._connection.execute(
+                    insert(annotations)
+                    .values(values)
+                    .on_conflict_do_nothing(index_elements=["id"])
+                    .returning(annotations.c.id)
+                )
+            ).scalar_one_or_none()
+        except IntegrityError as error:
+            raise EntityConflict(
+                "annotation conflicts with existing history",
+                details={"annotation_id": canonical["id"]},
+            ) from error
+        if inserted is not None:
+            return CreateResult(canonical, True)
+        existing = await self.get(canonical["id"])
+        if existing != canonical:
+            raise EntityConflict(
+                "annotation identifier conflicts with existing history",
+                details={"annotation_id": canonical["id"]},
+            )
+        return CreateResult(existing, False)
+
+    async def get(self, annotation_id: str) -> Annotation:
+        row = (
+            (
+                await self._connection.execute(
+                    select(annotations).where(annotations.c.id == annotation_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound(
+                "annotation not found", details={"annotation_id": annotation_id}
+            )
+        return _annotation_from_row(row)
+
+    async def list_for_task(self, task_id: str) -> list[Annotation]:
+        rows = (
+            await self._connection.execute(
+                select(annotations)
+                .where(annotations.c.task_id == task_id)
+                .order_by(annotations.c.created_at, annotations.c.id)
+            )
+        ).mappings()
+        return [_annotation_from_row(row) for row in rows]
+
+
 class PairRepository:
     """Idempotent PAIR graph storage and bounded source-query primitives."""
 
@@ -1786,6 +1892,7 @@ class Repositories:
     pair: PairRepository
     evidence: EvidenceRepository
     findings: FindingRepository
+    annotations: AnnotationRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1801,6 +1908,7 @@ class Repositories:
         object.__setattr__(self, "pair", PairRepository(connection))
         object.__setattr__(self, "evidence", EvidenceRepository(connection))
         object.__setattr__(self, "findings", FindingRepository(connection))
+        object.__setattr__(self, "annotations", AnnotationRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -2017,6 +2125,26 @@ def _finding_evidence_from_row(row: RowMapping) -> FindingEvidence:
         relation=EvidenceRelation(row["relation"]),
         weight=float(row["weight"]),
         created_by=row["created_by"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
+def _annotation_from_row(row: RowMapping) -> Annotation:
+    return Annotation(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        task_id=row["task_id"],
+        target_kind=AnnotationTargetKind(row["target_kind"]),
+        target_id=row["target_id"],
+        labels=row["labels"],
+        note=row["note"],
+        severity_override=(
+            Severity(row["severity_override"])
+            if row["severity_override"] is not None
+            else None
+        ),
+        author_id=row["author_id"],
+        supersedes_annotation_id=row["supersedes_annotation_id"],
         created_at=_format_datetime(row["created_at"]),
     )
 

@@ -10,6 +10,7 @@ dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
     "vulnweaver-domain",
+    "vulnweaver-orchestrator",
     "vulnweaver-persistence",
 ]
 
@@ -24,6 +25,7 @@ build-backend = "uv_build"
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
+vulnweaver-orchestrator = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 
 [tool.uv.build-backend]

@@ -2,6 +2,7 @@
 # pyright: reportUnusedFunction=false
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,19 +24,25 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import APIKeyCookie
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
+    AgentRun,
+    Annotation,
     Artifact,
     ArtifactKind,
     ArtifactVersion,
+    Finding,
     Job,
+    PairFunction,
     Project,
     QueueEvent,
     ResourceBudget,
+    Review,
     SchemaVersion,
     Task,
     TaskStatus,
     validate_contract,
 )
 from vulnweaver_domain import normalize_idempotency_key
+from vulnweaver_orchestrator import FindingReviewGate
 from vulnweaver_persistence import Database, DatabaseSettings, IdempotencyConflict
 from vulnweaver_persistence.fingerprints import request_fingerprint
 
@@ -51,13 +58,16 @@ from vulnweaver_api.events import task_cancelled, task_requested
 from vulnweaver_api.middleware import CorrelationIdMiddleware, RequestBodyLimitMiddleware
 from vulnweaver_api.schemas import (
     ArtifactDetail,
+    CreateAnnotationBody,
     CreateProjectBody,
     CreateTaskBody,
     ErrorResponse,
+    FindingEvidenceDetail,
     HealthResponse,
     LoginRequest,
     MeResponse,
     PasswordChangeRequest,
+    ReviewFindingBody,
     SessionResponse,
 )
 from vulnweaver_api.settings import ApiSettings
@@ -80,6 +90,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         max_active_sessions=configuration.max_active_sessions,
     )
     upload_slots = asyncio.Semaphore(configuration.max_upload_concurrency)
+    review_gate = FindingReviewGate(database)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -509,6 +520,171 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             await repositories.tasks.get(task_id)
             return await repositories.jobs.list_for_task(task_id)
 
+    @app.get("/api/tasks/{task_id}/agent-runs")
+    async def task_agent_runs(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[AgentRun]:
+        async with database.transaction() as repositories:
+            await repositories.tasks.get(task_id)
+            return await repositories.agent_runs.list_for_task(task_id)
+
+    @app.get("/api/tasks/{task_id}/pair")
+    async def task_pair(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[PairFunction]:
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            functions: list[PairFunction] = []
+            for version_id in task["artifact_version_ids"]:
+                functions.extend(await repositories.pair.list_functions(version_id))
+            return functions
+
+    @app.get("/api/tasks/{task_id}/findings")
+    async def task_findings(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[Finding]:
+        async with database.transaction() as repositories:
+            await repositories.tasks.get(task_id)
+            return await repositories.findings.list_for_task(task_id)
+
+    @app.get("/api/findings/{finding_id}/evidence")
+    async def finding_evidence(
+        finding_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[FindingEvidenceDetail]:
+        async with database.transaction() as repositories:
+            await repositories.findings.get(finding_id)
+            relations = await repositories.findings.list_evidence_relations(finding_id)
+            return [
+                FindingEvidenceDetail(
+                    relation=relation,
+                    evidence=await repositories.evidence.get(relation["evidence_id"]),
+                )
+                for relation in relations
+            ]
+
+    @app.get("/api/tasks/{task_id}/annotations")
+    async def task_annotations(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[Annotation]:
+        async with database.transaction() as repositories:
+            await repositories.tasks.get(task_id)
+            return await repositories.annotations.list_for_task(task_id)
+
+    @app.post("/api/tasks/{task_id}/annotations", status_code=201)
+    async def create_annotation(
+        task_id: str,
+        body: CreateAnnotationBody,
+        response: Response,
+        _: Annotated[str, Depends(require_write)],
+        idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
+    ) -> Annotation:
+        key = normalize_idempotency_key(idempotency_key)
+        payload = body.model_dump(mode="json")
+        labels = sorted(set(body.labels))
+        if not labels and not body.note and body.severity_override is None:
+            raise ApiInputError(
+                "empty_annotation",
+                "annotation requires a label, note, or severity override",
+                "body",
+            )
+        fingerprint = request_fingerprint({"task_id": task_id, **payload, "labels": labels})
+        scope = f"tasks:{task_id}:annotations:create"
+        async with database.transaction() as repositories:
+            await repositories.api_requests.lock(scope=scope, key=key)
+            prior = await repositories.api_requests.get(scope=scope, key=key)
+            if prior is not None:
+                if prior.request_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key was already used for a different annotation"
+                    )
+                response.status_code = prior.response_status
+                return await repositories.annotations.get(prior.resource_id)
+            annotation = Annotation(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=_identifier("annotation"),
+                task_id=task_id,
+                target_kind=body.target_kind,
+                target_id=body.target_id,
+                labels=labels,
+                note=body.note,
+                severity_override=body.severity_override,
+                author_id=_personal_author_id(configuration.personal_username),
+                supersedes_annotation_id=body.supersedes_annotation_id,
+                created_at=_now(),
+            )
+            validate_contract("Annotation", annotation)
+            created = await repositories.annotations.create(annotation)
+            await repositories.api_requests.add(
+                scope=scope,
+                key=key,
+                fingerprint=fingerprint,
+                resource_type="annotation",
+                resource_id=created.value["id"],
+                response_status=201,
+            )
+            return created.value
+
+    @app.patch("/api/findings/{finding_id}/review", status_code=201)
+    async def review_finding(
+        finding_id: str,
+        body: ReviewFindingBody,
+        response: Response,
+        _: Annotated[str, Depends(require_write)],
+        idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
+    ) -> Review:
+        key = normalize_idempotency_key(idempotency_key)
+        payload = body.model_dump(mode="json")
+        fingerprint = request_fingerprint({"finding_id": finding_id, **payload})
+        scope = f"findings:{finding_id}:review"
+        async with database.transaction() as repositories:
+            await repositories.api_requests.lock(scope=scope, key=key)
+            prior = await repositories.api_requests.get(scope=scope, key=key)
+            if prior is not None:
+                if prior.request_fingerprint != fingerprint:
+                    raise IdempotencyConflict(
+                        "idempotency key was already used for a different review"
+                    )
+                response.status_code = prior.response_status
+                return await repositories.findings.get_review(prior.resource_id)
+            if body.supersedes_review_id is not None:
+                superseded = await repositories.findings.get_review(
+                    body.supersedes_review_id
+                )
+                if superseded["finding_id"] != finding_id:
+                    raise ApiInputError(
+                        "review_history_mismatch",
+                        "review may only supersede history for the same finding",
+                        "supersedes_review_id",
+                    )
+            review = Review(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=_identifier("review"),
+                finding_id=finding_id,
+                outcome=body.outcome,
+                rationale=body.rationale,
+                model=f"human:{_personal_author_id(configuration.personal_username)}",
+                supersedes_review_id=body.supersedes_review_id,
+                created_at=_now(),
+            )
+            validate_contract("Review", review)
+            result = await review_gate.submit_in_transaction(repositories, review)
+            if not result.persisted:
+                reasons = result.decision.reason_codes if result.decision else ()
+                raise ApiInputError(
+                    "confirmation_policy_denied",
+                    "finding confirmation lacks required evidence: " + ", ".join(reasons),
+                    "outcome",
+                )
+            await repositories.api_requests.add(
+                scope=scope,
+                key=key,
+                fingerprint=fingerprint,
+                resource_type="review",
+                resource_id=review["id"],
+                response_status=201,
+            )
+            return review
+
     @app.get("/api/tasks/{task_id}/events")
     async def task_events(
         task_id: str, after: int = -1, _: Annotated[str, Depends(require_account)] = ""
@@ -583,6 +759,10 @@ def _identifier(prefix: str) -> str:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _personal_author_id(username: str) -> str:
+    return "account:" + hashlib.sha256(username.encode()).hexdigest()[:24]
 
 
 def _read_password_file(path: Path) -> str:

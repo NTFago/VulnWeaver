@@ -5,6 +5,8 @@ description = "Source import Worker for VulnWeaver"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
+    "vulnweaver-model-gateway",
+    "vulnweaver-orchestrator",
     "vulnweaver-persistence",
     "vulnweaver-queue",
     "vulnweaver-source-analysis",
@@ -22,6 +24,8 @@ build-backend = "uv_build"
 [tool.uv.sources]
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
+vulnweaver-model-gateway = { workspace = true }
+vulnweaver-orchestrator = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }

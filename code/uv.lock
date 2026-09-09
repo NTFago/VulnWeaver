@@ -1138,6 +1138,8 @@ version = "0.1.0"
 source = { editable = "apps/analysis-worker" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-model-gateway" },
+    { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-source-analysis" },
@@ -1148,6 +1150,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
+    { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
@@ -1166,6 +1170,7 @@ dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
 ]
 
@@ -1177,6 +1182,7 @@ requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
 ]
 

@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -403,13 +403,33 @@ def _failed_result(
 class AnalysisJobExecutor:
     """Route trusted tool identities to their concrete worker executors."""
 
-    def __init__(self, source: SourceImportExecutor, static: StaticAnalysisExecutor) -> None:
+    def __init__(
+        self,
+        source: SourceImportExecutor,
+        static: StaticAnalysisExecutor,
+        review: JobExecutor | None = None,
+    ) -> None:
         self._source = source
         self._static = static
+        self._review = review
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
+        if job["kind"] is JobKind.REVIEW:
+            if self._review is None:
+                return _failed_result(
+                    job["id"],
+                    code="review.executor_unconfigured",
+                    kind=FailureKind.DEPENDENCY,
+                    message="review executor is not configured",
+                    retryable=False,
+                )
+            return await self._review.execute(job, cancellation)
         tool = job.get("tool")
         name = tool.get("name") if isinstance(tool, Mapping) else None
         if name == "source-import":
             return await self._source.execute(job, cancellation)
         return await self._static.execute(job, cancellation)
+
+
+class JobExecutor(Protocol):
+    async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult: ...

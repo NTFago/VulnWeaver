@@ -41,6 +41,7 @@ from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceR
 class ModelReviewResult:
     run: AgentRun
     review: Review | None
+    evidence_id: str | None = None
 
 
 class IndependentModelReviewer:
@@ -60,7 +61,13 @@ class IndependentModelReviewer:
         self._gate = FindingReviewGate(database)
         self._source_loader = source_loader or SourceReviewFactLoader(database, store)
 
-    async def review(self, finding_id: str, *, attempt_key: str) -> ModelReviewResult:
+    async def review(
+        self,
+        finding_id: str,
+        *,
+        attempt_key: str,
+        max_output_tokens: int | None = None,
+    ) -> ModelReviewResult:
         if not attempt_key or len(attempt_key) > 256:
             raise ValueError("review attempt key must contain 1 to 256 characters")
         identity = hashlib.sha256(_json([finding_id, attempt_key])).hexdigest()
@@ -85,6 +92,7 @@ class IndependentModelReviewer:
             messages=_messages(context, source_facts),
             output_contract="Review",
             input_refs=tuple(sorted(input_refs)),
+            max_output_tokens=max_output_tokens,
         )
         run = cast(AgentRun, dict(response.agent_run))
         run["id"] = run_id
@@ -209,7 +217,7 @@ class IndependentModelReviewer:
                     )
                 )
             await repositories.agent_runs.add(run)
-            return ModelReviewResult(run, review)
+            return ModelReviewResult(run, review, evidence["id"] if evidence else None)
 
 
 async def _previous(
@@ -223,7 +231,12 @@ async def _previous(
         review = await repositories.findings.get_review(review_id)
     except EntityNotFound:
         review = None
-    return ModelReviewResult(run, review)
+    evidence_id = f"evidence:review:{run_id.removeprefix('agent-run:review:')}"
+    try:
+        await repositories.evidence.get(evidence_id)
+    except EntityNotFound:
+        evidence_id = None
+    return ModelReviewResult(run, review, evidence_id)
 
 
 def _fail(

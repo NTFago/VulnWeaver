@@ -14,12 +14,14 @@ from vulnweaver_orchestrator.flow import (
     OrchestratorSettings,
 )
 from vulnweaver_orchestrator.model_reviews import IndependentModelReviewer, ModelReviewResult
+from vulnweaver_orchestrator.review_jobs import ReviewJobExecutor, ReviewJobScheduler
 from vulnweaver_orchestrator.reviews import (
     FindingReviewGate,
     ReviewEvidenceFact,
     ReviewFactContext,
     ReviewGateResult,
 )
+from vulnweaver_orchestrator.task_aggregation import TaskAggregateSettlementHook
 
 __all__ = [
     "Checkpoint",
@@ -37,4 +39,7 @@ __all__ = [
     "ReviewEvidenceFact",
     "ReviewFactContext",
     "ReviewGateResult",
+    "ReviewJobExecutor",
+    "ReviewJobScheduler",
+    "TaskAggregateSettlementHook",
 ]

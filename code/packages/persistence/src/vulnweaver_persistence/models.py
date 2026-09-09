@@ -23,6 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from vulnweaver_contracts import (
+    AnnotationTargetKind,
     ArtifactKind,
     EvidenceRelation,
     EvidenceStrength,
@@ -383,6 +384,37 @@ reviews = Table(
     _enum_constraint("outcome", FindingStatus, "outcome"),
 )
 Index("ix_reviews_finding_id", reviews.c.finding_id)
+
+annotations = Table(
+    "annotations",
+    metadata,
+    Column("id", IDENTIFIER, primary_key=True),
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("task_id", IDENTIFIER, ForeignKey("tasks.id", ondelete="RESTRICT"), nullable=False),
+    Column("target_kind", String(32), nullable=False),
+    Column("target_id", IDENTIFIER, nullable=False),
+    Column("labels", JSONB, nullable=False),
+    Column("note", Text, nullable=False),
+    Column("severity_override", String(32), nullable=True),
+    Column("author_id", IDENTIFIER, nullable=False),
+    Column(
+        "supersedes_annotation_id",
+        IDENTIFIER,
+        ForeignKey("annotations.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    ),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("target_kind", AnnotationTargetKind, "target_kind"),
+    CheckConstraint(
+        "severity_override IS NULL OR severity_override IN "
+        "('critical', 'high', 'medium', 'low', 'info')",
+        name="severity_override",
+    ),
+)
+Index("ix_annotations_task_id", annotations.c.task_id)
+Index("ix_annotations_target", annotations.c.target_kind, annotations.c.target_id)
 
 jobs = Table(
     "jobs",

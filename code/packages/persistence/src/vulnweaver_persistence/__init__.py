@@ -14,6 +14,7 @@ from vulnweaver_persistence.models import metadata
 from vulnweaver_persistence.personal_auth import PersonalAccount, PersonalSession
 from vulnweaver_persistence.repositories import (
     AgentRunRepository,
+    AnnotationRepository,
     CreateResult,
     EvidenceRepository,
     FindingRepository,
@@ -31,6 +32,7 @@ from vulnweaver_persistence.repositories import (
 
 __all__ = [
     "AgentRunRepository",
+    "AnnotationRepository",
     "CreateResult",
     "EvidenceRepository",
     "FindingRepository",

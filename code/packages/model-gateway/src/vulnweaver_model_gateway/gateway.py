@@ -352,7 +352,10 @@ class ModelGateway:
         output_contract: str,
         input_refs: Sequence[str] = (),
         result_refs: Sequence[str] = (),
+        max_output_tokens: int | None = None,
     ) -> ModelCallResult:
+        if max_output_tokens is not None and max_output_tokens < 1:
+            raise ValueError("model output token limit must be positive")
         started_at = self._monotonic()
         created_at = _timestamp(self._clock())
         redacted_messages = self._redaction.redact_messages(messages)
@@ -376,7 +379,7 @@ class ModelGateway:
             for repair_index in range(self._settings.max_repair_attempts + 1):
                 try:
                     outcome = await self._request_with_fallback(
-                        route, tier, messages_for_attempt
+                        route, tier, messages_for_attempt, max_output_tokens
                     )
                 except ModelGatewayError as error:
                     outcome = _RequestOutcome(
@@ -472,6 +475,7 @@ class ModelGateway:
         route: ModelRoute,
         tier: ModelTier,
         messages: Sequence[Mapping[str, str]],
+        max_output_tokens: int | None,
     ) -> _RequestOutcome:
         endpoint_errors: list[ModelGatewayError] = []
         all_decisions: list[tuple[str, str]] = []
@@ -481,7 +485,9 @@ class ModelGateway:
         for endpoint_index, endpoint in enumerate(endpoints):
             model = endpoint.model_for(tier)
             try:
-                outcome = await self._request_endpoint(endpoint, model, messages)
+                outcome = await self._request_endpoint(
+                    endpoint, model, messages, max_output_tokens
+                )
             except ModelGatewayError as error:
                 endpoint_errors.append(error)
                 all_decisions.extend(error.attempt_decisions)
@@ -537,12 +543,15 @@ class ModelGateway:
         endpoint: ModelEndpoint,
         model: str,
         messages: Sequence[Mapping[str, str]],
+        max_output_tokens: int | None,
     ) -> _RequestOutcome:
         payload: JsonObject = {
             "model": model,
             "messages": [dict(message) for message in messages],
             "response_format": {"type": "json_object"},
         }
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if endpoint.api_key:
             headers["Authorization"] = f"Bearer {endpoint.api_key}"
