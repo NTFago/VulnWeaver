@@ -41,12 +41,14 @@ from vulnweaver_contracts import (
     SchemaVersion,
     Task,
     TaskStatus,
+    ToolIdentity,
     validate_contract,
 )
 from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
 from vulnweaver_persistence import Database, DatabaseSettings, IdempotencyConflict
 from vulnweaver_persistence.fingerprints import request_fingerprint
+from vulnweaver_reporting import ReportJobScheduler
 
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
@@ -62,6 +64,7 @@ from vulnweaver_api.schemas import (
     ArtifactDetail,
     CreateAnnotationBody,
     CreateProjectBody,
+    CreateReportJobBody,
     CreateTaskBody,
     ErrorResponse,
     FindingEvidenceDetail,
@@ -570,6 +573,25 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             await repositories.tasks.get(task_id)
             return await repositories.findings.list_for_task(task_id)
+
+    @app.post("/api/tasks/{task_id}/reports", status_code=202)
+    async def create_report_job(
+        task_id: str,
+        body: CreateReportJobBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> Job:
+        scheduler = ReportJobScheduler(
+            tool=ToolIdentity(name="vulnweaver-report", version="1.0.0", image_digest=None)
+        )
+        async with database.transaction() as repositories:
+            return await scheduler.schedule(
+                repositories,
+                task_id,
+                artifact_id=body.artifact_id,
+                version_id=body.version_id,
+                parent_version_id=body.parent_version_id,
+                report_format=body.format,
+            )
 
     @app.get("/api/findings/{finding_id}/evidence")
     async def finding_evidence(

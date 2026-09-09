@@ -103,6 +103,14 @@ class ReviewFindingBody(StrictModel):
     supersedes_review_id: str | None = Field(default=None, max_length=128)
 
 
+class CreateReportJobBody(StrictModel):
+    schema_version: Literal["1.0.0"]
+    artifact_id: str = Field(min_length=1, max_length=128)
+    version_id: str = Field(min_length=1, max_length=128)
+    parent_version_id: str = Field(min_length=1, max_length=128)
+    format: Literal["markdown", "sarif"] = "markdown"
+
+
 class FindingEvidenceDetail(StrictModel):
     relation: FindingEvidence
     evidence: Evidence
