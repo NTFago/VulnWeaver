@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import logging
+from collections.abc import Iterable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -600,13 +601,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             await repositories.tasks.get(task_id)
             jobs = await repositories.jobs.list_for_task(task_id)
-            events = await repositories.task_events.list_after(task_id, -1)
+            events = await repositories.task_events.list_after(task_id)
             findings = await repositories.findings.list_for_task(task_id)
         failures: dict[str, int] = {}
         for job in jobs:
-            if job.get("failure"):
-                code = job["failure"].get("code", "unknown")
-                failures[code] = failures.get(code, 0) + 1
+            failure = job["failure"]
+            if failure is None:
+                continue
+            code = failure.get("code", "unknown")
+            failures[code] = failures.get(code, 0) + 1
         return {
             "task_id": task_id,
             "jobs_total": len(jobs),
@@ -955,9 +958,8 @@ def _read_password_file(path: Path) -> str:
     return password
 
 
-def _count_values(values: object) -> dict[str, int]:
+def _count_values(values: Iterable[str]) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for value in values:  # type: ignore[union-attr]
-        key = value.value if hasattr(value, "value") else str(value)
-        counts[key] = counts.get(key, 0) + 1
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
     return counts
