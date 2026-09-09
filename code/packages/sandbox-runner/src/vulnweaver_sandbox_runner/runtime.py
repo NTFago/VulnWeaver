@@ -237,8 +237,10 @@ class DockerCliRuntime:
             "dst=/output,volume-nocopy",
             "--user",
             "10001:10001",
+            "--entrypoint",
+            request.argv[0],
             image,
-            *request.argv,
+            *request.argv[1:],
         )
 
     def _validate_request(self, request: RuntimeRequest) -> None:

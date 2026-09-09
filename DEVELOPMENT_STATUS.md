@@ -9,7 +9,7 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前日期**：2026-09-09（Asia/Shanghai）
+- **当前日期**：2026-09-10（Asia/Shanghai）
 - **当前阶段**：P2 源码静态分析代码已完成，待真实 REVIEW 模型四语言端到端验收；P3 二进制分析和 Sandbox Runner 处于工具镜像/动态验收阶段；P4 Proof/Exploit 已完成主要代码接入，待 Runner HTTP 端到端回放；P5 报告、全链路 UI 和 E2E 正在收口。
 - **当前分支**：`feat/sprint-final-closeout`（基于最新 `main`，已完成 Q-006/Q-007 修复与全量门禁）。`feat/p4-proof-exploit` 已通过 PR #15 合并入 `main`；远程现仅保留 `main`。
 - **当前负责人**：Codex。当前优先处理 T20/T21/T22 的真实回放与最终验收，同时保留 T16/T18/T19 的工具链验收事项。
@@ -42,7 +42,7 @@
 | T18 Sandbox Runner 安全基线 | 待验证 | Codex | Sandbox 契约、无 Shell Docker runtime、隔离输出、禁网、非 root、资源限制、超时取消、CAS 输出、HTTP 服务和独立镜像已完成 | 配置真实工具摘要并完成独立 Runner 动态验收 | 2026-09-09 |
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | Fuzz/Crash 契约、预算门禁、清单解析、稳定聚类、CAS 编排和固定 ToolSpec/profile 已完成 | 固定 AFL++/CASR 镜像下完成无害样本、预算、覆盖率和 crash cluster 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成 | 真实 AFL++/CASR 镜像回放；不得在宿主执行样本 | 2026-09-09 |
-| T20 Proof/Exploit 流程 | 进行中 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、Finding Proof Job 发起接口、SandboxRunnerClient、固定 Proof/Exploit profile 和无害容器回放已完成 | 通过 HTTP Runner 提交带 CAS 工件的 Proof/Exploit 请求，并验收策略拒绝、重放和部分失败 | 2026-09-09 |
+| T20 Proof/Exploit 流程 | 待验证 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、Finding Proof Job 发起接口、SandboxRunnerClient、固定 Proof/Exploit profile、无害容器回放和 Q-006/Q-007 修复已完成 | 已通过 HTTP Runner 完成 CAS 工件回放与策略拒绝/重放/部分失败验收（`tests/proof/test_http_replay.py`，opt-in）；遗留：经完整 API→Dispatcher→Worker 队列链路重跑一次 | 2026-09-10 |
 | T21 Markdown/PDF/SARIF 报告 | 进行中 | Codex | 报告生成、派生工件登记、Job/Worker 路由、版本化内容读取、Job 结果查询、PDF 生成和 Web 下载入口已完成 | 真实数据库 Finding 报告回放及完整 SARIF/PDF/浏览器验收 | 2026-09-09 |
 | T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、证据链与复现记录查询、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
 
@@ -78,6 +78,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T20 HTTP Runner CAS 回放验收（`feat/sprint-final-closeout`） | 修复 runner 镜像缺 docker-cli（Debian 13 拆包）与 runtime 重复传递镜像 ENTRYPOINT 两个缺陷后，经 `http://sandbox-runner:8080` 完成：CAS 脚本 Proof 回放成功、scheduler 幂等重放同 Job、exploit 未开启项目策略拒绝、失败脚本结构化部分失败且 Poc 留痕；`tests/proof/test_http_replay.py` 4 用例通过，全量门禁 328 passed / 81.38% | 完整 API→Worker 队列链路重跑归 T22 收口 |
 | 2026-09-09 | Q-006/Q-007 安全与事务修复（`feat/sprint-final-closeout`） | Proof/Exploit 的 `script_ref` 现按项目范围解析归属（同 digest 可跨项目登记，全局解析不安全）；ProofJobExecutor 拆分事务，沙箱 HTTP 调用不再占用 DB 连接。Dev Container 全量门禁通过：328 passed、覆盖率 81.40%，Ruff/Pyright/Svelte 0 错误 | 继续推进 T16/T18/T19/T20/T21/T22 真实环境验收 |
 | 2026-09-09 | AGENTS.md 课设支撑性修订 | 对照课设功能要求审查开发规则：新增功能验收锚点、Dev Container 门禁约定、静态解析与运行样本边界澄清、教学漏洞样本规则、提示词资产管理和分支合并后清理规则；修正根目录文件清单与过期分支记录；已清理 7 个已合并本地功能分支和远程旧分支；纯文档修订，无代码行为变化 | 合并 PR #16 后继续按 T20/T21/T22 验收事项推进 |
 | 2026-09-09 | PR 前质量检查修复（`4318939`） | Pyright 定位可观测性端点 9 处类型错误，修复 `list_after` 位置传参运行时 Bug、failure 窄化和 `_count_values` 类型，并新增带失败 Job 的 API 回归测试；Dev Container 全量门禁通过（322 passed、81.22%） | 合并 PR 后继续 T20/T21/T22 真实回放 |
@@ -94,6 +95,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T20 HTTP 回放（live Runner） | `pytest tests/proof -q`：15 passed（含 4 个 opt-in HTTP 用例：成功回放、幂等重放、策略拒绝、部分失败）；SandboxRequest 经禁网、非 root、只读输入、资源限制的真实容器执行，产物写回 CAS | 未经 API→Dispatcher→Worker 完整队列链路；Proof 镜像摘要依赖本地构建的 `vulnweaver-proof:fixed` |
 | 2026-09-09 | Q-006/Q-007 修复全量质量门禁 | Dev Container 内 `pnpm run check` 通过（含 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 集成环境）：328 tests passed、1 skipped（Docker runtime opt-in），分支覆盖率 81.40%；新增 tests/proof/test_scheduler.py 覆盖跨项目 script_ref 拒绝、同 digest 跨项目解析、无事务沙箱调用路径 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |
 | 2026-09-09 | PR 前全量质量门禁（含集成环境） | Dev Container 内 `pnpm run check` 通过：Ruff、Pyright 0 错误，322 tests passed、1 skipped（Docker runtime 为 opt-in），分支覆盖率 81.22%，contracts tsc 与 svelte-check 0 错误 0 警告；PostgreSQL/Redis 集成测试经 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务后完整执行 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |
 | 2026-09-09 | T21 PDF 定向检查 | Dev Container 内 `svelte-check` 0 错误、0 警告；Vite build 成功；Ruff 通过；`pytest tests/reporting -q`：8 passed；API 测试 2 passed、10 skipped | API/Worker 真实数据库 PDF Job 和浏览器点击链路；API 跳过项因容器内未暴露宿主 55432 端口 |
@@ -106,8 +108,8 @@
 ## 10. 下一步
 
 1. 使用真实数据库任务完成 T21 Markdown/PDF/SARIF 报告 Job 回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
-2. 构建并固定 AFL++/CASR 与 Proof 镜像摘要，在独立 Sandbox Runner 中回放无害样本，覆盖预算终止、最小输入、覆盖率、crash cluster 和 Proof/Exploit 两种入口。
-3. 使用真实数据库任务完成 T20 Proof/Exploit 的 CAS 工件回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
+2. T20 已完成 HTTP Runner CAS 回放（策略拒绝/重放/部分失败通过）；剩余为经 API→Dispatcher→Worker 完整队列链路重跑一次，归入 T22 收口。
+3. 构建并固定 AFL++/CASR 镜像摘要，在独立 Sandbox Runner 中回放无害样本，覆盖预算终止、最小输入、覆盖率、crash cluster（T19）。
 4. 配置 `analysis-plane` 可达的 REVIEW 模型，完成 C/C++/Python/Java P2 端到端验收；随后执行 T22 浏览器全链路、可观测性和最终报告验收。
 
-更新时间：2026-09-09（Asia/Shanghai）
+更新时间：2026-09-10（Asia/Shanghai）
