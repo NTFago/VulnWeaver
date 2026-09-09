@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
 from vulnweaver_contracts import (
     Job,
@@ -15,9 +16,12 @@ from vulnweaver_contracts import (
     WorkerResult,
 )
 from vulnweaver_domain import JobSnapshot, aggregate_task, transition_task
+from vulnweaver_domain.transitions import TASK_TRANSITIONS
 from vulnweaver_persistence import Repositories
 
 from vulnweaver_orchestrator.review_jobs import ReviewJobScheduler
+
+LOGGER = logging.getLogger("vulnweaver.orchestrator.aggregation")
 
 _PHASES = (
     TaskStatus.CREATED,
@@ -83,6 +87,18 @@ class TaskAggregateSettlementHook:
         for status, task_result in _transition_path(
             task["status"], aggregate.status, aggregate.result, jobs
         ):
+            allowed_now = TASK_TRANSITIONS.get(task["status"], frozenset())
+            if status not in allowed_now:
+                LOGGER.warning(
+                    "task_aggregation_transition_skipped",
+                    extra={
+                        "task_id": task["id"],
+                        "job_id": job["id"],
+                        "current_status": str(task["status"]),
+                        "target_status": str(status),
+                    },
+                )
+                continue
             transition_task(task["status"], status)
             updated = await repositories.tasks.set_status(task["id"], status, result=task_result)
             if not updated.changed:
@@ -124,7 +140,17 @@ def _transition_path(
     elif target not in phases:
         return []
     current_index = _PHASES.index(current)
-    selected = [phase for phase in _PHASES[current_index + 1 :] if phase in phases]
+    selected: list[TaskStatus] = []
+    previous = current
+    for phase in _PHASES[current_index + 1 :]:
+        # Out-of-order settlement can ask for a phase whose predecessors never
+        # ran (e.g. a proof job on a task still validating).  Illegal hops are
+        # skipped so the aggregate degrades instead of poisoning the Job.
+        allowed = TASK_TRANSITIONS.get(previous, frozenset())
+        if phase not in phases or phase not in allowed:
+            continue
+        selected.append(phase)
+        previous = phase
     return [(item, result if item is TaskStatus.COMPLETED else None) for item in selected]
 
 
