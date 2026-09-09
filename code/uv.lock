@@ -17,6 +17,7 @@ members = [
     "vulnweaver-orchestrator-service",
     "vulnweaver-pair",
     "vulnweaver-persistence",
+    "vulnweaver-proof",
     "vulnweaver-queue",
     "vulnweaver-sandbox-runner",
     "vulnweaver-source-analysis",
@@ -1379,6 +1380,21 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-proof"
+version = "0.1.0"
+source = { editable = "packages/proof" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-domain" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-domain", editable = "packages/domain" },
+]
+
+[[package]]
 name = "vulnweaver-queue"
 version = "0.1.0"
 source = { editable = "packages/queue" }
@@ -1491,6 +1507,7 @@ dependencies = [
     { name = "vulnweaver-orchestrator-service" },
     { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-proof" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-sandbox-runner" },
     { name = "vulnweaver-source-analysis" },
@@ -1522,6 +1539,7 @@ requires-dist = [
     { name = "vulnweaver-orchestrator-service", editable = "apps/orchestrator" },
     { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },

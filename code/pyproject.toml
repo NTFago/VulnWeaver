@@ -21,6 +21,7 @@ dependencies = [
     "vulnweaver-source-analysis",
     "vulnweaver-sandbox-runner",
     "vulnweaver-fuzzing",
+    "vulnweaver-proof",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
@@ -55,6 +56,7 @@ members = [
     "packages/source-analysis",
     "packages/sandbox-runner",
     "packages/fuzzing",
+    "packages/proof",
     "packages/tool-runtime",
     "packages/worker",
 ]
@@ -76,6 +78,7 @@ vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
 vulnweaver-fuzzing = { workspace = true }
+vulnweaver-proof = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
