@@ -9,8 +9,9 @@ import signal
 import sys
 from types import FrameType
 
-from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
+from vulnweaver_contracts import ToolIdentity
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGateway,
@@ -27,6 +28,7 @@ from vulnweaver_orchestrator import (
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
+from vulnweaver_reporting import ReportJobExecutor
 from vulnweaver_source_analysis import (
     AnalysisJobExecutor,
     SourceImportExecutor,
@@ -69,6 +71,15 @@ async def _run() -> None:
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
     review_executor, model_gateway = _review_executor(database, store)
+    report_executor = ReportJobExecutor(
+        database,
+        ArtifactRegistrationService(store, database),
+        tool=ToolIdentity(
+            name="vulnweaver-report",
+            version=os.environ.get("REPORT_TOOL_VERSION", "1.0.0"),
+            image_digest=None,
+        ),
+    )
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -98,6 +109,7 @@ async def _run() -> None:
         ),
         review_executor,
         binary_executor,
+        report=report_executor,
     )
     worker = ReliableWorker(
         database,

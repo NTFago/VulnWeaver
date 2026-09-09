@@ -410,12 +410,14 @@ class AnalysisJobExecutor:
         review: JobExecutor | None = None,
         binary: JobExecutor | None = None,
         proof: JobExecutor | None = None,
+        report: JobExecutor | None = None,
     ) -> None:
         self._source = source
         self._static = static
         self._review = review
         self._binary = binary
         self._proof = proof
+        self._report = report
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is JobKind.REVIEW:
@@ -438,6 +440,16 @@ class AnalysisJobExecutor:
                     retryable=False,
                 )
             return await self._proof.execute(job, cancellation)
+        if job["kind"] is JobKind.REPORT:
+            if self._report is None:
+                return _failed_result(
+                    job["id"],
+                    code="report.executor_unconfigured",
+                    kind=FailureKind.DEPENDENCY,
+                    message="report executor is not configured",
+                    retryable=False,
+                )
+            return await self._report.execute(job, cancellation)
         tool = job.get("tool")
         name = tool.get("name") if isinstance(tool, Mapping) else None
         if name == "source-import":
