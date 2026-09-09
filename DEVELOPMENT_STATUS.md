@@ -44,7 +44,7 @@
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成 | 真实 AFL++/CASR 镜像回放；不得在宿主执行样本 | 2026-09-09 |
 | T20 Proof/Exploit 流程 | 待验证 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、SandboxRunnerClient、固定 profile、HTTP CAS 回放验收，以及 API→Dispatcher→Worker→Runner 完整队列链路回放（真实数据库，Poc `completed/exploitable` 落库）已完成 | 无剩余功能项；正式定级待里程碑全量回归 | 2026-09-10 |
 | T21 Markdown/PDF/SARIF 报告 | 待验证 | Codex | 报告生成、派生工件登记、Job/Worker 路由、PDF（补齐 WeasyPrint 系统库）、报告纳入 Poc 统计修复，以及真实数据库三种格式报告 Job 回放与 API 下载验收（Markdown `Proof runs: 1`、SARIF 2.1.0、PDF `%PDF`）已完成 | 浏览器端下载链路验收归 T22 | 2026-09-10 |
-| T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、证据链与复现记录查询、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
+| T22 全链路 UI、可观测性与 E2E | 待验证 | Codex | 浏览器全链路验收完成：登录→项目→任务页→Finding 详情（证据/POC/复现记录、Proof/Exploit 入口）→报告下载；可观测性（Job 汇总、事件时间线载荷展开、LIVE）已验证；最终验收报告见 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑全量回归与真实模型/工具验收归 P2/T16/T18/T19 | 2026-09-10 |
 
 ## 4. 当前问题
 
@@ -79,6 +79,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T22 浏览器全链路验收与最终验收报告 | 重建 web 镜像后经浏览器自动化验证：登录、任务页可观测性（状态汇总/Jobs/事件载荷展开）、Finding 详情（复现记录 EXPLOITABLE、Proof/Exploit 入口）、报告下载点击触发下载；验收报告归档 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑回归与 T16/T18/T19/P2 真实环境验收 |
 | 2026-09-10 | T20 全链路 + T21 真实数据库报告回放 | 重建 analysis-worker/api/migrate 镜像（补 `vulnweaver-proof` 依赖、WeasyPrint 系统库），配 `SANDBOX_RUNNER_URL` 后：API 提交 Proof Job 经 Dispatcher/Worker/Runner 全链路成功（Poc `completed/exploitable`）；Markdown/SARIF/PDF 报告 Job 真实数据库回放成功并可经 API 下载；修复报告渲染未纳入 Poc 的问题（Markdown/HTML 现显示 Proof runs）。Dev Container 门禁 329 passed | T22 浏览器全链路收口 |
 | 2026-09-10 | T20 HTTP Runner CAS 回放验收（`feat/sprint-final-closeout`） | 修复 runner 镜像缺 docker-cli（Debian 13 拆包）与 runtime 重复传递镜像 ENTRYPOINT 两个缺陷后，经 `http://sandbox-runner:8080` 完成：CAS 脚本 Proof 回放成功、scheduler 幂等重放同 Job、exploit 未开启项目策略拒绝、失败脚本结构化部分失败且 Poc 留痕；`tests/proof/test_http_replay.py` 4 用例通过，全量门禁 328 passed / 81.38% | 完整 API→Worker 队列链路重跑归 T22 收口 |
 | 2026-09-09 | Q-006/Q-007 安全与事务修复（`feat/sprint-final-closeout`） | Proof/Exploit 的 `script_ref` 现按项目范围解析归属（同 digest 可跨项目登记，全局解析不安全）；ProofJobExecutor 拆分事务，沙箱 HTTP 调用不再占用 DB 连接。Dev Container 全量门禁通过：328 passed、覆盖率 81.40%，Ruff/Pyright/Svelte 0 错误 | 继续推进 T16/T18/T19/T20/T21/T22 真实环境验收 |
@@ -97,6 +98,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T22 浏览器全链路 | 浏览器自动化走通登录→项目→任务→Finding 详情→报告下载；事件载荷可展开查看结构化 JSON；截图与 DOM 快照留证 | 真实上传新样本的完整分析链路（依赖真实 REVIEW 模型） |
 | 2026-09-10 | T20/T21 完整队列链路回放 | 真实数据库：Proof Job API 202 → Dispatcher → Worker → HTTP Runner → CAS，Poc `completed/exploitable`；Markdown/SARIF/PDF 报告 Job succeeded 且 API 下载返回正确内容（`%PDF` 9.3KB、SARIF 2.1.0、Markdown Proof runs: 1） | 浏览器 UI 点击链路（T22）；报告重投曾因手工注入畸形流消息与消费者组偏移卡顿，已用 `XGROUP SETID 0` 恢复，属运维操作非代码缺陷 |
 | 2026-09-10 | T20 HTTP 回放（live Runner） | `pytest tests/proof -q`：15 passed（含 4 个 opt-in HTTP 用例：成功回放、幂等重放、策略拒绝、部分失败）；SandboxRequest 经禁网、非 root、只读输入、资源限制的真实容器执行，产物写回 CAS | 未经 API→Dispatcher→Worker 完整队列链路；Proof 镜像摘要依赖本地构建的 `vulnweaver-proof:fixed` |
 | 2026-09-09 | Q-006/Q-007 修复全量质量门禁 | Dev Container 内 `pnpm run check` 通过（含 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 集成环境）：328 tests passed、1 skipped（Docker runtime opt-in），分支覆盖率 81.40%；新增 tests/proof/test_scheduler.py 覆盖跨项目 script_ref 拒绝、同 digest 跨项目解析、无事务沙箱调用路径 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |
