@@ -11,8 +11,8 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
 - **当前阶段**：P2 源码静态分析代码已完成，待真实 REVIEW 模型四语言端到端验收；P3 二进制分析和 Sandbox Runner 处于工具镜像/动态验收阶段；P4 Proof/Exploit 已完成主要代码接入，待 Runner HTTP 端到端回放；P5 报告、全链路 UI 和 E2E 正在收口。
-- **当前分支**：`feat/sprint-final-closeout`（已合并 `main@4acebfa`，含 ADR-021 与 T23 Web onboarding/产品设置）。本分支完成 Q-006/Q-007、T20/T21/T22 回放验收与 T19 镜像接入。
-- **当前负责人**：Codex。当前推进 T19 AFL++/CASR 镜像回放与 T16/T18 工具验收；P2 四语言真实模型端到端待模型接入。
+- **当前分支**：`feat/t19-afl-replay`（`feat/sprint-final-closeout` 已通过 PR #20 合并入 `main`）。
+- **当前负责人**：Codex。T18/T19/T20/T21/T22 已验收；剩余 T16（DIE/Ghidra/angr 真实工具镜像）与 P2 四语言真实模型端到端。**P2 阻碍**：需要 analysis-plane 可达的 OpenAI 兼容 REVIEW 模型端点及 API Key（`REVIEW_MODEL_BASE_URL`/`REVIEW_MODEL_NAME`/`REVIEW_MODEL_API_KEY`），当前环境无法提供，待用户接入后执行 C/C++/Python/Java 端到端验收。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
 
@@ -39,9 +39,9 @@
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | Finding/Evidence/Review/Annotation、候选投影、强证据门禁、独立复核、Task 聚合和控制面查询已完成 | 真实模型四语言流程归环境验收 | 2026-09-09 |
 | T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | ELF/PE 解析、函数/指令/CFG/Xref/伪代码/符号事实、UPX 父子工件和 Worker 接入已完成；analysis-worker 已加入 UPX 并回填 ToolSpec 摘要 | 真实 DIE/Ghidra/angr 与 Compose 二进制 E2E；angr 为可选能力 | 2026-09-09 |
 | T17 PAIR 二进制导入与查询 | 已完成 | Codex | 二进制函数/基本块/指令/Xref 导入、地址查询、Worker 和 API 接入已完成 | 最终 Docker 二进制 E2E 随 T16 验收 | 2026-09-09 |
-| T18 Sandbox Runner 安全基线 | 待验证 | Codex | Sandbox 契约、无 Shell Docker runtime、隔离输出、禁网、非 root、资源限制、超时取消、CAS 输出、HTTP 服务和独立镜像已完成 | 配置真实工具摘要并完成独立 Runner 动态验收 | 2026-09-09 |
-| T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | Fuzz/Crash 契约、预算门禁、清单解析、稳定聚类、CAS 编排和固定 ToolSpec/profile 已完成 | 固定 AFL++/CASR 镜像下完成无害样本、预算、覆盖率和 crash cluster 验收 | 2026-09-09 |
-| T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成 | 真实 AFL++/CASR 镜像回放；不得在宿主执行样本 | 2026-09-09 |
+| T18 Sandbox Runner 安全基线 | 已完成 | Codex | Sandbox 契约、无 Shell Docker runtime、隔离输出、禁网、非 root、资源限制、超时取消、CAS 输出、HTTP 服务和独立镜像已完成；摘要钉住的 Proof/Fuzz 两个 profile 均已通过独立 Runner HTTP 动态验收（T20/T19 回放） | 无 | 2026-09-10 |
+| T19 AFL++/CASR 与崩溃分诊 | 已完成 | Codex | `apps/fuzz-tool` AFL++ 4.33c 固定镜像与 `vulnweaver-fuzz-entrypoint` 完成；Sandbox Runner 注册 ToolSpec 并新增 `/work` exec tmpfs；无害样本回放验收：预算终止（100/3000 次执行精确截止）、最小化输入（afl-tmin，摘要与清单一致）、覆盖率（100%）、崩溃聚类（2 个 SIGABRT 记录入簇） | 无 | 2026-09-10 |
+| T19-R2 AFL++/CASR Sandbox 集成 | 已完成 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成；真实镜像回放与 worker 侧 `FuzzExecutionService` 全契约校验（FuzzResult succeeded，2 crash_ids）已通过 | 无 | 2026-09-10 |
 | T20 Proof/Exploit 流程 | 待验证 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、SandboxRunnerClient、固定 profile、HTTP CAS 回放验收，以及 API→Dispatcher→Worker→Runner 完整队列链路回放（真实数据库，Poc `completed/exploitable` 落库）已完成 | 无剩余功能项；正式定级待里程碑全量回归 | 2026-09-10 |
 | T21 Markdown/PDF/SARIF 报告 | 待验证 | Codex | 报告生成、派生工件登记、Job/Worker 路由、PDF（补齐 WeasyPrint 系统库）、报告纳入 Poc 统计修复，以及真实数据库三种格式报告 Job 回放与 API 下载验收（Markdown `Proof runs: 1`、SARIF 2.1.0、PDF `%PDF`）已完成 | 浏览器端下载链路验收归 T22 | 2026-09-10 |
 | T22 全链路 UI、可观测性与 E2E | 待验证 | Codex | 浏览器全链路验收完成：登录→项目→任务页→Finding 详情（证据/POC/复现记录、Proof/Exploit 入口）→报告下载；可观测性（Job 汇总、事件时间线载荷展开、LIVE）已验证；最终验收报告见 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑全量回归与真实模型/工具验收归 P2/T16/T18/T19 | 2026-09-10 |
@@ -86,6 +86,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T19 AFL++/CASR 镜像回放验收（`feat/t19-afl-replay`） | 构建 `vulnweaver-afl-casr:fixed`（AFL++ 4.33c source-only + clang/gdb）与 `vulnweaver-fuzz-entrypoint`；修复 ASAN_OPTIONS symbolize=0、/tmp noexec（新增 /work exec tmpfs）、showmap 逐文件测量三个问题后，独立 Runner 完成：3000 次执行 30.5s、2 个 SIGABRT 崩溃入 manifest、afl-tmin 最小化输入摘要一致、覆盖率 100%；worker 侧 FuzzExecutionService 校验 FuzzResult succeeded（2 crash_ids）。全量门禁 332 passed / 81.34% | T16 DIE/Ghidra/angr 工具验收待真实环境 |
 | 2026-09-10 | T22 浏览器全链路验收与最终验收报告 | 重建 web 镜像后经浏览器自动化验证：登录、任务页可观测性（状态汇总/Jobs/事件载荷展开）、Finding 详情（复现记录 EXPLOITABLE、Proof/Exploit 入口）、报告下载点击触发下载；验收报告归档 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑回归与 T16/T18/T19/P2 真实环境验收 |
 | 2026-09-10 | T20 全链路 + T21 真实数据库报告回放 | 重建 analysis-worker/api/migrate 镜像（补 `vulnweaver-proof` 依赖、WeasyPrint 系统库），配 `SANDBOX_RUNNER_URL` 后：API 提交 Proof Job 经 Dispatcher/Worker/Runner 全链路成功（Poc `completed/exploitable`）；Markdown/SARIF/PDF 报告 Job 真实数据库回放成功并可经 API 下载；修复报告渲染未纳入 Poc 的问题（Markdown/HTML 现显示 Proof runs）。Dev Container 门禁 329 passed | T22 浏览器全链路收口 |
 | 2026-09-10 | T23 Web 首次注册与产品设置 | 独立网络与 tmpfs PostgreSQL 中 API/迁移/契约 34 passed；Ruff、Pyright、Svelte、Vite build、Compose config 通过；未触碰既有 VulnWeaver 容器/网络/卷 | 合并后在独立 TLS 部署完成浏览器首次启动 E2E |
@@ -107,6 +108,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T19 真实镜像回放 | 禁网/非 root/只读根 fs/资源限制沙箱内 afl-fuzz 按 -E/-V 精确终止（100→16.4s，3000→30.5s）；crash-manifest 2 条 SIGABRT 带栈帧；minimized-inputs.tar 成员摘要与 manifest 一致；fuzz-summary coverage_percent=100.0；worker 侧解析 FuzzResult succeeded | 未接 CASR 原生二进制（聚类由服务端 stack_hash 完成）；长时程模糊测试未执行 |
 | 2026-09-10 | T22 浏览器全链路 | 浏览器自动化走通登录→项目→任务→Finding 详情→报告下载；事件载荷可展开查看结构化 JSON；截图与 DOM 快照留证 | 真实上传新样本的完整分析链路（依赖真实 REVIEW 模型） |
 | 2026-09-10 | T20/T21 完整队列链路回放 | 真实数据库：Proof Job API 202 → Dispatcher → Worker → HTTP Runner → CAS，Poc `completed/exploitable`；Markdown/SARIF/PDF 报告 Job succeeded 且 API 下载返回正确内容（`%PDF` 9.3KB、SARIF 2.1.0、Markdown Proof runs: 1） | 浏览器 UI 点击链路（T22）；报告重投曾因手工注入畸形流消息与消费者组偏移卡顿，已用 `XGROUP SETID 0` 恢复，属运维操作非代码缺陷 |
 | 2026-09-10 | T23 定向门禁（隔离资源） | `codex-e2f0-*` 一次性容器、独立网络、tmpfs PostgreSQL：API/迁移/契约 34 passed（含 API Key 保留/清除）；Ruff、Pyright、Svelte、Vite 和 Compose 静态检查通过；测试资源已清除 | 未对既有运行栈执行迁移或浏览器 E2E |

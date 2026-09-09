@@ -7,7 +7,7 @@ import os
 import uvicorn
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import ResourceBudget
-from vulnweaver_fuzzing import afl_casr_command_profile
+from vulnweaver_fuzzing import afl_casr_command_profile, afl_casr_tool_spec
 from vulnweaver_proof import proof_command_profile, proof_tool_spec
 from vulnweaver_sandbox_runner import (
     DockerCliRuntime,
@@ -38,6 +38,12 @@ def build_app():
             )
         )
     if digest:
+        registry.register(
+            afl_casr_tool_spec(
+                digest,
+                _fuzz_resource_budget(),
+            )
+        )
         profiles.append(
             afl_casr_command_profile(
                 os.environ.get("AFL_CASR_IMAGE_REF", "vulnweaver-afl-casr:fixed"),
@@ -71,6 +77,18 @@ def _resource_budget() -> ResourceBudget:
         "max_tool_concurrency": 1,
         "max_dynamic_runs": 1,
         "timeout_seconds": int(os.environ.get("PROOF_TIMEOUT_SECONDS", "120")),
+    }
+
+
+def _fuzz_resource_budget() -> ResourceBudget:
+    return {
+        "max_model_tokens": 0,
+        "cpu_millis": int(os.environ.get("AFL_CPU_MILLIS", "4000")),
+        "memory_bytes": int(os.environ.get("AFL_MEMORY_BYTES", str(1024 * 1024 * 1024))),
+        "disk_bytes": int(os.environ.get("AFL_DISK_BYTES", str(512 * 1024 * 1024))),
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
     }
 
 

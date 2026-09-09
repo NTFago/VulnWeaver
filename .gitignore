@@ -42,3 +42,4 @@ code/artifacts/
 # Generated reports and local test outputs
 code/reports/
 code/test-results/
+.fuzz-out/
