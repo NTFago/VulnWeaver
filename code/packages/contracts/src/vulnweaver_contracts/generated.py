@@ -160,6 +160,18 @@ class AnnotationTargetKind(StrEnum):
     FUNCTION = 'function'
     FINDING = 'finding'
 
+class BinaryFormat(StrEnum):
+    ELF = 'elf'
+    PE = 'pe'
+
+class BinaryArchitecture(StrEnum):
+    X86 = 'x86'
+    X86_64 = 'x86_64'
+
+class BinaryAnalysisStatus(StrEnum):
+    COMPLETE = 'complete'
+    PARTIAL = 'partial'
+
 class PairNodeKind(StrEnum):
     FUNCTION = 'function'
     BASIC_BLOCK = 'basic_block'
@@ -291,6 +303,73 @@ class StaticAnalysisResult(TypedDict):
     artifact_version_id: Identifier
     diagnostics: list[StaticAnalysisDiagnostic]
     tool_runs: list[StaticToolRun]
+    created_at: str
+
+class BinarySection(TypedDict):
+    name: str
+    virtual_address: int
+    virtual_size: int
+    file_offset: int
+    file_size: int
+    readable: bool
+    writable: bool
+    executable: bool
+
+class BinaryFunction(TypedDict):
+    name: str
+    address: int
+    size: int
+    file_offset: int | None
+    attributes: JsonObject
+
+class BinaryInstruction(TypedDict):
+    address: int
+    file_offset: int | None
+    bytes: str
+    mnemonic: str
+    operands: str
+    function_name: str | None
+
+class BinaryString(TypedDict):
+    value: str
+    encoding: Literal['ascii', 'utf-16le']
+    file_offset: int
+    virtual_address: int | None
+
+class BinaryImport(TypedDict):
+    library: str | None
+    name: str | None
+    ordinal: int | None
+    address: int | None
+
+class BinaryToolRun(TypedDict):
+    tool_name: Identifier
+    tool_version: str | None
+    status: StaticToolStatus
+    exit_code: int | None
+    reason: str | None
+    raw_output: str | None
+
+class BinaryAnalysisResult(TypedDict):
+    schema_version: SchemaVersion
+    artifact_version_id: Identifier
+    analyzed_artifact_version_id: Identifier
+    format: BinaryFormat
+    architecture: BinaryArchitecture
+    bits: Literal[32, 64]
+    endianness: Literal['little', 'big']
+    image_base: int
+    entry_point: int
+    compiler: str | None
+    packer: str | None
+    packed: bool
+    sections: list[BinarySection]
+    functions: list[BinaryFunction]
+    instructions: list[BinaryInstruction]
+    strings: list[BinaryString]
+    imports: list[BinaryImport]
+    tool_runs: list[BinaryToolRun]
+    status: BinaryAnalysisStatus
     created_at: str
 
 class PairFunction(TypedDict):

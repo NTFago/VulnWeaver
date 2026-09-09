@@ -10,6 +10,7 @@ import sys
 from types import FrameType
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_binary_analysis import BinaryImportExecutor
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGateway,
@@ -76,6 +77,17 @@ async def _run() -> None:
         static_scheduler=scheduler,
         pair_importer=pair_importer,
     )
+    binary_executor = BinaryImportExecutor.configured(
+        database,
+        store,
+        scratch_root=os.environ.get("BINARY_SCRATCH_ROOT", "/tmp"),
+        die_executable=os.environ.get("DIE_EXECUTABLE", "diec"),
+        objdump_executable=os.environ.get("OBJDUMP_EXECUTABLE", "objdump"),
+        ghidra_executable=os.environ.get("GHIDRA_HEADLESS_EXECUTABLE") or None,
+        ghidra_script_directory=os.environ.get("GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"),
+        angr_enabled=_environment_bool("ANGR_ENABLED", False),
+        upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
+    )
     executor = AnalysisJobExecutor(
         source_executor,
         StaticAnalysisExecutor(
@@ -84,6 +96,7 @@ async def _run() -> None:
             scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
         ),
         review_executor,
+        binary_executor,
     )
     worker = ReliableWorker(
         database,
@@ -127,6 +140,18 @@ def _required_environment(name: str) -> str:
 def _environment_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     return default if value is None else int(value)
+
+
+def _environment_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean")
 
 
 def _review_executor(

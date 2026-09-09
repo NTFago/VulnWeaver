@@ -7,6 +7,7 @@ members = [
     "vulnweaver-analysis-worker",
     "vulnweaver-api",
     "vulnweaver-artifact-store",
+    "vulnweaver-binary-analysis",
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
@@ -1138,6 +1139,7 @@ version = "0.1.0"
 source = { editable = "apps/analysis-worker" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-binary-analysis" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
@@ -1150,6 +1152,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
@@ -1197,6 +1200,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
+]
+
+[[package]]
+name = "vulnweaver-binary-analysis"
+version = "0.1.0"
+source = { editable = "packages/binary-analysis" }
+dependencies = [
+    { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-persistence" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
 ]
@@ -1421,6 +1441,7 @@ dependencies = [
     { name = "vulnweaver-analysis-worker" },
     { name = "vulnweaver-api" },
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-binary-analysis" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-dispatcher" },
     { name = "vulnweaver-domain" },
@@ -1449,6 +1470,7 @@ requires-dist = [
     { name = "vulnweaver-analysis-worker", editable = "apps/analysis-worker" },
     { name = "vulnweaver-api", editable = "apps/api" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-dispatcher", editable = "apps/dispatcher" },
     { name = "vulnweaver-domain", editable = "packages/domain" },

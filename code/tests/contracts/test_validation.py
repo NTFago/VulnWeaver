@@ -237,3 +237,68 @@ def test_pair_source_contracts_validate() -> None:
             "attributes": {},
         },
     )
+
+
+def test_binary_analysis_contract_validates_normalized_addresses_and_tool_runs() -> None:
+    validate_contract(
+        "BinaryAnalysisResult",
+        {
+            "schema_version": "1.0.0",
+            "artifact_version_id": "artifact-version:binary-source",
+            "analyzed_artifact_version_id": "artifact-version:binary-source",
+            "format": "elf",
+            "architecture": "x86_64",
+            "bits": 64,
+            "endianness": "little",
+            "image_base": 4194304,
+            "entry_point": 4198400,
+            "compiler": "GCC",
+            "packer": None,
+            "packed": False,
+            "sections": [
+                {
+                    "name": ".text",
+                    "virtual_address": 4198400,
+                    "virtual_size": 7,
+                    "file_offset": 512,
+                    "file_size": 7,
+                    "readable": True,
+                    "writable": False,
+                    "executable": True,
+                }
+            ],
+            "functions": [
+                {
+                    "name": "main",
+                    "address": 4198400,
+                    "size": 7,
+                    "file_offset": 512,
+                    "attributes": {"source": "objdump"},
+                }
+            ],
+            "instructions": [
+                {
+                    "address": 4198400,
+                    "file_offset": 512,
+                    "bytes": "55",
+                    "mnemonic": "push",
+                    "operands": "%rbp",
+                    "function_name": "main",
+                }
+            ],
+            "strings": [],
+            "imports": [],
+            "tool_runs": [
+                {
+                    "tool_name": "objdump",
+                    "tool_version": "2.42",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "reason": None,
+                    "raw_output": "bounded",
+                }
+            ],
+            "status": "complete",
+            "created_at": "2026-09-09T12:00:00Z",
+        },
+    )

@@ -199,6 +199,12 @@ services:
       REVIEW_MODEL_MAX_ATTEMPTS: ${REVIEW_MODEL_MAX_ATTEMPTS:-2}
       REVIEW_MODEL_REPAIR_ATTEMPTS: ${REVIEW_MODEL_REPAIR_ATTEMPTS:-1}
       REVIEW_MODEL_MIN_INTERVAL_SECONDS: ${REVIEW_MODEL_MIN_INTERVAL_SECONDS:-0}
+      DIE_EXECUTABLE: ${DIE_EXECUTABLE:-diec}
+      OBJDUMP_EXECUTABLE: ${OBJDUMP_EXECUTABLE:-objdump}
+      UPX_EXECUTABLE: ${UPX_EXECUTABLE:-upx}
+      GHIDRA_HEADLESS_EXECUTABLE: ${GHIDRA_HEADLESS_EXECUTABLE:-}
+      GHIDRA_SCRIPT_DIRECTORY: /opt/vulnweaver/ghidra
+      ANGR_ENABLED: ${ANGR_ENABLED:-false}
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro

@@ -181,6 +181,86 @@ export interface StaticAnalysisResult {
   created_at: string;
 }
 
+export type BinaryFormat = "elf" | "pe";
+
+export type BinaryArchitecture = "x86" | "x86_64";
+
+export type BinaryAnalysisStatus = "complete" | "partial";
+
+export interface BinarySection {
+  name: string;
+  virtual_address: number;
+  virtual_size: number;
+  file_offset: number;
+  file_size: number;
+  readable: boolean;
+  writable: boolean;
+  executable: boolean;
+}
+
+export interface BinaryFunction {
+  name: string;
+  address: number;
+  size: number;
+  file_offset: number | null;
+  attributes: JsonObject;
+}
+
+export interface BinaryInstruction {
+  address: number;
+  file_offset: number | null;
+  bytes: string;
+  mnemonic: string;
+  operands: string;
+  function_name: string | null;
+}
+
+export interface BinaryString {
+  value: string;
+  encoding: "ascii" | "utf-16le";
+  file_offset: number;
+  virtual_address: number | null;
+}
+
+export interface BinaryImport {
+  library: string | null;
+  name: string | null;
+  ordinal: number | null;
+  address: number | null;
+}
+
+export interface BinaryToolRun {
+  tool_name: Identifier;
+  tool_version: string | null;
+  status: StaticToolStatus;
+  exit_code: number | null;
+  reason: string | null;
+  raw_output: string | null;
+}
+
+export interface BinaryAnalysisResult {
+  schema_version: SchemaVersion;
+  artifact_version_id: Identifier;
+  analyzed_artifact_version_id: Identifier;
+  format: BinaryFormat;
+  architecture: BinaryArchitecture;
+  bits: 32 | 64;
+  endianness: "little" | "big";
+  image_base: number;
+  entry_point: number;
+  compiler: string | null;
+  packer: string | null;
+  packed: boolean;
+  sections: Array<BinarySection>;
+  functions: Array<BinaryFunction>;
+  instructions: Array<BinaryInstruction>;
+  strings: Array<BinaryString>;
+  imports: Array<BinaryImport>;
+  tool_runs: Array<BinaryToolRun>;
+  status: BinaryAnalysisStatus;
+  created_at: string;
+}
+
 export type PairNodeKind = "function" | "basic_block" | "instruction" | "parameter" | "variable" | "memory_object" | "source_location";
 
 export type PairEdgeType = "call" | "control_flow" | "def_use" | "data_flow" | "taint" | "xref";

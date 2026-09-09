@@ -311,6 +311,120 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "BinaryFormat": {
+      "type": "string",
+      "enum": ["elf", "pe"]
+    },
+    "BinaryArchitecture": {
+      "type": "string",
+      "enum": ["x86", "x86_64"]
+    },
+    "BinaryAnalysisStatus": {
+      "type": "string",
+      "enum": ["complete", "partial"]
+    },
+    "BinarySection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "virtual_address", "virtual_size", "file_offset", "file_size", "readable", "writable", "executable"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "virtual_address": {"type": "integer", "minimum": 0},
+        "virtual_size": {"type": "integer", "minimum": 0},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "file_size": {"type": "integer", "minimum": 0},
+        "readable": {"type": "boolean"},
+        "writable": {"type": "boolean"},
+        "executable": {"type": "boolean"}
+      }
+    },
+    "BinaryFunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "address", "size", "file_offset", "attributes"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "size": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "attributes": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "BinaryInstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "file_offset", "bytes", "mnemonic", "operands", "function_name"],
+      "properties": {
+        "address": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "bytes": {"type": "string", "pattern": "^[0-9a-f]*$", "maxLength": 128},
+        "mnemonic": {"type": "string", "minLength": 1, "maxLength": 128},
+        "operands": {"type": "string", "maxLength": 4096},
+        "function_name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinaryString": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "encoding", "file_offset", "virtual_address"],
+      "properties": {
+        "value": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "encoding": {"type": "string", "enum": ["ascii", "utf-16le"]},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "virtual_address": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "BinaryImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["library", "name", "ordinal", "address"],
+      "properties": {
+        "library": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "ordinal": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "address": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "BinaryToolRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "tool_version", "status", "exit_code", "reason", "raw_output"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/StaticToolStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "raw_output": {"anyOf": [{"type": "string", "maxLength": 1048576}, {"type": "null"}]}
+      }
+    },
+    "BinaryAnalysisResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "analyzed_artifact_version_id", "format", "architecture", "bits", "endianness", "image_base", "entry_point", "compiler", "packer", "packed", "sections", "functions", "instructions", "strings", "imports", "tool_runs", "status", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "analyzed_artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "format": {"$ref": "#/$defs/BinaryFormat"},
+        "architecture": {"$ref": "#/$defs/BinaryArchitecture"},
+        "bits": {"type": "integer", "enum": [32, 64]},
+        "endianness": {"type": "string", "enum": ["little", "big"]},
+        "image_base": {"type": "integer", "minimum": 0},
+        "entry_point": {"type": "integer", "minimum": 0},
+        "compiler": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "packer": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "packed": {"type": "boolean"},
+        "sections": {"type": "array", "items": {"$ref": "#/$defs/BinarySection"}},
+        "functions": {"type": "array", "items": {"$ref": "#/$defs/BinaryFunction"}},
+        "instructions": {"type": "array", "items": {"$ref": "#/$defs/BinaryInstruction"}},
+        "strings": {"type": "array", "items": {"$ref": "#/$defs/BinaryString"}},
+        "imports": {"type": "array", "items": {"$ref": "#/$defs/BinaryImport"}},
+        "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/BinaryToolRun"}},
+        "status": {"$ref": "#/$defs/BinaryAnalysisStatus"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "PairNodeKind": {
       "type": "string",
       "enum": ["function", "basic_block", "instruction", "parameter", "variable", "memory_object", "source_location"]
@@ -1007,6 +1121,7 @@
     {"$ref": "#/$defs/ToolSpec"},
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/SourceImportResult"},
+    {"$ref": "#/$defs/BinaryAnalysisResult"},
     {"$ref": "#/$defs/PairFunction"},
     {"$ref": "#/$defs/PairNode"},
     {"$ref": "#/$defs/PairEdge"},

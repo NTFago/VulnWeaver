@@ -17,7 +17,7 @@ RUN sed -i \
       -e "s|https://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
       /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install --no-install-recommends -y cppcheck ca-certificates \
+    && apt-get install --no-install-recommends -y binutils cppcheck ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir \
@@ -30,6 +30,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY packages ./packages
 COPY apps/analysis-worker ./apps/analysis-worker
+COPY deploy/ghidra /opt/vulnweaver/ghidra
 RUN uv sync --frozen --no-dev --no-editable --package vulnweaver-analysis-worker \
     && useradd --create-home --uid 10001 vulnweaver
 USER vulnweaver

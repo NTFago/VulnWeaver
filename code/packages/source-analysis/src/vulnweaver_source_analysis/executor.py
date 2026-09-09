@@ -408,10 +408,12 @@ class AnalysisJobExecutor:
         source: SourceImportExecutor,
         static: StaticAnalysisExecutor,
         review: JobExecutor | None = None,
+        binary: JobExecutor | None = None,
     ) -> None:
         self._source = source
         self._static = static
         self._review = review
+        self._binary = binary
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is JobKind.REVIEW:
@@ -428,6 +430,16 @@ class AnalysisJobExecutor:
         name = tool.get("name") if isinstance(tool, Mapping) else None
         if name == "source-import":
             return await self._source.execute(job, cancellation)
+        if name == "binary-import":
+            if self._binary is None:
+                return _failed_result(
+                    job["id"],
+                    code="binary_import.executor_unconfigured",
+                    kind=FailureKind.DEPENDENCY,
+                    message="binary import executor is not configured",
+                    retryable=False,
+                )
+            return await self._binary.execute(job, cancellation)
         return await self._static.execute(job, cancellation)
 
 

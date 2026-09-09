@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；T13/T14/T15 已完成
-- **总体状态**：T15 已完成；静态分析全部终止后自动创建幂等 REVIEW Job，模型调用受 Job 租约、attempt 与 Task token 预算约束，Job 终态事务同步聚合 Task 并追加状态事件；函数/Finding Annotation、人工复核和 Finding/Evidence/PAIR/AgentRun 查询 API 已交付。
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 已启动，T16 进行中
+- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R1 已形成可验证检查点：新增版本化二进制分析契约与独立包，安全识别 x86/x64 ELF/PE，受控接入 DIE/UPX/objdump/Ghidra Headless/angr，保存规范化函数、指令、导入与字符串；UPX 原件/脱壳件保持父子谱系，Ghidra 等工具失败时保留已有结果并标记 `partial`。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t15-completion` 基于 `main@b948b89` 完成并验证 T15 收尾，尚未合并或推送。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t16-binary-analysis` 基于 `feat/t15-completion@80ad20a`，T16-R1 已完成本地验证，尚未推送或合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：无；T15-R4 已完成，下一任务包待认领
+- **当前负责人**：Codex；已认领 T16 二进制导入与逆向适配任务包
 
 ## 3. 开发进度
 
@@ -41,6 +41,7 @@
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
+| T16 DIE/UPX/Ghidra/angr 适配 | 进行中 | Codex | T16-R1 已交付 `BinaryAnalysisResult` 契约、独立 `binary-analysis` 包、ELF/PE 头与节区安全解析、字符串/函数/指令/导入规范化、固定参数无 Shell 的 DIE/UPX/objdump/Ghidra/angr 适配、UPX 派生谱系、部分失败结果和 Worker/ToolSpec/Compose 接入 | 补齐 Ghidra 伪代码/Xref/CFG 与 angr 定点符号分析的真实工具镜像验收；Docker Hub 基础镜像解析暂失败，镜像摘要与 Compose 全链路待网络恢复后验证；随后进入 T17 | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
@@ -57,6 +58,7 @@
 | Q-003 | Windows Python 3.12 在含中文的工作区路径中以 GBK 读取 uv editable `.pth`，会导致启动失败 | 影响 Windows 宿主直接使用默认 editable workspace；Dev Container/Linux 不受影响 | Windows 本机使用 `uv sync --no-editable`，验证命令使用 `uv run --no-sync`；等待 Python/uv 上游兼容或迁移到纯 ASCII 路径 | 待处理 | 未分配 |
 | Q-004 | 现有 Evidence 仓储测试与 Finding 测试共用固定 input_ref，先运行 Finding 再运行 Evidence 时出现顺序依赖 | 非标准目录顺序下 1 个原有断言失败，不是本轮复核行为回归 | 按正常目录顺序 91 个测试全通过；后续将原有测试数据改为独立命名空间，不放宽断言 | 待处理 | 未分配 |
 | Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
+| Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | 保留既有国内 Python/Debian 镜像配置；已确认失败发生在基础镜像元数据解析，未切换未经项目确认的镜像源 | 待处理 | Codex |
 
 ## 5. 当前阻碍点
 
@@ -103,6 +105,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 12:26：完成 T16-R1 ELF/PE 安全导入与规范化逆向检查点
+
+- 负责人：Codex
+- 状态：进行中（T16-R1 检查点完成，T16 仍需真实 Ghidra/angr 与镜像验收）
+- 修改文件：`code/packages/binary-analysis/`、`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/binary-import.json`、`code/deploy/ghidra/ExportVulnWeaver.java`、`code/compose.yaml`、工作区依赖/锁文件及 `code/tests/binary_analysis/`
+- 已完成：新增 `BinaryAnalysisResult` 及 ELF/PE、节区、函数、指令、字符串、导入、工具运行契约；纯解析器仅接受 x86/x64 ELF/PE 并校验表/节区边界和输入大小；外部工具统一使用固定参数、无 Shell、取消/超时/合并输出上限；实现 DIE、UPX、objdump、Ghidra Headless、angr CFGFast 适配及有界导出脚本；二进制 Job 校验 Task/Project/Artifact 归属，结果和 UPX 脱壳件以确定性 ID 登记为不可变派生工件，重放保持幂等；Ghidra 等已配置工具失败时保留基础结果并将分析标记为 `partial`。
+- 测试与结果：Dev Container 全量 `pnpm run check` 通过，266 passed、总分支覆盖率 83.25%，Ruff/Pyright/TypeScript/Svelte 均通过；T16 定向 15 passed，包含真实 PostgreSQL 派生谱系/幂等、恶意边界、输出洪泛终止、取消、固定参数及部分失败；`uv lock --check` 与 Compose 配置通过；真实 `/bin/ls` ELF 由 objdump 取得 117 个函数、21915 条指令和 2 个依赖，构造 PE 取得 1 个函数和 5 条指令。
+- 问题：`docker compose build analysis-worker` 在解析 Docker Hub `python:3.12-slim` 元数据时网络失败，故未生成新镜像摘要；DIE/UPX/Ghidra/angr 尚未在最终镜像中进行真实工具链运行。
+- 阻碍点：无；镜像网络问题记录为 Q-006，不阻止继续实现 Ghidra/angr 规范化和 T17 契约。
+- 决策：无新增 ADR；继续遵循 M10、ADR-012/015/016/019，二进制样本不在宿主机执行，外部分析器只处理服务自有 scratch 副本。
+- 下一步：扩展 T16 结果以保存 Ghidra 伪代码、Xref/CFG 和 angr 定点分析事实，并在基础镜像可解析后重建 analysis-worker、回填精确 ToolSpec 镜像摘要并跑 ELF/PE Compose E2E。
 
 ### 2026-09-09 11:05：完成 T15-R4 自动复核、Task 聚合与 Annotation/API
 
@@ -227,6 +241,7 @@
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | T16-R1 ELF/PE 安全导入与规范化逆向 | Dev Container `pnpm run check`；T16 定向测试；契约生成与 `uv lock --check`；Compose 配置；真实 `/bin/ls` ELF 与构造 PE objdump 探测；analysis-worker 镜像构建尝试 | 266 passed、83.25% 覆盖率；静态和前端检查全通过；T16 15 passed；ELF/PE 均取得规范化函数/指令；UPX 父子谱系与重放幂等通过 | Docker Hub 基础镜像元数据解析失败，未重建 analysis-worker 或执行 Compose 二进制 Job；真实 DIE/UPX/Ghidra/angr 工具链待补 |
 | 2026-09-09 | T15-R4 自动复核、聚合与 Annotation/API | Dev Container 内以 Compose 服务地址运行 `pnpm run check`；定向复核/聚合/API/迁移/Worker 测试；`uv lock --check`；Compose 配置；构建 API/analysis-worker/migrate；实际迁移、ready 与容器安全属性检查 | 250 passed，覆盖率 85.79%；所有静态和前端检查通过；定向 52 passed；数据库 revision `0014_annotations`；API ready，服务镜像启动成功 | 未配置真实复核模型，未跑四语言完整 P2 E2E；首次无效全量运行因容器地址错误跳过 109 项，已纠正重跑 |
 | 2026-09-09 | T15 R2/R3 Git 历史整合 | Dev Container 内设置 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 为 Compose 服务地址后运行 `pnpm run check`；`uv lock --check`；Compose `config --quiet`；构建 `orchestrator`、`analysis-worker` | 246 passed，覆盖率 86.68%；Ruff/Pyright/TypeScript/Svelte 无错误；锁文件、Compose 配置及两个受影响镜像构建通过 | 未运行完整浏览器 E2E 或真实模型调用；远端 CI 尚未运行 |
 | 2026-09-09 | T15-R3 全量回归 | Windows Selector 启动 pytest，参数 `-q -p no:cacheprovider --tb=short --cov --cov-report=term --cov-fail-under=80`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright` | 246 passed，86.64%；Ruff/Pyright 无错误；真实临时 PostgreSQL/Redis 与契约测试通过 | 未验证服务镜像、完整 E2E 和真实模型；analysis-worker 入口未被覆盖率导入 |
@@ -268,9 +283,9 @@
 
 ## 10. 下一步
 
-1. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，用 C/C++/Python/Java 无害样本验证 Function 索引、候选 Finding、独立复核、Evidence 链和 Task 终态，完成 P2 端到端验收。
-2. 根据真实复核召回效果决定是否把 PAIR 调用关系扩展为跨函数源码邻域；继续保持摘要校验、大小限制和缺失/截断时 `unverifiable` 门禁。
-3. 认领 T16，按 M08/M09 实现 ELF/PE 安全导入、基础信息识别和反汇编规范化；T16 及 P3-P5 尚未交付，不将 T15 完成表述为系统整体完成。
+1. 继续 T16：在现有有界 Ghidra/angr 适配上补充伪代码、Xref、CFG 和定点符号分析的版本化结果；真实工具不可用时继续保留结构化 `unavailable/failed` 与已有部分产物。
+2. Docker 基础镜像可解析后重建 analysis-worker，更新全部同镜像 ToolSpec 的精确摘要，并以无害 x86/x64 ELF/PE（含 UPX 固定样本）执行 Compose Job、父子工件和 `partial` 端到端验收。
+3. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，补跑 C/C++/Python/Java P2 端到端验收；随后认领 T17，将 T16 二进制结果导入 PAIR 地址模型。
 
 ## 11. 每次工作结束时的更新模板
 
