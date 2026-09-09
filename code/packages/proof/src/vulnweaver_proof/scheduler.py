@@ -20,6 +20,8 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_persistence import Repositories
 
+from .validation import ensure_script_ref_belongs_to_project
+
 
 class ProofJobScheduler:
     """Create one durable proof Job for a validated ProofRequest."""
@@ -46,6 +48,9 @@ class ProofJobScheduler:
         project = await repositories.projects.get(task["project_id"])
         if not project["exploit_validation_enabled"] and kind is PocKind.EXPLOIT:
             raise PermissionError("project has disabled exploit validation")
+        await ensure_script_ref_belongs_to_project(
+            repositories, script_ref=request["script_ref"], project_id=project["id"]
+        )
 
         created_at = task["updated_at"]
         job = Job(

@@ -238,6 +238,29 @@ class ArtifactRepository:
             )
         return _artifact_version_from_row(row)
 
+    async def find_project_version_by_object_ref(
+        self, object_ref: str, *, project_id: str
+    ) -> ArtifactVersion | None:
+        # The same digest may be registered as versions of artifacts in
+        # several projects, so ownership is only defined per project scope.
+        row = (
+            (
+                await self._connection.execute(
+                    select(artifact_versions)
+                    .join(artifacts, artifact_versions.c.artifact_id == artifacts.c.id)
+                    .where(
+                        artifact_versions.c.object_ref == object_ref,
+                        artifacts.c.project_id == project_id,
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return _artifact_version_from_row(row)
+
     async def list_for_project(self, project_id: str) -> list[Artifact]:
         rows = (
             await self._connection.execute(
