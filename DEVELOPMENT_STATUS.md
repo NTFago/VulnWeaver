@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-09（Asia/Shanghai）
 - **当前阶段**：P2 源码静态分析代码已完成，待真实 REVIEW 模型四语言端到端验收；P3 二进制分析和 Sandbox Runner 处于工具镜像/动态验收阶段；P4 Proof/Exploit 已完成主要代码接入，待 Runner HTTP 端到端回放；P5 报告、全链路 UI 和 E2E 正在收口。
-- **当前分支**：`feat/p4-proof-exploit`，跟踪 `origin/feat/p4-proof-exploit`。本次维护开始前 HEAD 为 `d0bcac0`，工作树无未提交改动。
+- **当前分支**：`feat/p4-proof-exploit`，跟踪 `origin/feat/p4-proof-exploit`。本次维护开始前 HEAD 为 `7436eba`，工作树无未提交改动。
 - **当前负责人**：Codex。当前优先处理 T20/T21/T22 的真实回放与最终验收，同时保留 T16/T18/T19 的工具链验收事项。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；318 个测试、81.56% 分支覆盖率，Ruff、Pyright、TypeScript、Svelte 和 PostgreSQL/Redis 集成检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
