@@ -632,9 +632,17 @@ class ModelGateway:
                 or response.status_code == 429
                 or response.status_code >= 500
             )
+            body_text = ""
+            response_body = getattr(response, "body", None)
+            if isinstance(response_body, Mapping):
+                body_text = json.dumps(response_body, default=str)[:512]
             last_error = ModelTransportError(
                 "model endpoint returned an unsuccessful status",
-                details={"endpoint": endpoint.name, "status_code": response.status_code},
+                details={
+                    "endpoint": endpoint.name,
+                    "status_code": response.status_code,
+                    "response_body": body_text,
+                },
                 retryable=retryable,
             )
             if not retryable or attempt + 1 == endpoint.max_attempts:
