@@ -42,6 +42,17 @@ def test_sarif_validation_rejects_incomplete_envelope() -> None:
     try:
         validate_sarif({"version": "2.1.0", "runs": [{}]})
     except ValueError as error:
-        assert "tool driver" in str(error)
+        assert "SARIF" in str(error)
     else:
         raise AssertionError("invalid SARIF envelope was accepted")
+
+
+def test_sarif_validation_rejects_wrong_schema_uri() -> None:
+    report = build_sarif([])
+    report["$schema"] = "https://example.invalid/sarif.json"
+    try:
+        validate_sarif(report)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("SARIF with wrong schema URI was accepted")

@@ -39,7 +39,11 @@ def build_sarif(findings: Sequence[Finding]) -> dict[str, Any]:
 
 def validate_sarif(report: Mapping[str, Any]) -> None:
     """Validate the required SARIF envelope before publishing an artifact."""
-    if report.get("version") != "2.1.0" or not isinstance(report.get("runs"), list):
+    if (
+        report.get("$schema") != "https://json.schemastore.org/sarif-2.1.0.json"
+        or report.get("version") != "2.1.0"
+        or not isinstance(report.get("runs"), list)
+    ):
         raise ValueError("report is not a SARIF 2.1.0 document")
     for run in report["runs"]:
         if not isinstance(run, Mapping):
@@ -49,7 +53,13 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
         if not isinstance(tool, Mapping):
             raise ValueError("SARIF run must contain a tool driver")
         typed_tool = cast(Mapping[str, Any], tool)
-        if not isinstance(typed_tool.get("driver"), Mapping):
+        driver = typed_tool.get("driver")
+        driver_name = (
+            cast(Mapping[str, Any], driver).get("name")
+            if isinstance(driver, Mapping)
+            else None
+        )
+        if driver_name != "VulnWeaver":
             raise ValueError("SARIF run must contain a tool driver")
         if not isinstance(typed_run.get("results"), list):
             raise ValueError("SARIF run results must be an array")
