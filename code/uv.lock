@@ -1312,6 +1312,7 @@ dependencies = [
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-proof" },
     { name = "vulnweaver-reporting" },
 ]
 
@@ -1325,6 +1326,7 @@ requires-dist = [
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-reporting", editable = "packages/reporting" },
 ]
 
