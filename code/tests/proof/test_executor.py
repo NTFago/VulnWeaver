@@ -12,7 +12,6 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_proof import ProofExecutionService
 
-
 IMAGE_DIGEST = "sha256:" + "a" * 64
 
 

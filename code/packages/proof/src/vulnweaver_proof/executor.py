@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vulnweaver_contracts import (
+    SCHEMA_VERSION,
     ArtifactKind,
     FindingStatus,
     Poc,
@@ -17,7 +18,6 @@ from vulnweaver_contracts import (
     SandboxRequest,
     SandboxResult,
     SandboxStatus,
-    SCHEMA_VERSION,
     validate_contract,
 )
 from vulnweaver_domain import evaluate_exploit_eligibility

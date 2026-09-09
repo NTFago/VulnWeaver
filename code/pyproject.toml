@@ -109,6 +109,7 @@ extraPaths = [
     "packages/source-analysis/src",
     "packages/sandbox-runner/src",
     "packages/fuzzing/src",
+    "packages/proof/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
 ]
