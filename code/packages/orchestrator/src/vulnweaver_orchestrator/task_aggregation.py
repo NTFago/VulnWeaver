@@ -30,6 +30,16 @@ _PHASES = (
     TaskStatus.COMPLETED,
 )
 _TERMINAL = frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED})
+_JOB_PHASES = {
+    JobKind.VALIDATE: TaskStatus.VALIDATING,
+    JobKind.IMPORT: TaskStatus.VALIDATING,
+    JobKind.SOURCE_ANALYSIS: TaskStatus.ANALYZING,
+    JobKind.BINARY_ANALYSIS: TaskStatus.ANALYZING,
+    JobKind.REVIEW: TaskStatus.REVIEWING,
+    JobKind.PROOF: TaskStatus.VERIFYING,
+    JobKind.EXPLOIT: TaskStatus.EXPLOITING,
+    JobKind.REPORT: TaskStatus.REPORTING,
+}
 
 
 class TaskAggregateSettlementHook:
@@ -71,12 +81,10 @@ class TaskAggregateSettlementHook:
             [],
         )
         for status, task_result in _transition_path(
-            task["status"], aggregate.status, aggregate.result
+            task["status"], aggregate.status, aggregate.result, jobs
         ):
             transition_task(task["status"], status)
-            updated = await repositories.tasks.set_status(
-                task["id"], status, result=task_result
-            )
+            updated = await repositories.tasks.set_status(task["id"], status, result=task_result)
             if not updated.changed:
                 task = updated.task
                 continue
@@ -96,23 +104,27 @@ class TaskAggregateSettlementHook:
 
 
 def _transition_path(
-    current: TaskStatus, target: TaskStatus, result: TaskResult | None
+    current: TaskStatus,
+    target: TaskStatus,
+    result: TaskResult | None,
+    jobs: list[Job],
 ) -> list[tuple[TaskStatus, TaskResult | None]]:
     if current is target:
         return []
     if target in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
         return [(target, None)]
-    current_index = _PHASES.index(current)
-    target_index = _PHASES.index(target)
-    if target_index <= current_index:
-        return []
-    selected = list(_PHASES[current_index + 1 : target_index + 1])
+    phases = {_JOB_PHASES[item["kind"]] for item in jobs}
+    # A scanner can only be scheduled after source/binary input validation.  This
+    # keeps historical phase events coherent even when the first aggregation runs
+    # after the import Job has already settled.
+    if phases - {TaskStatus.VALIDATING}:
+        phases.add(TaskStatus.VALIDATING)
     if target is TaskStatus.COMPLETED:
-        selected = [
-            item
-            for item in selected
-            if item not in {TaskStatus.VERIFYING, TaskStatus.EXPLOITING}
-        ]
+        phases.add(TaskStatus.COMPLETED)
+    elif target not in phases:
+        return []
+    current_index = _PHASES.index(current)
+    selected = [phase for phase in _PHASES[current_index + 1 :] if phase in phases]
     return [(item, result if item is TaskStatus.COMPLETED else None) for item in selected]
 
 
@@ -126,9 +138,9 @@ def _status_event(
     occurred_at: str,
     causation_id: str,
 ) -> TaskStatusChangedEvent:
-    event_id = "event:" + hashlib.sha256(
-        f"{task_id}\0{sequence}\0{current}".encode()
-    ).hexdigest()[:32]
+    event_id = (
+        "event:" + hashlib.sha256(f"{task_id}\0{sequence}\0{current}".encode()).hexdigest()[:32]
+    )
     return TaskStatusChangedEvent(
         schema_version=SchemaVersion.VALUE_1_0_0,
         event_id=event_id,
