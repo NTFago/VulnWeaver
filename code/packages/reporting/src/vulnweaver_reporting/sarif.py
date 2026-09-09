@@ -61,8 +61,24 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
         )
         if driver_name != "VulnWeaver":
             raise ValueError("SARIF run must contain a tool driver")
-        if not isinstance(typed_run.get("results"), list):
+        results = typed_run.get("results")
+        if not isinstance(results, list):
             raise ValueError("SARIF run results must be an array")
+        for result in cast(list[Any], results):
+            if not isinstance(result, Mapping):
+                raise ValueError("SARIF result must be an object")
+            typed_result = cast(Mapping[str, Any], result)
+            if not isinstance(typed_result.get("ruleId"), str):
+                raise ValueError("SARIF result ruleId is required")
+            if typed_result.get("level") not in {"error", "warning", "note", "none"}:
+                raise ValueError("SARIF result level is invalid")
+            message = typed_result.get("message")
+            if not isinstance(message, Mapping) or not isinstance(
+                cast(Mapping[str, Any], message).get("text"), str
+            ):
+                raise ValueError("SARIF result message.text is required")
+            if not isinstance(typed_result.get("locations"), list):
+                raise ValueError("SARIF result locations must be an array")
 
 
 def _result(finding: Finding) -> dict[str, Any]:

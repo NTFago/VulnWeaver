@@ -56,3 +56,14 @@ def test_sarif_validation_rejects_wrong_schema_uri() -> None:
         pass
     else:
         raise AssertionError("SARIF with wrong schema URI was accepted")
+
+
+def test_sarif_validation_rejects_malformed_result() -> None:
+    report = build_sarif([])
+    report["runs"][0]["results"] = [{"ruleId": "CWE-1"}]
+    try:
+        validate_sarif(report)
+    except ValueError as error:
+        assert "level" in str(error)
+    else:
+        raise AssertionError("malformed SARIF result was accepted")

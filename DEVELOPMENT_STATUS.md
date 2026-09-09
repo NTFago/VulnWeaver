@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待工具链验收、T17 已完成、T18 待验证、T19 进行中；P4 T20 Proof/Exploit 已开始；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
 - **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
-- **最后更新**：2026-09-10 06:03（Asia/Shanghai）
+- **最后更新**：2026-09-09 20:52（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；已同步 `origin/main@6070ba2`（PR #13 已合入）；当前从该基线开发 `feat/p4-proof-exploit`，T20 首个实现检查点及 Dev Container 全量验证已完成。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -47,7 +47,7 @@
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
 | T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；新增 Finding POC 查询 API、Proof Job Scheduler、Worker 执行适配和统一 Job 路由；补齐 Proof 包依赖与负向执行测试；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit | 在不突破控制面/执行面边界的前提下配置独立 Sandbox Runner 通道；补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-10 |
-| M16 报告与结果交换 | 进行中 | Codex | 新增 `vulnweaver-reporting` 包、有界 SARIF 2.1.0 生成器、Markdown 报告渲染器、转 PDF 用安全 HTML 源、WeasyPrint PDF 渲染、SARIF 2.1.0 信封校验、`register_report` CAS 派生工件登记适配、`ReportJobScheduler`、报告 Worker 执行器及 analysis-worker 报告路由配置；调度器已向 Job 传递派生工件目标和格式；Dev Container 已维护 PDF 系统库和固定 Python 依赖；完整项目门禁已通过 317 tests，覆盖率 81.56% | 完整 SARIF Schema 校验和端到端验收 | 2026-09-10 |
+| M16 报告与结果交换 | 进行中 | Codex | 新增 `vulnweaver-reporting` 包、有界 SARIF 2.1.0 生成器、Markdown 报告渲染器、转 PDF 用安全 HTML 源、WeasyPrint PDF 渲染、SARIF 2.1.0 信封及结果字段校验、`register_report` CAS 派生工件登记适配、`ReportJobScheduler`、报告 Worker 执行器及 analysis-worker 报告路由配置；调度器已向 Job 传递派生工件目标和格式；Dev Container 已维护 PDF 系统库和固定 Python 依赖；完整项目门禁已通过 317 tests，覆盖率 81.56%；新增错误 schema、非法 result 回归覆盖 | 完整 SARIF 官方 Schema 校验和端到端验收 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
 | R-003 `origin/main` 同步与冲突解决 | 已完成 | Codex | PR #12 源分支已合并 `origin/main@a88dfd0`；代码自动合并，动态台账按双方事实处理唯一冲突并消除重复问题编号；全量回归及静态、契约、锁文件检查通过 | 等待 PR #12 远端检查与评审流程合并 `main` | 2026-09-09 |
@@ -432,6 +432,7 @@
 | 2026-09-08 | T01.2 CI 触发去重 | PyYAML BaseLoader 解析 `.github/workflows/quality-gate.yml` 并断言触发器集合；`git diff --check` | 通过；触发器仅为 `pull_request`、`workflow_dispatch`，无 `push` | 未在远端 GitHub Actions runner 实跑；平台必需检查和禁止直接推送仍需仓库配置保证 |
 | 2026-09-09 | T15-R1 静态分析与 PAIR 审计修正 | 定向 PostgreSQL/静态工具测试；Dev Container `pnpm run check`；Compose config；analysis-worker 构建、网络检查及内外连通性探测 | 通过；33 个定向集成测试；全量 208 个测试、85.79% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；Worker 可访问内部 PostgreSQL且外网不可达 | 远端 CI 尚未运行 |
 | 2026-09-09 | T15 静态候选投影与独立复核门禁 | 定向 Finding/Orchestrator/迁移测试；Dev Container `pnpm run check`；`uv lock --check`；Compose 配置、迁移与镜像构建 | 通过；209 个全量测试、86.10% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；`0013` 升降级、跨工具去重、重放幂等、PAIR 快照和强证据确认门禁通过 | review 模型实际调用、ReviewConclusion Evidence、Task 聚合与远端 CI 尚未执行 |
+| 2026-09-09 | M16 SARIF 结果契约校验 | Dev Container `uv run ruff check packages/reporting tests/reporting`、`pnpm exec pyright packages/reporting/src`、`uv run pytest tests/reporting -q` | 通过；Ruff/Pyright 无错误，8 个 reporting 测试通过；新增 SARIF schema URI、结果结构、级别和消息字段校验及回归测试 | 官方完整 Schema 校验和端到端报告 Job 尚未完成 |
 
 ## 10. 下一步
 
