@@ -30,19 +30,21 @@ def upgrade() -> None:
         sa.Column("resource_budget", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("schema_version = '1.0.0'", name=op.f("ck_pocs_schema_version_v1")),
-        sa.CheckConstraint("kind IN ('exploit', 'reproduction')", name=op.f("ck_pocs_kind")),
         sa.CheckConstraint(
-            "status IN ('pending', 'running', 'completed', 'failed', 'cancelled')",
+            "kind IN ('proof_of_concept', 'exploit')", name=op.f("ck_pocs_kind")
+        ),
+        sa.CheckConstraint(
+            "status IN ('created', 'queued', 'running', 'completed', 'failed', 'cancelled')",
             name=op.f("ck_pocs_status"),
         ),
         sa.CheckConstraint(
             "result IS NULL OR result IN ("
-            "'exploitable', 'not_exploitable', 'inconclusive', "
+            "'exploitable', 'not_exploitable_under_environment', 'inconclusive', "
             "'timeout', 'policy_denied', 'tool_error', 'environment_error')",
             name=op.f("ck_pocs_result"),
         ),
         sa.CheckConstraint(
-            "permission_mode IN ('read_only', 'workspace_write', 'network_isolated')",
+            "permission_mode IN ('request_permission', 'full_access')",
             name=op.f("ck_pocs_permission_mode"),
         ),
         sa.CheckConstraint(
