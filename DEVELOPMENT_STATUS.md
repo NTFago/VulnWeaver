@@ -175,6 +175,17 @@
 - 阻碍点：无。
 - 下一步：完成报告 Job 结果的 Web 展示和下载关联。
 
+### 2026-09-09 22:32：完成报告结果到 Web 下载的关联
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/apps/api/src/vulnweaver_api/app.py`、`code/apps/web/src/App.svelte`、`code/apps/web/src/lib/api.ts`、`code/packages/persistence/src/vulnweaver_persistence/repositories.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增按版本读取工件和按 Job 查询结果的 API；任务页轮询报告 Job 结果，解析 `produced_artifact_version_ids`，加载派生版本元数据并展示下载链接。
+- 测试与结果：Dev Container 内 API/Persistence Ruff、Pyright 通过；Web `svelte-check` 已执行且未出现错误输出。
+- 问题：报告生成依赖实际报告 Job 结算，尚未用真实 Finding 数据完成浏览器回放。
+- 阻碍点：无。
+- 下一步：执行端到端任务回放，继续收口真实工具镜像和可观测性目标。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex

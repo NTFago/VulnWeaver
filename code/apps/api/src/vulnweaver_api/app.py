@@ -542,6 +542,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 return {"job_id": job["id"], "status": job["status"], "result": None}
             return result
 
+    @app.get("/api/artifact-versions/{version_id}")
+    async def artifact_version(
+        version_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> ArtifactVersion:
+        async with database.transaction() as repositories:
+            return await repositories.artifacts.get_version(version_id)
+
     @app.get("/api/tasks/{task_id}/agent-runs")
     async def task_agent_runs(
         task_id: str, _: Annotated[str, Depends(require_account)]
