@@ -8,6 +8,7 @@ dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-pair",
     "vulnweaver-persistence",
+    "vulnweaver-sandbox-runner",
 ]
 
 [build-system]
@@ -19,6 +20,7 @@ vulnweaver-artifact-store = { workspace = true }
 vulnweaver-contracts = { workspace = true }
 vulnweaver-pair = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-sandbox-runner = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_binary_analysis"

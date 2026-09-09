@@ -242,6 +242,8 @@ services:
       SANDBOX_ROOT: /var/lib/vulnweaver/sandbox
       DOCKER_HOST_SANDBOX_ROOT: ${DOCKER_HOST_SANDBOX_ROOT:-}
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      BINARY_TOOLS_IMAGE_REF: ${BINARY_TOOLS_IMAGE_REF:-vulnweaver-binary-tools:fixed}
+      BINARY_TOOLS_IMAGE_DIGEST: ${BINARY_TOOLS_IMAGE_DIGEST:-}
       AFL_CASR_IMAGE_REF: ${AFL_CASR_IMAGE_REF:-vulnweaver-afl-casr:fixed}
       AFL_CASR_IMAGE_DIGEST: ${AFL_CASR_IMAGE_DIGEST:-}
       PROOF_IMAGE_REF: ${PROOF_IMAGE_REF:-vulnweaver-proof:fixed}
