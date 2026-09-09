@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from vulnweaver_contracts import Finding
-from vulnweaver_reporting import build_html
+from vulnweaver_reporting import build_html, render_pdf
 
 
 def test_html_escapes_finding_text() -> None:
@@ -32,3 +33,8 @@ def test_html_escapes_finding_text() -> None:
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
     assert "a&amp;b.py" in html
+
+
+def test_pdf_renderer_writes_a_pdf_document(tmp_path: Path) -> None:
+    output = render_pdf([], tmp_path / "report.pdf")
+    assert output.read_bytes().startswith(b"%PDF-")
