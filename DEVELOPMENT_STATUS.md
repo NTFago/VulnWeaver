@@ -109,7 +109,7 @@
 - 安全边界：只读任务已登记且属于同一项目的源码归档；复用安全解压，禁路径穿越/符号链接；同一份有界字节完成摘要校验与读取；不执行任何样本；源码经网关脱敏，审计快照保留来源摘要和实际片段。
 - 验证：Windows Selector 下全量 `pytest -q -p no:cacheprovider --tb=short --cov --cov-report=term --cov-fail-under=80`，246 passed，覆盖率 86.64%；Ruff/Pyright 通过。首次全量仅新增脱敏测试错误地预期 `[REDACTED]`，已按既有实现修正为 `<redacted>`，保留原文不得外发断言后全量重跑通过。
 - 未覆盖：analysis-worker 进程入口未被覆盖率导入；存在既有 Starlette/AnyIO 弃用警告；未运行镜像、完整浏览器 E2E 或真实模型调用。
-- 交接：用户要求记录状态并推送，已确认 origin 地址；本次推送仅新开发分支，不合并或强推。原快照独立 Git 历史与远端历史的整合留待单独评估。
+- 交接：用户已确认 origin 地址，功能检查点 `9c392e7` 已成功推送至 `origin/feat/t15-review-model` 并建立上游跟踪；没有合并或强推。原快照独立 Git 历史与远端历史的整合留待单独评估。
 - 下一步：为复核服务接入 Job 租约、预算与 Outbox；补 Task 聚合及 Annotation/API；源码片段之外的函数调用邻域按需扩展。
 
 ### 2026-09-09 02:33：完成 T15-R2 结构化模型独立复核检查点
