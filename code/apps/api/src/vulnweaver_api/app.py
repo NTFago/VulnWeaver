@@ -533,6 +533,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             await repositories.tasks.get(task_id)
             return await repositories.jobs.list_for_task(task_id)
 
+    @app.get("/api/jobs/{job_id}/result")
+    async def job_result(job_id: str, _: Annotated[str, Depends(require_account)]) -> Any:
+        async with database.transaction() as repositories:
+            job = await repositories.jobs.get(job_id)
+            result = await repositories.jobs.get_result(job_id)
+            if result is None:
+                return {"job_id": job["id"], "status": job["status"], "result": None}
+            return result
+
     @app.get("/api/tasks/{task_id}/agent-runs")
     async def task_agent_runs(
         task_id: str, _: Annotated[str, Depends(require_account)]

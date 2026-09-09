@@ -593,6 +593,14 @@ class JobRepository:
         ).mappings()
         return [_job_from_row(row) for row in rows]
 
+    async def get_result(self, job_id: str) -> WorkerResult | None:
+        row = (
+            await self._connection.execute(
+                select(job_results).where(job_results.c.job_id == job_id)
+            )
+        ).mappings().one_or_none()
+        return _worker_result_from_row(row) if row is not None else None
+
     async def cancel_for_task(self, task_id: str) -> int:
         result = await self._connection.execute(
             update(jobs)

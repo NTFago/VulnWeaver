@@ -10,6 +10,7 @@ import type {
   Project,
   QueueEvent,
   Task,
+  WorkerResult,
 } from "@vulnweaver/contracts";
 
 export interface Session {
@@ -123,6 +124,7 @@ export const api = {
     }),
   task: (taskId: string) => request<Task>(`/api/tasks/${taskId}`),
   jobs: (taskId: string) => request<Job[]>(`/api/tasks/${taskId}/jobs`),
+  jobResult: (jobId: string) => request<WorkerResult | { job_id: string; status: string; result: null }>(`/api/jobs/${jobId}/result`),
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),

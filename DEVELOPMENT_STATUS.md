@@ -164,6 +164,17 @@
 - 阻碍点：无。
 - 下一步：补充报告 Job 结果到派生工件的查询/下载关联。
 
+### 2026-09-09 22:05：增加 Job 结果查询 API
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/persistence/src/vulnweaver_persistence/repositories.py`、`code/apps/api/src/vulnweaver_api/app.py`、`code/apps/web/src/lib/api.ts`、`DEVELOPMENT_STATUS.md`
+- 已完成：持久化层增加按 Job 查询不可变 WorkerResult 的方法；API 增加 `/api/jobs/{job_id}/result`，未结算 Job 返回当前状态，已结算 Job 返回产生的派生版本和证据引用；Web 客户端已接入查询方法。
+- 测试与结果：Dev Container 内 API/Persistence Ruff、Pyright 通过；Web TypeScript 检查已启动，contracts typecheck 通过。
+- 问题：页面仍需根据 `produced_artifact_version_ids` 映射报告工件并展示下载按钮。
+- 阻碍点：无。
+- 下一步：完成报告 Job 结果的 Web 展示和下载关联。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex
