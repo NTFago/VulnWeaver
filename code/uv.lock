@@ -1519,6 +1519,7 @@ name = "vulnweaver-proof"
 version = "0.1.0"
 source = { editable = "packages/proof" }
 dependencies = [
+    { name = "httpx" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-persistence" },
@@ -1526,6 +1527,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
