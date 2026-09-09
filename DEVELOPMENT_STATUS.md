@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-09（Asia/Shanghai）
 - **当前阶段**：P2 源码静态分析代码已完成，待真实 REVIEW 模型四语言端到端验收；P3 二进制分析和 Sandbox Runner 处于工具镜像/动态验收阶段；P4 Proof/Exploit 已完成主要代码接入，待 Runner HTTP 端到端回放；P5 报告、全链路 UI 和 E2E 正在收口。
-- **当前分支**：`feat/p4-proof-exploit`，跟踪 `origin/feat/p4-proof-exploit`。本次维护开始前 HEAD 为 `3676c8f`，工作树无未提交改动。
+- **当前分支**：`docs/agents-md-review`（本地新建，基于 `main`，待推送并合并）。`feat/p4-proof-exploit` 已通过 PR #15 合并入 `main`（合并提交 `2ff9b01`）；本次维护开始时 `main` 与 `origin/main` 一致、工作树干净。
 - **当前负责人**：Codex。当前优先处理 T20/T21/T22 的真实回放与最终验收，同时保留 T16/T18/T19 的工具链验收事项。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
@@ -78,6 +78,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-09 | AGENTS.md 课设支撑性修订 | 对照课设功能要求审查开发规则：新增功能验收锚点、Dev Container 门禁约定、静态解析与运行样本边界澄清、教学漏洞样本规则、提示词资产管理和分支合并后清理规则；修正根目录文件清单与过期分支记录；已用 `git branch -d` 清理 7 个已合并入 `main` 的本地功能分支；纯文档修订，无代码行为变化 | 开发继续按 T20/T21/T22 验收事项推进；远程旧分支待用户确认后删除 |
 | 2026-09-09 | PR 前质量检查修复（`4318939`） | Pyright 定位可观测性端点 9 处类型错误，修复 `list_after` 位置传参运行时 Bug、failure 窄化和 `_count_values` 类型，并新增带失败 Job 的 API 回归测试；Dev Container 全量门禁通过（322 passed、81.22%） | 合并 PR 后继续 T20/T21/T22 真实回放 |
 | 2026-09-09 | 代码审查修复（Proof/Report，`6dfc0db`、`97115eb`） | `/code-review high --fix` 定位 7 处问题，已修复 5 处正确性缺陷并提交：Sandbox 状态 `is`→`==`、proof 输出文件名改为 `result.json`、移除报告版本过早读取、报告 job/幂等键按格式区分、调度器放行 pdf | Q-006/Q-007 两项待跟进 |
 | 2026-09-09 | T22 任务可观测性摘要 | API 提供任务 Jobs、事件、Finding 状态和结构化失败码汇总，Web 任务页加载并展示 Job 状态汇总 | 浏览器全链路和最终验收报告 |
@@ -87,7 +88,6 @@
 | 2026-09-09 | T22 Finding 证据链详情 | Web 点击 Finding 后加载证据关系和 Poc 记录并展示工具、强度、摘要和执行状态；Dev Container 内 Svelte 检查通过 | 浏览器完整任务链路和可观测性收口 |
 | 2026-09-09 | T21 PDF 报告端到端接入 | API/Worker/Web 支持 PDF，Worker 通过临时文件调用 WeasyPrint 后写入 CAS；Dev Container 内 Web typecheck/build、Ruff 和 reporting 测试通过 | 真实数据库报告 Job 与浏览器回放 |
 | 2026-09-09 | T20 无害 Proof/Exploit 容器回放（`d0bcac0`） | 固定 `vulnweaver-proof:fixed` 镜像在禁网、只读根、非 root、capabilities drop 和 no-new-privileges 下分别回放两个入口，均 exit 0 | 补齐带 CAS 工件的 HTTP Runner 回放；不执行真实利用 |
-| 2026-09-09 | T20 工具镜像与 T22 Finding 详情（`6773b59`） | Proof 镜像构建成功，入口帮助可用；Web `svelte-check` 0 错误、0 警告 | 完成浏览器链路验收 |
 
 ## 9. 验证记录
 
