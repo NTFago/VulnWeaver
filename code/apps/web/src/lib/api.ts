@@ -101,6 +101,8 @@ export const api = {
   artifacts: (projectId: string) => request<Artifact[]>(`/api/projects/${projectId}/artifacts`),
   artifact: (projectId: string, artifactId: string) =>
     request<ArtifactDetail>(`/api/projects/${projectId}/artifacts/${artifactId}`),
+  artifactContentUrl: (artifactId: string, versionId?: string) =>
+    `/api/artifacts/${encodeURIComponent(artifactId)}/content${versionId ? `?version_id=${encodeURIComponent(versionId)}` : ""}`,
   upload: (projectId: string, kind: ArtifactKind, file: File) =>
     request<ArtifactDetail>(`/api/projects/${projectId}/artifacts?kind=${kind}`, {
       method: "POST",

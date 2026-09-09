@@ -153,6 +153,17 @@
 - 阻碍点：无。
 - 下一步：补充报告 Job 产物查询与下载入口，再执行 Web 端到端回放。
 
+### 2026-09-09 21:46：补齐报告派生版本内容读取入口
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/apps/api/src/vulnweaver_api/app.py`、`code/apps/web/src/lib/api.ts`、`DEVELOPMENT_STATUS.md`
+- 已完成：工件内容接口支持可选 `version_id`，校验版本确属目标工件后读取对应 CAS 内容；Web API 客户端提供版本化内容 URL，报告派生工件可复用同一下载通道。
+- 测试与结果：Dev Container 内 API Ruff/Pyright 通过；Web TypeScript 检查已启动，contracts typecheck 通过，未见 Svelte 错误输出。
+- 问题：报告 Job 完成后仍需从 Job 结果中解析派生工件 ID，并在页面显示下载按钮。
+- 阻碍点：无。
+- 下一步：补充报告 Job 结果到派生工件的查询/下载关联。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex

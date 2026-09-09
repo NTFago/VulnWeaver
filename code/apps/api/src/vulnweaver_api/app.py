@@ -15,6 +15,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     Security,
@@ -408,11 +409,17 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/artifacts/{artifact_id}/content")
     async def artifact_content(
-        artifact_id: str, _: Annotated[str, Depends(require_account)]
+        artifact_id: str,
+        version_id: str | None = Query(default=None),
+        _: Annotated[str, Depends(require_account)] = "",
     ) -> StreamingResponse:
         async with database.transaction() as repositories:
             artifact = await repositories.artifacts.get(artifact_id)
-            version = await repositories.artifacts.get_version(artifact["current_version_id"])
+            version = await repositories.artifacts.get_version(
+                version_id or artifact["current_version_id"]
+            )
+            if version["artifact_id"] != artifact_id:
+                raise HTTPException(status_code=404, detail="artifact version not found")
 
         def chunks():
             with store.open(version["object_ref"]) as stream:
