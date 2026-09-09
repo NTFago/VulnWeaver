@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import re
@@ -13,7 +14,7 @@ from contextlib import closing
 from datetime import UTC, datetime
 from typing import BinaryIO, Protocol, cast
 
-from vulnweaver_artifact_store import ArtifactStore, StoredObject
+from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError, StoredObject
 from vulnweaver_contracts import (
     ArtifactKind,
     CrashManifest,
@@ -32,7 +33,7 @@ from vulnweaver_contracts import (
     ToolSpec,
     validate_contract,
 )
-from vulnweaver_tool_runtime import ToolRegistry
+from vulnweaver_tool_runtime import ToolRegistry, ToolRuntimeError
 
 from vulnweaver_fuzzing.profiles import (
     AFL_CASR_OUTPUT_NAMES,
@@ -55,6 +56,7 @@ _SEED_PREFIX = "seeds/"
 _SAFE_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$")
 _DEFAULT_MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 _DEFAULT_MAX_MINIMIZED_INPUT_BYTES = 16 * 1024 * 1024
+_DEFAULT_MAX_MINIMIZED_INPUT_TOTAL_BYTES = 256 * 1024 * 1024
 
 
 class FuzzSandbox(Protocol):
@@ -122,8 +124,13 @@ class FuzzExecutionService:
         now: Callable[[], datetime] | None = None,
         max_bundle_bytes: int = _DEFAULT_MAX_BUNDLE_BYTES,
         max_minimized_input_bytes: int = _DEFAULT_MAX_MINIMIZED_INPUT_BYTES,
+        max_minimized_input_total_bytes: int = _DEFAULT_MAX_MINIMIZED_INPUT_TOTAL_BYTES,
     ) -> None:
-        if max_bundle_bytes < 1 or max_minimized_input_bytes < 1:
+        if (
+            max_bundle_bytes < 1
+            or max_minimized_input_bytes < 1
+            or max_minimized_input_total_bytes < 1
+        ):
             raise ValueError("fuzz artifact limits must be positive")
         self._store = store
         self._registry = registry
@@ -133,6 +140,7 @@ class FuzzExecutionService:
         self._now = now or (lambda: datetime.now(UTC))
         self._max_bundle_bytes = max_bundle_bytes
         self._max_minimized_input_bytes = max_minimized_input_bytes
+        self._max_minimized_input_total_bytes = max_minimized_input_total_bytes
 
     async def run(
         self, request: FuzzRequest, cancellation: asyncio.Event
@@ -157,11 +165,7 @@ class FuzzExecutionService:
                 status=FuzzStatus.FAILED,
                 coverage_percent=None,
                 created_at=_timestamp(self._now()),
-                failure=_failure(
-                    "fuzz.execution_failed",
-                    FailureKind.ENVIRONMENT,
-                    f"fuzz execution failed before result normalization: {type(error).__name__}",
-                ),
+                failure=_failure_for_exception(error, phase="execution"),
             )
 
         if sandbox_result["status"] is not SandboxStatus.SUCCEEDED:
@@ -201,10 +205,16 @@ class FuzzExecutionService:
                 sandbox_result,
                 manifest,
                 max_bytes=self._max_minimized_input_bytes,
+                max_total_bytes=min(
+                    self._max_minimized_input_total_bytes,
+                    request["sandbox_request"]["resource_budget"]["disk_bytes"],
+                ),
+                max_archive_bytes=request["sandbox_request"]["resource_budget"]["disk_bytes"],
+                max_entries=limits.max_crashes,
             )
+            selected_crashes = manifest["crashes"][: limits.max_crashes]
             entries: list[Mapping[str, object]] = [
-                _triage_entry(entry, input_refs[entry["input_path"]])
-                for entry in manifest["crashes"]
+                _triage_entry(entry, input_refs[entry["input_path"]]) for entry in selected_crashes
             ]
             triage.ingest_many(
                 entries,
@@ -232,17 +242,13 @@ class FuzzExecutionService:
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             return triage.build_result(
                 request["job_id"],
                 status=FuzzStatus.FAILED,
                 coverage_percent=None,
                 created_at=_timestamp(self._now()),
-                failure=_failure(
-                    "fuzz.result_invalid",
-                    FailureKind.TOOL,
-                    "fuzz tool output failed contract, archive, or CAS integrity checks",
-                ),
+                failure=_failure_for_exception(error, phase="normalization"),
             )
 
     def _validate_tool_identity(self) -> ToolSpec:
@@ -361,50 +367,90 @@ def _publish_minimized_inputs(
     manifest: CrashManifest,
     *,
     max_bytes: int,
+    max_total_bytes: int,
+    max_archive_bytes: int,
+    max_entries: int,
 ) -> dict[str, str]:
     matches = [item for item in result["outputs"] if item["path"] == "minimized-inputs.tar"]
     if len(matches) != 1:
         raise CrashTriageError("minimized input archive is missing or duplicated")
     expected = {entry["input_path"] for entry in manifest["crashes"]}
-    expected_digests = {
-        entry["input_path"]: entry["input_digest"] for entry in manifest["crashes"]
-    }
+    expected_digests = {entry["input_path"]: entry["input_digest"] for entry in manifest["crashes"]}
+    selected = {entry["input_path"] for entry in manifest["crashes"][:max_entries]}
     if len(expected) != len(manifest["crashes"]):
         raise CrashTriageError("crash manifest contains duplicate input paths")
     stored = store.verify(matches[0]["object_ref"])
     if stored.digest != matches[0]["digest"] or stored.size_bytes != matches[0]["size_bytes"]:
         raise CrashTriageError("minimized input archive has inconsistent CAS metadata")
-    if stored.size_bytes > max_bytes * max(1, len(expected)):
+    if stored.size_bytes > max_archive_bytes:
         raise CrashTriageError("minimized input archive exceeds its parser budget")
-    refs: dict[str, str] = {}
+    seen: set[str] = set()
+    selected_bytes = 0
     try:
-        with store.open(matches[0]["object_ref"]) as source, closing(
-            tarfile.open(fileobj=source, mode="r:*")
-        ) as archive:
+        with (
+            store.open(matches[0]["object_ref"]) as source,
+            closing(tarfile.open(fileobj=source, mode="r:")) as archive,
+        ):
             for member in archive:
                 if not member.isreg() or not _safe_member(member.name):
                     raise CrashTriageError("minimized input archive contains an unsafe member")
-                if member.name not in expected or member.name in refs:
+                if member.name not in expected or member.name in seen:
+                    raise CrashTriageError("minimized input archive contains an unexpected member")
+                seen.add(member.name)
+                if member.size > max_bytes:
+                    raise CrashTriageError("minimized input exceeds its per-input budget")
+                if member.name not in selected:
+                    continue
+                selected_bytes += member.size
+                if selected_bytes > max_total_bytes:
+                    raise CrashTriageError("minimized inputs exceed their cumulative budget")
+                extracted = archive.extractfile(member)
+                if (
+                    extracted is None
+                    or _stream_digest(cast(BinaryIO, extracted)) != expected_digests[member.name]
+                ):
                     raise CrashTriageError(
-                        "minimized input archive contains an unexpected member"
+                        "minimized input digest does not match the crash manifest"
                     )
+    except CrashTriageError:
+        raise
+    except (OSError, tarfile.TarError, ValueError) as error:
+        raise CrashTriageError("minimized input archive could not be parsed") from error
+    if seen != expected:
+        raise CrashTriageError("minimized input archive does not cover the crash manifest")
+
+    refs: dict[str, str] = {}
+    try:
+        with (
+            store.open(matches[0]["object_ref"]) as source,
+            closing(tarfile.open(fileobj=source, mode="r:")) as archive,
+        ):
+            for member in archive:
+                if member.name not in selected:
+                    continue
                 extracted = archive.extractfile(member)
                 if extracted is None:
                     raise CrashTriageError("minimized input archive member cannot be read")
                 published = store.put_stream(cast(BinaryIO, extracted), max_bytes=max_bytes)
                 if published.digest != expected_digests[member.name]:
                     raise CrashTriageError(
-                        "minimized input digest does not match the crash manifest"
+                        "published minimized input digest changed after validation"
                     )
-                object_ref = published.object_ref
-                refs[member.name] = object_ref
+                refs[member.name] = published.object_ref
     except CrashTriageError:
         raise
     except (OSError, tarfile.TarError, ValueError) as error:
-        raise CrashTriageError("minimized input archive could not be parsed") from error
-    if set(refs) != expected:
-        raise CrashTriageError("minimized input archive does not cover the crash manifest")
+        raise CrashTriageError("minimized input archive could not be published") from error
+    if set(refs) != selected:
+        raise CrashTriageError("minimized input archive does not cover the selected crashes")
     return refs
+
+
+def _stream_digest(source: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    while chunk := source.read(64 * 1024):
+        digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
 
 
 def _triage_entry(entry: CrashManifestEntry, input_ref: str) -> dict[str, object]:
@@ -425,10 +471,66 @@ def _fuzz_status(status: SandboxStatus) -> FuzzStatus:
     return FuzzStatus.FAILED
 
 
-def _failure(code: str, kind: FailureKind, message: str) -> StructuredFailure:
+def _failure_for_exception(error: Exception, *, phase: str) -> StructuredFailure:
+    if isinstance(error, ArtifactStoreError):
+        return _failure(
+            f"fuzz.{error.code}",
+            FailureKind.DEPENDENCY,
+            "fuzz artifact storage failed",
+            retryable=error.retryable,
+            details={"exception_type": type(error).__name__, **error.details},
+        )
+    if isinstance(error, ToolRuntimeError):
+        return _failure(
+            f"fuzz.{error.code}",
+            FailureKind.POLICY,
+            "fuzz tool registration or policy validation failed",
+            details={"exception_type": type(error).__name__, **error.details},
+        )
+    if isinstance(error, CrashTriageError):
+        return _failure(
+            "fuzz.result_invalid" if phase == "normalization" else "fuzz.request_invalid",
+            FailureKind.TOOL if phase == "normalization" else FailureKind.VALIDATION,
+            (
+                "fuzz tool output failed contract, archive, or CAS integrity checks"
+                if phase == "normalization"
+                else "fuzz request, bundle, or tool identity is invalid"
+            ),
+            details={"exception_type": type(error).__name__},
+        )
+    if isinstance(error, (OSError, TimeoutError, RuntimeError)):
+        return _failure(
+            "fuzz.execution_failed",
+            FailureKind.ENVIRONMENT,
+            f"fuzz {phase} failed because its runtime environment was unavailable",
+            retryable=True,
+            details={"exception_type": type(error).__name__},
+        )
+    return _failure(
+        "fuzz.internal_error",
+        FailureKind.INTERNAL,
+        f"fuzz {phase} failed unexpectedly",
+        details={"exception_type": type(error).__name__},
+    )
+
+
+def _failure(
+    code: str,
+    kind: FailureKind,
+    message: str,
+    *,
+    retryable: bool = False,
+    details: Mapping[str, object] | None = None,
+) -> StructuredFailure:
     return cast(
         StructuredFailure,
-        {"code": code, "kind": kind, "message": message, "retryable": False, "details": {}},
+        {
+            "code": code,
+            "kind": kind,
+            "message": message,
+            "retryable": retryable,
+            "details": dict(details or {}),
+        },
     )
 
 

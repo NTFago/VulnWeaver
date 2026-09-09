@@ -4,7 +4,7 @@
 import asyncio
 import hashlib
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -725,24 +725,43 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             return
         await websocket.accept()
         cursor = after
+        disconnected = asyncio.create_task(_wait_for_websocket_disconnect(websocket))
         try:
-            while True:
+            while not disconnected.done():
                 async with database.transaction() as repositories:
                     await repositories.tasks.get(task_id)
                     events = await repositories.task_events.list_after(
                         task_id, after_sequence=cursor
                     )
                 for event in events:
+                    if disconnected.done():
+                        return
                     await websocket.send_json(event)
                     cursor = max(cursor, event["sequence"])
-                await asyncio.sleep(0.5)
+                done, _ = await asyncio.wait({disconnected}, timeout=0.5)
+                if done:
+                    await disconnected
+                    return
         except WebSocketDisconnect:
             return
         except Exception:
+            if disconnected.done():
+                return
             LOGGER.exception("task event WebSocket failed", extra={"task_id": task_id})
-            await websocket.close(code=1011)
+            with suppress(RuntimeError):
+                await websocket.close(code=1011)
+        finally:
+            disconnected.cancel()
+            await asyncio.gather(disconnected, return_exceptions=True)
 
     return app
+
+
+async def _wait_for_websocket_disconnect(websocket: WebSocket) -> None:
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
 
 
 async def _artifact_detail(repositories: Any, project_id: str, artifact_id: str) -> ArtifactDetail:

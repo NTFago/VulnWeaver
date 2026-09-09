@@ -26,6 +26,10 @@ from vulnweaver_sandbox_runner import (
     SandboxCommandProfile,
     SandboxRunner,
 )
+from vulnweaver_sandbox_runner.runtime import (
+    _cpu_millis_for_interval,
+    _parse_cpu_percent,
+)
 from vulnweaver_tool_runtime import ToolRegistry
 
 IMAGE_DIGEST = "sha256:" + "a" * 64
@@ -356,6 +360,25 @@ def test_docker_runtime_builds_fixed_isolated_flags_and_rejects_host_mounts(
     assert "--privileged" not in arguments
     assert "--user" in arguments and "10001:10001" in arguments
     assert any("readonly" in item for item in arguments if item.startswith("type=bind"))
+    assert str(value.output_dir) not in arguments
+    assert any(
+        item == "type=volume,src=vw-sbx-test-output,dst=/output,volume-nocopy" for item in arguments
+    )
+    volume_arguments = runtime.build_output_volume_arguments(value)
+    assert volume_arguments[-1] == "vw-sbx-test-output"
+    assert "type=tmpfs" in volume_arguments
+    assert "device=tmpfs" in volume_arguments
+    assert any(item == "o=size=1048576,uid=10001,gid=10001,mode=0700" for item in volume_arguments)
+    keeper_arguments = runtime.build_output_keeper_arguments(value)
+    assert "--detach" in keeper_arguments
+    assert "--read-only" in keeper_arguments
+    assert keeper_arguments[keeper_arguments.index("--network") + 1] == "none"
+    assert keeper_arguments[keeper_arguments.index("--entrypoint") + 1] == "/bin/sleep"
+    assert keeper_arguments[-1] == "2147483647"
+    assert any(
+        item == "type=volume,src=vw-sbx-test-output,dst=/output,readonly,volume-nocopy"
+        for item in keeper_arguments
+    )
 
     outside = replace(value, input_dir=tmp_path.parent / "outside")
     with pytest.raises(ValueError):
@@ -365,3 +388,9 @@ def test_docker_runtime_builds_fixed_isolated_flags_and_rejects_host_mounts(
         runtime.validate_request(replace(value, argv=("entrypoint", "line\nbreak")))
     with pytest.raises(ValueError, match="timeout"):
         DockerCliRuntime(root=tmp_path, command_timeout_seconds=0)
+
+
+def test_docker_cpu_percent_is_integrated_as_cpu_milliseconds() -> None:
+    assert _parse_cpu_percent("250.5%") == 250.5
+    assert _parse_cpu_percent("invalid") == 0
+    assert _cpu_millis_for_interval(250, 400) == 1000

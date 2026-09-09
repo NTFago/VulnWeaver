@@ -198,7 +198,11 @@
       "required": ["duration_millis", "cpu_millis", "memory_bytes", "output_bytes"],
       "properties": {
         "duration_millis": {"type": "integer", "minimum": 0},
-        "cpu_millis": {"type": "integer", "minimum": 0},
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Accumulated CPU time consumed by the sandbox, in milliseconds."
+        },
         "memory_bytes": {"type": "integer", "minimum": 0},
         "output_bytes": {"type": "integer", "minimum": 0}
       }
@@ -284,7 +288,11 @@
       "required": ["max_model_tokens", "cpu_millis", "memory_bytes", "disk_bytes", "max_tool_concurrency", "max_dynamic_runs", "timeout_seconds"],
       "properties": {
         "max_model_tokens": {"type": "integer", "minimum": 0},
-        "cpu_millis": {"type": "integer", "minimum": 1},
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "CPU capacity in millicores; 1000 permits one logical CPU."
+        },
         "memory_bytes": {"type": "integer", "minimum": 1048576},
         "disk_bytes": {"type": "integer", "minimum": 1048576},
         "max_tool_concurrency": {"type": "integer", "minimum": 1},

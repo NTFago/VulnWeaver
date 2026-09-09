@@ -40,6 +40,13 @@ class RuntimeExecution:
     memory_bytes: int
 
 
+@dataclass(slots=True)
+class _RuntimeUsage:
+    last_sample_at: float
+    cpu_millis: float = 0.0
+    peak_memory_bytes: int = 0
+
+
 class SandboxRuntime(Protocol):
     async def run(
         self, request: RuntimeRequest, cancellation: asyncio.Event
@@ -70,6 +77,8 @@ class DockerCliRuntime:
     async def run(self, request: RuntimeRequest, cancellation: asyncio.Event) -> RuntimeExecution:
         self._validate_request(request)
         started = time.monotonic()
+        await self._create_output_volume(request)
+        await self._start_output_keeper(request)
         arguments = self._run_arguments(request)
         process = await asyncio.create_subprocess_exec(
             *arguments,
@@ -82,6 +91,11 @@ class DockerCliRuntime:
         communicate = asyncio.create_task(_communicate(process, request.max_output_bytes, overflow))
         cancelled = asyncio.create_task(cancellation.wait())
         overflowed = asyncio.create_task(overflow.wait())
+        usage = _RuntimeUsage(last_sample_at=time.monotonic())
+        usage_stopped = asyncio.Event()
+        usage_task = asyncio.create_task(
+            self._monitor_usage(request.container_name, usage, usage_stopped)
+        )
         status = "failed"
         try:
             done, _ = await asyncio.wait(
@@ -113,17 +127,19 @@ class DockerCliRuntime:
                     stdout, stderr, exit_code = b"", b"", None
                 else:
                     status = "succeeded" if exit_code == 0 else "failed"
-            cpu_millis, memory_bytes = await self._usage(request.container_name)
+            await _finish_usage_monitor(usage_task, usage_stopped)
+            await self._copy_outputs(request.container_name, request.output_dir)
             return RuntimeExecution(
                 status=status,
                 exit_code=exit_code,
                 stdout=stdout,
                 stderr=stderr,
                 duration_millis=max(0, int((time.monotonic() - started) * 1000)),
-                cpu_millis=cpu_millis,
-                memory_bytes=memory_bytes,
+                cpu_millis=max(0, round(usage.cpu_millis)),
+                memory_bytes=usage.peak_memory_bytes,
             )
         finally:
+            await _finish_usage_monitor(usage_task, usage_stopped)
             cancelled.cancel()
             overflowed.cancel()
             if not communicate.done():
@@ -133,49 +149,52 @@ class DockerCliRuntime:
     async def cleanup(self, container_name: str) -> bool:
         if not _safe_container_name(container_name):
             return False
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            "rm",
-            "--force",
-            container_name,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_runtime_environment(),
-        )
-        await _communicate_with_timeout(process, self._command_timeout_seconds)
-        return process.returncode == 0
+        try:
+            container_removed = await self._remove_resource("container", container_name)
+        except (OSError, TimeoutError, RuntimeError):
+            container_removed = False
+        try:
+            keeper_removed = await self._remove_resource(
+                "container", _output_keeper_name(container_name)
+            )
+        except (OSError, TimeoutError, RuntimeError):
+            keeper_removed = False
+        try:
+            volume_removed = await self._remove_resource(
+                "volume", _output_volume_name(container_name)
+            )
+        except (OSError, TimeoutError, RuntimeError):
+            volume_removed = False
+        return container_removed and keeper_removed and volume_removed
 
     async def list_owned(self, label: str) -> tuple[str, ...]:
         if not _safe_label(label):
             return ()
-        process = await asyncio.create_subprocess_exec(
-            self._docker,
-            "ps",
-            "--all",
-            "--filter",
-            f"label={label}",
-            "--format",
-            "{{.Names}}",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=_runtime_environment(),
+        containers, volumes = await asyncio.gather(
+            self._list_resources("container", label),
+            self._list_resources("volume", label),
         )
-        stdout, _ = await _communicate_with_timeout(process, self._command_timeout_seconds)
-        if process.returncode != 0:
-            return ()
-        return tuple(
-            sorted(
-                name
-                for name in stdout.decode("utf-8", "replace").splitlines()
-                if _safe_container_name(name)
-            )
-        )
+        names = set(containers)
+        for container in containers:
+            if container.endswith("-keeper"):
+                names.discard(container)
+                names.add(container[: -len("-keeper")])
+        for volume in volumes:
+            if volume.endswith("-output"):
+                names.add(volume[: -len("-output")])
+        return tuple(sorted(name for name in names if _safe_container_name(name)))
 
     def build_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
         self.validate_request(request)
         return self._run_arguments(request)
+
+    def build_output_volume_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
+        self.validate_request(request)
+        return self._output_volume_arguments(request)
+
+    def build_output_keeper_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
+        self.validate_request(request)
+        return self._output_keeper_arguments(request)
 
     def validate_request(self, request: RuntimeRequest) -> None:
         self._validate_request(request)
@@ -208,7 +227,8 @@ class DockerCliRuntime:
             "--mount",
             f"type=bind,src={request.input_dir},dst=/input,readonly",
             "--mount",
-            f"type=bind,src={request.output_dir},dst=/output",
+            f"type=volume,src={_output_volume_name(request.container_name)},"
+            "dst=/output,volume-nocopy",
             "--user",
             "10001:10001",
             image,
@@ -218,6 +238,8 @@ class DockerCliRuntime:
     def _validate_request(self, request: RuntimeRequest) -> None:
         if not _safe_container_name(request.container_name):
             raise ValueError("invalid sandbox container name")
+        if not _safe_container_name(_output_keeper_name(request.container_name)):
+            raise ValueError("sandbox container name leaves no room for runtime helpers")
         if not _safe_label(request.label):
             raise ValueError("invalid sandbox label")
         if not _safe_image_ref(request.image_ref):
@@ -256,7 +278,130 @@ class DockerCliRuntime:
         )
         await _communicate_with_timeout(process, self._command_timeout_seconds)
 
-    async def _usage(self, container_name: str) -> tuple[int, int]:
+    async def _create_output_volume(self, request: RuntimeRequest) -> None:
+        process = await asyncio.create_subprocess_exec(
+            *self._output_volume_arguments(request),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        _, stderr = await _communicate_with_timeout(process, self._command_timeout_seconds)
+        if process.returncode != 0:
+            raise RuntimeError(
+                "Docker could not create the quota-enforced sandbox output volume: "
+                + stderr.decode("utf-8", "replace")[:512]
+            )
+
+    def _output_volume_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
+        return (
+            self._docker,
+            "volume",
+            "create",
+            "--driver",
+            "local",
+            "--label",
+            request.label,
+            "--opt",
+            "type=tmpfs",
+            "--opt",
+            "device=tmpfs",
+            "--opt",
+            (f"o=size={request.resource_budget['disk_bytes']},uid=10001,gid=10001,mode=0700"),
+            _output_volume_name(request.container_name),
+        )
+
+    async def _start_output_keeper(self, request: RuntimeRequest) -> None:
+        process = await asyncio.create_subprocess_exec(
+            *self._output_keeper_arguments(request),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        _, stderr = await _communicate_with_timeout(process, self._command_timeout_seconds)
+        if process.returncode != 0:
+            raise RuntimeError(
+                "Docker could not start the sandbox output keeper: "
+                + stderr.decode("utf-8", "replace")[:512]
+            )
+
+    def _output_keeper_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
+        image = f"{request.image_ref}@{request.image_digest}"
+        return (
+            self._docker,
+            "run",
+            "--detach",
+            "--name",
+            _output_keeper_name(request.container_name),
+            "--label",
+            request.label,
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges=true",
+            "--pids-limit",
+            "8",
+            "--memory",
+            str(16 * 1024 * 1024),
+            "--cpus",
+            "0.01",
+            "--mount",
+            (
+                f"type=volume,src={_output_volume_name(request.container_name)},"
+                "dst=/output,readonly,volume-nocopy"
+            ),
+            "--user",
+            "10001:10001",
+            "--entrypoint",
+            "/bin/sleep",
+            image,
+            "2147483647",
+        )
+
+    async def _copy_outputs(self, container_name: str, output_dir: Path) -> None:
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            "cp",
+            f"{_output_keeper_name(container_name)}:/output/.",
+            str(output_dir),
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        _, stderr = await _communicate_with_timeout(process, self._command_timeout_seconds)
+        if process.returncode != 0:
+            raise RuntimeError(
+                "Docker could not collect sandbox outputs: "
+                + stderr.decode("utf-8", "replace")[:512]
+            )
+
+    async def _monitor_usage(
+        self,
+        container_name: str,
+        usage: _RuntimeUsage,
+        stopped: asyncio.Event,
+    ) -> None:
+        while not stopped.is_set():
+            try:
+                cpu_percent, memory_bytes = await self._usage(container_name)
+            except (OSError, TimeoutError, RuntimeError):
+                cpu_percent, memory_bytes = 0.0, 0
+            sampled_at = time.monotonic()
+            elapsed_millis = max(0.0, (sampled_at - usage.last_sample_at) * 1000)
+            usage.cpu_millis += _cpu_millis_for_interval(cpu_percent, elapsed_millis)
+            usage.peak_memory_bytes = max(usage.peak_memory_bytes, memory_bytes)
+            usage.last_sample_at = sampled_at
+            try:
+                await asyncio.wait_for(stopped.wait(), timeout=0.25)
+            except TimeoutError:
+                continue
+
+    async def _usage(self, container_name: str) -> tuple[float, int]:
         if not _safe_container_name(container_name):
             return 0, 0
         process = await asyncio.create_subprocess_exec(
@@ -276,15 +421,64 @@ class DockerCliRuntime:
             return 0, 0
         try:
             payload = json.loads(stdout.decode("utf-8", "replace").splitlines()[0])
-            cpu = _parse_cpu(payload.get("CPUPerc"))
+            cpu = _parse_cpu_percent(payload.get("CPUPerc"))
             memory = _parse_memory(payload.get("MemUsage"))
             return cpu, memory
         except (IndexError, TypeError, ValueError, json.JSONDecodeError):
-            return 0, 0
+            return 0.0, 0
+
+    async def _list_resources(self, kind: str, label: str) -> tuple[str, ...]:
+        arguments = (
+            ("ps", "--all", "--filter", f"label={label}", "--format", "{{.Names}}")
+            if kind == "container"
+            else ("volume", "ls", "--filter", f"label={label}", "--format", "{{.Name}}")
+        )
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        stdout, _ = await _communicate_with_timeout(process, self._command_timeout_seconds)
+        if process.returncode != 0:
+            return ()
+        return tuple(stdout.decode("utf-8", "replace").splitlines())
+
+    async def _remove_resource(self, kind: str, name: str) -> bool:
+        arguments = (
+            ("rm", "--force", name) if kind == "container" else ("volume", "rm", "--force", name)
+        )
+        process = await asyncio.create_subprocess_exec(
+            self._docker,
+            *arguments,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        _, stderr = await _communicate_with_timeout(process, self._command_timeout_seconds)
+        if process.returncode == 0:
+            return True
+        message = stderr.decode("utf-8", "replace").lower()
+        return f"no such {kind}" in message
 
 
 def _runtime_environment() -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
+
+
+async def _finish_usage_monitor(task: asyncio.Task[None], stopped: asyncio.Event) -> None:
+    stopped.set()
+    if task.done():
+        await asyncio.gather(task, return_exceptions=True)
+        return
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+    except TimeoutError:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _communicate_with_timeout(
@@ -304,6 +498,14 @@ def _safe_container_name(value: str) -> bool:
     return (
         bool(value) and len(value) <= 128 and all(char.isalnum() or char in "_-" for char in value)
     )
+
+
+def _output_volume_name(container_name: str) -> str:
+    return f"{container_name}-output"
+
+
+def _output_keeper_name(container_name: str) -> str:
+    return f"{container_name}-keeper"
 
 
 def _safe_label(value: str) -> bool:
@@ -387,13 +589,17 @@ async def _finish_communication(task: asyncio.Task[tuple[bytes, bytes, int]]) ->
         await task
 
 
-def _parse_cpu(value: object) -> int:
+def _parse_cpu_percent(value: object) -> float:
     if not isinstance(value, str):
-        return 0
+        return 0.0
     try:
-        return max(0, int(float(value.rstrip("%"))))
+        return max(0.0, float(value.rstrip("%")))
     except ValueError:
-        return 0
+        return 0.0
+
+
+def _cpu_millis_for_interval(cpu_percent: float, elapsed_millis: float) -> float:
+    return max(0.0, cpu_percent) * max(0.0, elapsed_millis) / 100
 
 
 def _parse_memory(value: object) -> int:

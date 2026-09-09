@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from vulnweaver_api import ApiSettings, create_app
+from vulnweaver_api.app import _wait_for_websocket_disconnect
 from vulnweaver_api.auth import SESSION_COOKIE, token_digest
 from vulnweaver_contracts import (
     Evidence,
@@ -107,6 +108,28 @@ def _budget() -> dict[str, int]:
         "max_dynamic_runs": 0,
         "timeout_seconds": 60,
     }
+
+
+def test_websocket_disconnect_listener_consumes_until_disconnect() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages = iter(
+                (
+                    {"type": "websocket.receive", "text": "ignored"},
+                    {"type": "websocket.disconnect", "code": 1000},
+                )
+            )
+            self.receive_count = 0
+
+        async def receive(self) -> dict[str, object]:
+            self.receive_count += 1
+            return next(self.messages)
+
+    websocket = FakeWebSocket()
+
+    asyncio.run(_wait_for_websocket_disconnect(websocket))  # type: ignore[arg-type]
+
+    assert websocket.receive_count == 2
 
 
 def _create_project(

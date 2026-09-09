@@ -1267,11 +1267,19 @@ name = "vulnweaver-fuzzing"
 version = "0.1.0"
 source = { editable = "packages/fuzzing" }
 dependencies = [
+    { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-sandbox-runner" },
+    { name = "vulnweaver-tool-runtime" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
+requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
+]
 
 [[package]]
 name = "vulnweaver-model-gateway"

@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001 全量代码审计与修复已完成
-- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2/T17 已完成二进制分析与 PAIR 接入；T18 安全基线经本轮审计补齐 POSIX 容器路径、组合输出预算、管理命令超时和取消清理，但真实动态负向验收仍待完成。T19 已交付受限请求/结果契约、预算门禁、崩溃清单规范化、稳定 ID 与栈哈希聚类基础；本轮补齐固定 AFL++/CASR profile、确定性 CAS 输入 bundle、Sandbox 调用编排和最小输入完整性校验，真实工具镜像验收仍待完成。
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001/R-002 代码审计与修复已完成
+- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2/T17 已完成二进制分析与 PAIR 接入。T18 已补齐 POSIX 路径、组合输出预算、管理命令超时、取消清理、Docker tmpfs 输出硬配额和执行期资源采样，并用本机固定摘要 Alpine 验证配额溢出、输出回收和无孤儿清理；其余网络/内存/进程压力仍待验收。T19 已交付固定 AFL++/CASR profile、确定性 CAS 输入 bundle 和 Sandbox 编排；最小输入改为无压缩归档、累计预算、先校验后发布且只发布请求预算内记录，真实工具镜像验收仍待完成。API WebSocket 已能在空闲期感知断连并停止轮询。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 `feat/t19-fuzz-triage`，本轮 T19 基础检查点为 `bc084e4`、审计修复为 `32c1265`，均仅在本地，未推送或合并。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 `feat/t19-fuzz-triage`，T19-R2 检查点为 `d844548`，R-002 为当前分支最新本地提交，均未推送或合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；T16/T18 待验证，已认领 T19-R2 AFL++/CASR Sandbox 集成；R-001 已完成
+- **当前负责人**：Codex；R-002 已完成，T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
 
 ## 3. 开发进度
 
@@ -47,6 +47,7 @@
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
+| R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
@@ -110,6 +111,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 19:00：完成 R-002 审查缺陷修复
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/sandbox-runner/`、`code/packages/fuzzing/`、`code/apps/api/src/vulnweaver_api/app.py`、对应测试、`code/uv.lock`。
+- 已完成：Docker 输出从无配额宿主绑定改为受 `disk_bytes` 强制限制的 tmpfs 命名卷，并由同一固定摘要镜像的只读 `/bin/sleep` 容器保活至安全复制；CPU 百分比在执行期采样并积分为 CPU 毫秒，内存记录峰值；fuzz 最小输入只接受无压缩 tar，在任何 CAS 发布前校验成员、摘要、单项/累计/归档预算，只发布 `max_crashes` 内输入；ArtifactStore 瞬时错误保留 `dependency/retryable`；空闲 WebSocket 主动接收断连；fuzzing 声明实际直接依赖。
+- 测试与结果：定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；全仓库 Ruff、受影响包 Pyright、TypeScript/Svelte、契约生成及 `uv lock --check` 通过。本机固定摘要 `alpine:3.20` 实测 2 MiB 写入被 1 MiB 配额以 ENOSPC 截断，1 MiB 文件成功回收，容器与卷全部清理。
+- 问题：Windows editable `.pth` 的 Q-003 仍存在，测试继续使用临时 no-editable 环境；Starlette 测试客户端仍有一条上游弃用警告。
+- 阻碍点：无。
+- 决策：无新增 ADR；动态执行仍只经过 Sandbox Runner，保活容器沿用请求中已由 Tool Registry 固定摘要的工具镜像且不接受调用方命令。
+- 下一步：在 T19 真实 AFL++/CASR 镜像验收中确认 `/bin/sleep` 可用，并完成预算终止、覆盖率和 crash cluster E2E。
 
 ### 2026-09-09 18:01：完成 T19-R2 AFL++/CASR Sandbox 编排检查点
 
@@ -319,6 +332,7 @@
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | R-002 审查缺陷修复 | 临时 no-editable 环境执行定向及全量 pytest；全仓库 Ruff；受影响 Sandbox/fuzzing/API Pyright；`pnpm run check:typescript`；契约生成与锁文件检查；固定摘要 Alpine 真实 Docker 配额溢出/复制/清理探测 | 定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；静态、前端、契约、锁文件检查通过；2 MiB 写入被 1 MiB 硬配额截断，输出回收且无容器/卷孤儿 | 未运行真实 AFL++/CASR 镜像完整流程；网络/内存/进程压力仍归 T18 验收；远端 CI 未运行 |
 | 2026-09-09 | T19-R2 AFL++/CASR Sandbox 编排 | 临时 no-editable uv 环境执行全量 `pytest --cov --cov-fail-under=80`；全仓库 Ruff；fuzzing 包 Pyright strict；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --check` | 297 passed、总分支覆盖率 82.46%；Ruff、fuzzing Pyright、TypeScript/Svelte、契约生成和锁文件检查通过 | 独立全仓库 Pyright 受本机缺少 langgraph/tree-sitter 类型依赖影响；未执行真实 AFL++/CASR、Sandbox 网络/内存/进程压力和最终工具镜像 E2E |
 | 2026-09-09 | T18 Sandbox Runner 结构化请求与 Docker 隔离检查点 | Sandbox Runner/契约定向测试；全量 `pnpm run check`；`uv lock --check`；Compose 配置；本机已有 Alpine 固定命令与 `docker inspect` | 278 passed、82.56% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；定向 19 passed；cat 成功、只读根阻断、输出洪泛终止、超时和容器回收通过；隔离参数实测确认 | 尚未执行独立网络流量、内存压力和进程数压力样本；analysis-worker 镜像构建受 Q-006 影响 |
 | 2026-09-09 | T17 二进制 PAIR 导入与地址查询全量验收 | `pnpm run check`（Compose 服务地址）；定向 PAIR/二进制/API/契约测试；`uv lock --check`；契约生成；Compose 配置 | 271 passed、83.86% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；T17 定向 45 passed；真实 PostgreSQL 导入/重放/地址查询通过 | 最终 analysis-worker 镜像与 Compose 二进制 E2E 受 Q-006 影响，属于 T16 镜像验收 |
@@ -365,8 +379,8 @@
 
 ## 10. 下一步
 
-1. 接入 T19 固定 AFL++/CASR ToolSpec/profile 和 Sandbox Runner 调用，保存最小化输入、覆盖率、栈信息及 crash Evidence，并用无害公开样本验证预算终止和聚类。
-2. 补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证，并将 RuntimeExecution 的资源采样语义固定；Docker 基础镜像可解析后回到 T16/T18 做最终镜像 E2E。
+1. 构建并固定 T19 AFL++/CASR 镜像摘要，确认镜像提供 `/bin/sleep`，在 Sandbox Runner 中用无害公开样本验证预算终止、最小输入、覆盖率和 crash cluster。
+2. 补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证；Docker 基础镜像可稳定解析后回到 T16/T18 做最终工具镜像 E2E。
 3. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，补跑 C/C++/Python/Java P2 端到端验收；随后继续 T20 Proof/Exploit。
 
 ## 11. 每次工作结束时的更新模板

@@ -10,7 +10,12 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 import pytest
-from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_artifact_store import (
+    ArtifactNotFound,
+    ArtifactStoreIOError,
+    LocalContentAddressedStore,
+    StoredObject,
+)
 from vulnweaver_contracts import (
     ArtifactKind,
     FuzzRequest,
@@ -163,6 +168,48 @@ def _sandbox_result(store: LocalContentAddressedStore, minimized: bytes) -> Sand
     )
 
 
+def _sandbox_result_for_crashes(
+    store: LocalContentAddressedStore,
+    values: list[bytes],
+    *,
+    archive_mode: str = "w",
+) -> SandboxResult:
+    result = _sandbox_result(store, values[0])
+    manifest = json.dumps(
+        {
+            "schema_version": "1.0.0",
+            "crashes": [
+                {
+                    "input_path": f"crash-{index:04d}",
+                    "input_digest": "sha256:" + hashlib.sha256(value).hexdigest(),
+                    "signal": "SIGSEGV",
+                    "exit_code": -11,
+                    "stack_frames": [f"#0 0x401{index:03x} in parse"],
+                }
+                for index, value in enumerate(values, start=1)
+            ],
+        }
+    ).encode()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode=archive_mode) as tar:
+        for index, value in enumerate(values, start=1):
+            info = tarfile.TarInfo(f"crash-{index:04d}")
+            info.size = len(value)
+            info.mtime = 0
+            tar.addfile(info, io.BytesIO(value))
+    outputs = [
+        item
+        if item["path"] not in {"crash-manifest.json", "minimized-inputs.tar"}
+        else _output(
+            store,
+            item["path"],
+            manifest if item["path"] == "crash-manifest.json" else archive.getvalue(),
+        )
+        for item in result["outputs"]
+    ]
+    return cast(SandboxResult, {**result, "outputs": outputs})
+
+
 def test_input_bundle_is_deterministic_and_binds_target_and_seeds(tmp_path: Path) -> None:
     store = LocalContentAddressedStore(tmp_path / "cas")
     target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
@@ -262,41 +309,7 @@ def test_executor_marks_crash_budget_overflow_as_partial(tmp_path: Path) -> None
     target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
     seed = store.put_stream(io.BytesIO(b"seed"), max_bytes=1024)
     minimized_values = [f"crashing input {i}".encode() for i in range(1, 6)]
-    valid = _sandbox_result(store, minimized_values[0])
-    manifest = json.dumps(
-        {
-            "schema_version": "1.0.0",
-            "crashes": [
-                {
-                    "input_path": f"crash-000{i}",
-                    "input_digest": "sha256:" + hashlib.sha256(minimized_values[i - 1]).hexdigest(),
-                    "signal": "SIGSEGV",
-                    "exit_code": -11,
-                    "stack_frames": [f"#0 0x40100{i} in parse"],
-                }
-                for i in range(1, 6)
-            ],
-        }
-    ).encode()
-    archive = io.BytesIO()
-    with tarfile.open(fileobj=archive, mode="w") as tar:
-        for i in range(1, 6):
-            info = tarfile.TarInfo(f"crash-000{i}")
-            value = minimized_values[i - 1]
-            info.size = len(value)
-            info.mtime = 0
-            tar.addfile(info, io.BytesIO(value))
-    outputs = [
-        item
-        if item["path"] not in {"crash-manifest.json", "minimized-inputs.tar"}
-        else _output(
-            store,
-            item["path"],
-            manifest if item["path"] == "crash-manifest.json" else archive.getvalue(),
-        )
-        for item in valid["outputs"]
-    ]
-    sandbox = _FakeSandbox(cast(SandboxResult, {**valid, "outputs": outputs}))
+    sandbox = _FakeSandbox(_sandbox_result_for_crashes(store, minimized_values))
     service = FuzzExecutionService(
         store,
         ToolRegistry([spec()]),
@@ -315,6 +328,87 @@ def test_executor_marks_crash_budget_overflow_as_partial(tmp_path: Path) -> None
     assert result["failure"] is not None
     assert result["failure"]["code"] == "fuzz.crash_budget_exceeded"
     assert len(result["crash_ids"]) == 2
+    for value in minimized_values[2:]:
+        object_ref = "cas://sha256/" + hashlib.sha256(value).hexdigest()
+        with pytest.raises(ArtifactNotFound):
+            store.verify(object_ref)
+
+
+def test_executor_rejects_compressed_minimized_input_archives(tmp_path: Path) -> None:
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
+    seed = store.put_stream(io.BytesIO(b"seed"), max_bytes=1024)
+    sandbox = _FakeSandbox(
+        _sandbox_result_for_crashes(store, [b"crashing input"], archive_mode="w:gz")
+    )
+    service = FuzzExecutionService(
+        store,
+        ToolRegistry([spec()]),
+        sandbox,
+        fuzz_tool=FUZZ_TOOL,
+        crash_tool=CASR_TOOL,
+    )
+
+    result = asyncio.run(service.run(request(target.object_ref, seed.object_ref), asyncio.Event()))
+
+    assert result["status"] == "failed"
+    assert result["failure"] is not None
+    assert result["failure"]["code"] == "fuzz.result_invalid"
+
+
+def test_executor_validates_cumulative_input_budget_before_cas_publication(
+    tmp_path: Path,
+) -> None:
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
+    seed = store.put_stream(io.BytesIO(b"seed"), max_bytes=1024)
+    minimized_values = [b"first crash", b"second crash"]
+    sandbox = _FakeSandbox(_sandbox_result_for_crashes(store, minimized_values))
+    service = FuzzExecutionService(
+        store,
+        ToolRegistry([spec()]),
+        sandbox,
+        fuzz_tool=FUZZ_TOOL,
+        crash_tool=CASR_TOOL,
+        max_minimized_input_total_bytes=len(minimized_values[0]),
+    )
+
+    result = asyncio.run(service.run(request(target.object_ref, seed.object_ref), asyncio.Event()))
+
+    assert result["status"] == "failed"
+    assert result["failure"] is not None
+    assert result["failure"]["code"] == "fuzz.result_invalid"
+    for value in minimized_values:
+        object_ref = "cas://sha256/" + hashlib.sha256(value).hexdigest()
+        with pytest.raises(ArtifactNotFound):
+            store.verify(object_ref)
+
+
+def test_executor_preserves_retryable_artifact_store_failures(tmp_path: Path) -> None:
+    class UnavailableStore(LocalContentAddressedStore):
+        def verify(self, object_ref: str) -> StoredObject:
+            del object_ref
+            raise ArtifactStoreIOError("artifact backend unavailable", details={"errno": 5})
+
+    store = UnavailableStore(tmp_path / "cas")
+    sandbox = _FakeSandbox(cast(SandboxResult, {}))
+    service = FuzzExecutionService(
+        store,
+        ToolRegistry([spec()]),
+        sandbox,
+        fuzz_tool=FUZZ_TOOL,
+        crash_tool=CASR_TOOL,
+    )
+    target_ref = "cas://sha256/" + "b" * 64
+    seed_ref = "cas://sha256/" + "c" * 64
+
+    result = asyncio.run(service.run(request(target_ref, seed_ref), asyncio.Event()))
+
+    assert result["status"] == "failed"
+    assert result["failure"] is not None
+    assert result["failure"]["code"] == "fuzz.artifact_store_io_error"
+    assert result["failure"]["kind"] == "dependency"
+    assert result["failure"]["retryable"] is True
 
 
 def test_profile_builds_fixed_argv_and_rejects_wrong_profile() -> None:
