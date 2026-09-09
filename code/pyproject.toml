@@ -22,6 +22,7 @@ dependencies = [
     "vulnweaver-sandbox-runner",
     "vulnweaver-fuzzing",
     "vulnweaver-proof",
+    "vulnweaver-reporting",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
@@ -57,6 +58,7 @@ members = [
     "packages/sandbox-runner",
     "packages/fuzzing",
     "packages/proof",
+    "packages/reporting",
     "packages/tool-runtime",
     "packages/worker",
 ]
@@ -79,6 +81,7 @@ vulnweaver-source-analysis = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
 vulnweaver-fuzzing = { workspace = true }
 vulnweaver-proof = { workspace = true }
+vulnweaver-reporting = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
@@ -110,6 +113,7 @@ extraPaths = [
     "packages/sandbox-runner/src",
     "packages/fuzzing/src",
     "packages/proof/src",
+    "packages/reporting/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
 ]

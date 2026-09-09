@@ -19,6 +19,7 @@ members = [
     "vulnweaver-persistence",
     "vulnweaver-proof",
     "vulnweaver-queue",
+    "vulnweaver-reporting",
     "vulnweaver-sandbox-runner",
     "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
@@ -1412,6 +1413,17 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-reporting"
+version = "0.1.0"
+source = { editable = "packages/reporting" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
+
+[[package]]
 name = "vulnweaver-sandbox-runner"
 version = "0.1.0"
 source = { editable = "packages/sandbox-runner" }
@@ -1511,6 +1523,7 @@ dependencies = [
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-proof" },
     { name = "vulnweaver-queue" },
+    { name = "vulnweaver-reporting" },
     { name = "vulnweaver-sandbox-runner" },
     { name = "vulnweaver-source-analysis" },
     { name = "vulnweaver-tool-runtime" },
@@ -1543,6 +1556,7 @@ requires-dist = [
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
+    { name = "vulnweaver-reporting", editable = "packages/reporting" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
