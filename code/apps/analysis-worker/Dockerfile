@@ -17,7 +17,7 @@ RUN sed -i \
       -e "s|https://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g" \
       /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
-    && apt-get install --no-install-recommends -y binutils cppcheck ca-certificates \
+    && apt-get install --no-install-recommends -y binutils cppcheck ca-certificates upx-ucl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir \

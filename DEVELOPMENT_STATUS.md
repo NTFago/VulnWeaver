@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
 - **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
-- **最后更新**：2026-09-09（Asia/Shanghai）
+- **最后更新**：2026-09-09 19:34（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 PR #12 源分支 `feat/t19-fuzz-triage`，已纳入 `origin/main@a88dfd0`；唯一冲突为动态台账，已按双方事实完成语义合并并通过全量验证，等待 PR 远端检查与评审合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -41,7 +41,7 @@
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
-| T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | R1/R2 已交付 `BinaryAnalysisResult`、安全 ELF/PE 解析、字符串/函数/指令/导入/基本块/Xref/Ghidra 伪代码/angr 定点符号事实、固定参数无 Shell 工具适配、输出/状态预算、UPX 父子工件、部分失败语义及 Worker/ToolSpec 接入 | 仅剩真实 DIE/UPX/Ghidra/angr 最终镜像与 Compose E2E；Docker Hub 基础镜像解析仍受 Q-006 影响，恢复后更新精确镜像摘要并按 M10 验收 | 2026-09-09 |
+| T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | R1/R2 已交付 `BinaryAnalysisResult`、安全 ELF/PE 解析、字符串/函数/指令/导入/基本块/Xref/Ghidra 伪代码/angr 定点符号事实、固定参数无 Shell 工具适配、输出/状态预算、UPX 父子工件、部分失败语义及 Worker/ToolSpec 接入；analysis-worker 镜像已重建并加入 `upx-ucl`，4 个 ToolSpec 摘要回填 `sha256:ca05166a…` | 仍缺真实 DIE/Ghidra/angr 与 Compose 二进制 E2E；DIE 需固定 GitHub 二进制+sha256，Ghidra 设计上外部挂载，angr 可选（`ANGR_ENABLED=false`）；objdump/UPX 链路可先行验收 | 2026-09-09 |
 | T17 PAIR 二进制导入与查询 | 已完成 | Codex | `BinaryPairImporter` 将 T16 Function/BasicBlock/Instruction/Xref 导入现有 PostgreSQL PAIR，保留二进制位置、分析版本、伪代码/符号事实、原始结果引用和工具身份；地址查询、Worker 自动接入和控制面地址 API 已交付 | 无；最终 Docker 二进制 E2E 随 T16 镜像验收 | 2026-09-09 |
 | T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收 | 需要真实 Docker runtime 运行无害固定命令，验证容器清理、禁网、只读根文件系统、非 root、输出限制和运行时统计；依赖 T04/T09，按 M12/P4 验收 | 2026-09-09 |
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
@@ -62,11 +62,11 @@
 
 | ID | 问题 | 影响 | 临时处理 | 状态 | 负责人 |
 |---|---|---|---|---|---|
-| Q-002 | 首版开发环境是否必须同时支持 Windows Worker 未明确 | 影响 P4 的本机验收范围 | 先冻结跨平台消息协议，Windows 执行节点在 Linux MVP 后实现 | 待处理 | 未分配 |
+| Q-002 | 首版开发环境是否必须同时支持 Windows Worker 未明确 | 影响 P4 的本机验收范围 | 已确认（用户 2026-09-09）：首版不支持 Windows 执行节点，Windows 仅作开发宿主，执行面统一 Linux/容器；跨平台消息协议仍冻结，Windows 执行节点留待 Linux MVP 后评估 | 已解决 | Codex |
 | Q-003 | Windows Python 3.12 在含中文的工作区路径中以 GBK 读取 uv editable `.pth`，会导致启动失败 | 影响 Windows 宿主直接使用默认 editable workspace；Dev Container/Linux 不受影响 | Windows 本机使用 `uv sync --no-editable`，验证命令使用 `uv run --no-sync`；等待 Python/uv 上游兼容或迁移到纯 ASCII 路径 | 待处理 | 未分配 |
 | Q-004 | Evidence 仓储测试与 Finding 测试曾共用固定 input_ref，导致顺序依赖 | 已将 Evidence 测试数据改为独立摘要，全量套件按当前收集顺序稳定通过 | 保留精确断言，不再共享测试命名空间 | 已解决 | Codex |
 | Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
-| Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | 保留既有国内 Python/Debian 镜像配置；已确认失败发生在基础镜像元数据解析，未切换未经项目确认的镜像源 | 待处理 | Codex |
+| Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | Docker Desktop 29.7.2 已恢复并启用代理（`http.docker.internal:3128`），`docker pull python:3.12-slim` 实测成功（digest `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`）；镜像重建与 E2E 解除阻塞，属 T16/T18/T19 验收范围 | 已解决 | Codex |
 | Q-007 | Semgrep 在 analysis-worker 只读根文件系统中默认写入 `~/.semgrep`，静态执行器曾将失败 `tool_run` 结算为成功，Task 因而错误显示 `completed/no_findings` 并出现未执行阶段事件 | 已修复；新任务会将这类故障结算为结构化 Job 失败和 Task `partial`，UI 可见工具/原因/退出码 | 历史 Task 不自动回写，需重新投递或新建任务；报告生成不在本次范围 | 已解决 | Codex |
 
 ## 5. 当前阻碍点
@@ -115,6 +115,30 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 19:34：重建 analysis-worker 镜像并回填 ToolSpec 摘要
+
+- 负责人：Codex
+- 状态：进行中（Q-006 已解除；T16 最终镜像仍缺 DIE/Ghidra/angr）
+- 修改文件：`code/apps/analysis-worker/Dockerfile`、`code/deploy/tool-specs/{binary-import,semgrep,cppcheck,source-import}.json`、`DEVELOPMENT_STATUS.md`
+- 已完成：Q-006 网络恢复后重建 analysis-worker 镜像成功；Dockerfile 增加 `upx-ucl`（经 TUNA Debian 镜像，UPX 4.2.4），镜像内实测 `upx`/`objdump` 可用；4 个 ToolSpec 的 `image_digest` 回填为 `sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2`，旧摘要 `0041518f…` 无残留引用，JSON 校验通过。
+- 测试与结果：`docker compose build analysis-worker` exit 0；`docker run --rm vulnweaver-analysis-worker:dev sh -c 'which upx objdump'` 返回 `/usr/bin/upx`、`/usr/bin/objdump`，`upx --version`=4.2.4；镜像 967MB。
+- 问题：buildx 默认开启 provenance/SBOM attestation，本地镜像摘要为 manifest-list digest，非内容寻址；无内容改动的重跑可能得到不同 digest，需要可复现摘要时应关闭 attestation（另立议题）。
+- 阻碍点：无。DIE（需固定 GitHub 预编译二进制 + sha256）、Ghidra（设计上外部挂载，`GHIDRA_HEADLESS_EXECUTABLE` 默认空）、angr（`ANGR_ENABLED=false` 可选）仍未装入镜像，属 T16 后续验收。
+- 决策：无新增 ADR；沿用 ADR-006 唯一动态执行边界，基础镜像不烤入 JDK+Ghidra 与 angr。
+- 下一步：准备无害 ELF/PE 样本，在 Compose 中跑二进制 Job 验证 objdump/UPX 链路；再单独评估固定 DIE 二进制。
+
+### 2026-09-09 19:26：Q-006 Docker Hub 访问恢复并解除镜像构建阻塞
+
+- 负责人：Codex
+- 状态：已完成（仅 Q-006 网络问题；T16/T18/T19 镜像与 E2E 验收未执行）
+- 修改文件：`DEVELOPMENT_STATUS.md`（问题台账）
+- 已完成：Docker Desktop 29.7.2 已恢复并启用代理（`http.docker.internal:3128`、`hubproxy.docker.internal:5555`）；`docker pull python:3.12-slim` 实测成功，得到 digest `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`，证明 `registry-1.docker.io` 基础镜像元数据解析已恢复。
+- 测试与结果：`docker pull python:3.12-slim` EXIT=0；`docker info` 显示 HTTP/HTTPS Proxy 已配置。
+- 问题：`code/.venv` 为残留的 Linux 布局（仅 `lib64 -> lib`、`pyvenv.cfg`，无 `Scripts/`），Windows 宿主本机 editable 环境仍受 Q-003 影响。
+- 阻碍点：无。analysis-worker 镜像重建与 Compose 二进制 E2E 现已解除阻塞，但属 T16/T18/T19 的待验证范围（且 T16 最终镜像仍需把 DIE/UPX/Ghidra/angr 装入 Dockerfile）。
+- 决策：无。
+- 下一步：重建 analysis-worker 镜像并回填 4 个 ToolSpec 的精确镜像摘要，随后按 M10/M12/M13 做二进制与 Sandbox E2E。
 
 ### 2026-09-09 19:14：完成 R-003 PR #12 主线同步与冲突解决
 
