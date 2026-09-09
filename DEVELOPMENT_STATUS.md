@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成
-- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2 已补齐版本化基本块、Xref、Ghidra 伪代码和有界 angr 定点符号事实；T17 已实现二进制结果向 PAIR 的幂等导入、地址查询和 API 接入。普通 ELF/PE 可生成函数、地址、指令、CFG、调用/跳转引用并在 PAIR 中查询；T16 最终工具镜像仍受 Q-006 影响，T17 正在完成全量验证。
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证
+- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2 已补齐版本化基本块、Xref、Ghidra 伪代码和有界 angr 定点符号事实；T17 已完成二进制结果向 PAIR 的幂等导入、地址查询和 API 接入；T18 已形成并实际运行验证 Sandbox Runner 安全基线，但仍需补齐更广泛的动态负向场景。普通 ELF/PE 可生成函数、地址、指令、CFG、调用/跳转引用并在 PAIR 中查询；T16 最终工具镜像仍受 Q-006 影响。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t17-binary-pair` 基于 T16-R2 检查点 `e1a6e3c`，T17 已提交为待提交检查点，尚未推送或合并。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t18-sandbox-runner` 基于 T17 提交 `80e2b22`，开始开发 T18，尚未推送或合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；T16 为待验证，已认领 T17 二进制 PAIR 导入与查询任务包
+- **当前负责人**：Codex；T16 为待验证，T17 已完成，T18 实现完成待验证，继续负责 Sandbox Runner 安全基线任务包
 
 ## 3. 开发进度
 
@@ -43,6 +43,7 @@
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
 | T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | R1/R2 已交付 `BinaryAnalysisResult`、安全 ELF/PE 解析、字符串/函数/指令/导入/基本块/Xref/Ghidra 伪代码/angr 定点符号事实、固定参数无 Shell 工具适配、输出/状态预算、UPX 父子工件、部分失败语义及 Worker/ToolSpec 接入 | 仅剩真实 DIE/UPX/Ghidra/angr 最终镜像与 Compose E2E；Docker Hub 基础镜像解析仍受 Q-006 影响，恢复后更新精确镜像摘要并按 M10 验收 | 2026-09-09 |
 | T17 PAIR 二进制导入与查询 | 已完成 | Codex | `BinaryPairImporter` 将 T16 Function/BasicBlock/Instruction/Xref 导入现有 PostgreSQL PAIR，保留二进制位置、分析版本、伪代码/符号事实、原始结果引用和工具身份；地址查询、Worker 自动接入和控制面地址 API 已交付 | 无；最终 Docker 二进制 E2E 随 T16 镜像验收 | 2026-09-09 |
+| T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收 | 需要真实 Docker runtime 运行无害固定命令，验证容器清理、禁网、只读根文件系统、非 root、输出限制和运行时统计；依赖 T04/T09，按 M12/P4 验收 | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
@@ -106,6 +107,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 14:24：完成 T18 Sandbox Runner 结构化请求与 Docker 隔离检查点
+
+- 负责人：Codex
+- 状态：待验证（实现完成，真实 Docker runtime 验收未执行）
+- 修改文件：`code/packages/contracts/`、`code/packages/sandbox-runner/`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/contracts/test_validation.py`、`code/tests/sandbox_runner/`
+- 已完成：新增 `SandboxRequest`、`SandboxResult`、输出和资源用量契约；新增独立 `sandbox-runner` 包；请求必须精确匹配 ToolSpec 和受信任命令 profile，镜像摘要、工件类型、参数 Schema、资源预算、禁网/只读输入/隔离输出和无审批运行边界均由 Runner 再次校验；CAS 工件只通过服务自有 scratch 目录挂载，外部命令采用固定 argv、无 Shell，Docker runtime 固定 `--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root、pids/memory/cpu/tmpfs 约束；stdout/stderr/输出文件受大小限制并登记 CAS，执行后清理容器和 scratch，无法确认清理时结果变为 `orphaned`，支持按 ownership label 回收孤儿容器。
+- 测试与结果：Sandbox Runner/契约定向测试 19 passed；全量 `pnpm run check` 通过，278 passed、总分支覆盖率 82.56%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check` 和 Compose 配置通过；负向测试覆盖未注册工具、镜像摘要不匹配、工件类型拒绝、命令参数越界、ToolSpec 网络/文件系统策略不安全、未授权输出、清理失败和非法孤儿容器名。使用本机已有 `alpine@sha256:d9e853...` 镜像执行固定 `/bin/cat /input/input.bin` 成功，`/bin/touch /blocked` 受只读根文件系统阻断，`/usr/bin/yes` 输出洪泛被终止，`/bin/sleep 30` 在 1 秒预算后超时，均确认容器回收；`docker inspect` 确认 `NetworkMode=none`、只读根、`CapDrop=ALL`、`no-new-privileges=true`、`User=10001:10001`、`PidsLimit=128`、内存限制 64 MiB。
+- 问题：Docker 镜像构建仍受 Q-006 的 Docker Hub 元数据网络问题影响；真实 runtime 已用本机 Alpine 验证，但尚未执行网络流量和内存/进程压力的独立固定样本。
+- 阻碍点：无；可以继续实现 T19/T20 的调用适配，真实 runtime 验收在可用镜像和 Docker 配置下补跑。
+- 决策：无新增 ADR；Sandbox Runner 是唯一允许创建容器的组件，当前只提供库和 Docker CLI runtime，调用方不得传入 Docker 参数、宿主路径或任意 shell 字符串。
+- 下一步：补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证，并将 RuntimeExecution 的资源采样语义固定后认领 T19。
 
 ### 2026-09-09 13:24：完成 T17 二进制 PAIR 导入、地址查询与 Worker/API 接入
 
@@ -266,6 +279,7 @@
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | T18 Sandbox Runner 结构化请求与 Docker 隔离检查点 | Sandbox Runner/契约定向测试；全量 `pnpm run check`；`uv lock --check`；Compose 配置；本机已有 Alpine 固定命令与 `docker inspect` | 278 passed、82.56% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；定向 19 passed；cat 成功、只读根阻断、输出洪泛终止、超时和容器回收通过；隔离参数实测确认 | 尚未执行独立网络流量、内存压力和进程数压力样本；analysis-worker 镜像构建受 Q-006 影响 |
 | 2026-09-09 | T17 二进制 PAIR 导入与地址查询全量验收 | `pnpm run check`（Compose 服务地址）；定向 PAIR/二进制/API/契约测试；`uv lock --check`；契约生成；Compose 配置 | 271 passed、83.86% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；T17 定向 45 passed；真实 PostgreSQL 导入/重放/地址查询通过 | 最终 analysis-worker 镜像与 Compose 二进制 E2E 受 Q-006 影响，属于 T16 镜像验收 |
 | 2026-09-09 | T16-R2 CFG/Xref/伪代码/定点符号事实 | Dev Container `pnpm run check`；T16 与契约定向测试；真实 `/bin/ls` objdump CFG/Xref 探测；`uv lock --check`；Compose 配置 | 270 passed、83.79% 覆盖率；静态与前端检查全通过；定向 29 passed；真实 ELF 得到 5214 个基本块和 6067 条 Xref | 最终 analysis-worker 镜像、真实 DIE/UPX/Ghidra/angr 和 Compose E2E 仍因 Q-006 未验证 |
 | 2026-09-09 | T16-R1 ELF/PE 安全导入与规范化逆向 | Dev Container `pnpm run check`；T16 定向测试；契约生成与 `uv lock --check`；Compose 配置；真实 `/bin/ls` ELF 与构造 PE objdump 探测；analysis-worker 镜像构建尝试 | 266 passed、83.25% 覆盖率；静态和前端检查全通过；T16 15 passed；ELF/PE 均取得规范化函数/指令；UPX 父子谱系与重放幂等通过 | Docker Hub 基础镜像元数据解析失败，未重建 analysis-worker 或执行 Compose 二进制 Job；真实 DIE/UPX/Ghidra/angr 工具链待补 |
@@ -310,9 +324,9 @@
 
 ## 10. 下一步
 
-1. 提交 T17 独立逻辑变更；随后回到 T16，在 Docker 基础镜像可解析后重建 analysis-worker 并执行二进制 Compose E2E。
+1. 补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证，并将 RuntimeExecution 的资源采样语义固定后认领 T19。
 2. Docker 基础镜像可解析后回到 T16 验收：重建 analysis-worker，更新全部同镜像 ToolSpec 的精确摘要，并以无害 x86/x64 ELF/PE（含 UPX 固定样本）执行 Compose E2E。
-3. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，补跑 C/C++/Python/Java P2 端到端验收；T17 完成后继续二进制前端工作台或 T18 Sandbox Runner。
+3. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，补跑 C/C++/Python/Java P2 端到端验收；T19/T20 完成后继续报告和全链路 E2E。
 
 ## 11. 每次工作结束时的更新模板
 

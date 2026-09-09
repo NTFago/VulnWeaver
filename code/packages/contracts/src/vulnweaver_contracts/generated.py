@@ -143,6 +143,14 @@ class RiskLevel(StrEnum):
     HIGH = 'high'
     CRITICAL = 'critical'
 
+class SandboxStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    FAILED = 'failed'
+    TIMED_OUT = 'timed_out'
+    CANCELLED = 'cancelled'
+    ORPHANED = 'orphaned'
+    POLICY_DENIED = 'policy_denied'
+
 class NetworkAccess(StrEnum):
     NONE = 'none'
     ALLOWLIST = 'allowlist'
@@ -198,6 +206,42 @@ class PairEdgeType(StrEnum):
     DATA_FLOW = 'data_flow'
     TAINT = 'taint'
     XREF = 'xref'
+
+class SandboxOutput(TypedDict):
+    path: str
+    object_ref: ObjectReference
+    digest: Sha256Digest
+    size_bytes: int
+
+class SandboxResourceUsage(TypedDict):
+    duration_millis: int
+    cpu_millis: int
+    memory_bytes: int
+    output_bytes: int
+
+class SandboxRequest(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    tool_name: Identifier
+    tool_version: str
+    image_digest: Sha256Digest
+    artifact_kind: ArtifactKind
+    input_ref: ObjectReference
+    arguments: JsonObject
+    output_file_names: list[str]
+    resource_budget: ResourceBudget
+    timeout_seconds: int
+
+class SandboxResult(TypedDict):
+    schema_version: SchemaVersion
+    request_id: Identifier
+    status: SandboxStatus
+    exit_code: int | None
+    stdout_ref: ObjectReference | None
+    stderr_ref: ObjectReference | None
+    outputs: list[SandboxOutput]
+    resource_usage: SandboxResourceUsage
+    failure: StructuredFailure | None
 
 type Identifier = str
 

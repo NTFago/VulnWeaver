@@ -41,6 +41,48 @@ export type FailureKind = "validation" | "policy" | "timeout" | "tool" | "enviro
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
+export type SandboxStatus = "succeeded" | "failed" | "timed_out" | "cancelled" | "orphaned" | "policy_denied";
+
+export interface SandboxOutput {
+  path: string;
+  object_ref: ObjectReference;
+  digest: Sha256Digest;
+  size_bytes: number;
+}
+
+export interface SandboxResourceUsage {
+  duration_millis: number;
+  cpu_millis: number;
+  memory_bytes: number;
+  output_bytes: number;
+}
+
+export interface SandboxRequest {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  tool_name: Identifier;
+  tool_version: string;
+  image_digest: Sha256Digest;
+  artifact_kind: ArtifactKind;
+  input_ref: ObjectReference;
+  arguments: JsonObject;
+  output_file_names: Array<string>;
+  resource_budget: ResourceBudget;
+  timeout_seconds: number;
+}
+
+export interface SandboxResult {
+  schema_version: SchemaVersion;
+  request_id: Identifier;
+  status: SandboxStatus;
+  exit_code: number | null;
+  stdout_ref: ObjectReference | null;
+  stderr_ref: ObjectReference | null;
+  outputs: Array<SandboxOutput>;
+  resource_usage: SandboxResourceUsage;
+  failure: StructuredFailure | null;
+}
+
 export type NetworkAccess = "none" | "allowlist";
 
 export type CapabilityStatus = "available" | "unavailable";

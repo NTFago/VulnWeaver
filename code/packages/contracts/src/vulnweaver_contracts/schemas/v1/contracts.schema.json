@@ -80,6 +80,66 @@
       "type": "string",
       "enum": ["low", "medium", "high", "critical"]
     },
+    "SandboxStatus": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "timed_out", "cancelled", "orphaned", "policy_denied"]
+    },
+    "SandboxOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "object_ref", "digest", "size_bytes"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+        "object_ref": {"$ref": "#/$defs/ObjectReference"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "SandboxResourceUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_millis", "cpu_millis", "memory_bytes", "output_bytes"],
+      "properties": {
+        "duration_millis": {"type": "integer", "minimum": 0},
+        "cpu_millis": {"type": "integer", "minimum": 0},
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "output_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "SandboxRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "tool_name", "tool_version", "image_digest", "artifact_kind", "input_ref", "arguments", "output_file_names", "resource_budget", "timeout_seconds"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "artifact_kind": {"$ref": "#/$defs/ArtifactKind"},
+        "input_ref": {"$ref": "#/$defs/ObjectReference"},
+        "arguments": {"$ref": "#/$defs/JsonObject"},
+        "output_file_names": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"}},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "SandboxResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "status", "exit_code", "stdout_ref", "stderr_ref", "outputs", "resource_usage", "failure"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "request_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/SandboxStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "stdout_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "stderr_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "outputs": {"type": "array", "items": {"$ref": "#/$defs/SandboxOutput"}},
+        "resource_usage": {"$ref": "#/$defs/SandboxResourceUsage"},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
+      }
+    },
     "NetworkAccess": {
       "type": "string",
       "enum": ["none", "allowlist"]
@@ -1197,6 +1257,8 @@
     {"$ref": "#/$defs/ArtifactDetail"},
     {"$ref": "#/$defs/HealthResponse"},
     {"$ref": "#/$defs/WorkerRequest"},
-    {"$ref": "#/$defs/WorkerResult"}
+    {"$ref": "#/$defs/WorkerResult"},
+    {"$ref": "#/$defs/SandboxRequest"},
+    {"$ref": "#/$defs/SandboxResult"}
   ]
 }

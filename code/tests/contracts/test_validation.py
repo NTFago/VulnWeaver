@@ -338,3 +338,54 @@ def test_binary_analysis_contract_validates_normalized_addresses_and_tool_runs()
             "created_at": "2026-09-09T12:00:00Z",
         },
     )
+
+
+def test_sandbox_request_and_result_contracts_validate_isolated_execution_facts() -> None:
+    request = {
+        "schema_version": "1.0.0",
+        "id": "sandbox-request:contract",
+        "tool_name": "safe-test-tool",
+        "tool_version": "1.0.0",
+        "image_digest": "sha256:" + "a" * 64,
+        "artifact_kind": "source_archive",
+        "input_ref": "cas://sha256/" + "b" * 64,
+        "arguments": {"profile": "safe"},
+        "output_file_names": ["report.txt"],
+        "resource_budget": {
+            "max_model_tokens": 0,
+            "cpu_millis": 1000,
+            "memory_bytes": 16 * 1024 * 1024,
+            "disk_bytes": 1024 * 1024,
+            "max_tool_concurrency": 1,
+            "max_dynamic_runs": 0,
+            "timeout_seconds": 30,
+        },
+        "timeout_seconds": 10,
+    }
+    validate_contract("SandboxRequest", request)
+    validate_contract(
+        "SandboxResult",
+        {
+            "schema_version": "1.0.0",
+            "request_id": request["id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "stdout_ref": "cas://sha256/" + "c" * 64,
+            "stderr_ref": None,
+            "outputs": [
+                {
+                    "path": "report.txt",
+                    "object_ref": "cas://sha256/" + "d" * 64,
+                    "digest": "sha256:" + "d" * 64,
+                    "size_bytes": 12,
+                }
+            ],
+            "resource_usage": {
+                "duration_millis": 12,
+                "cpu_millis": 3,
+                "memory_bytes": 4096,
+                "output_bytes": 18,
+            },
+            "failure": None,
+        },
+    )
