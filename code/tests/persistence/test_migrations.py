@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "pair_functions",
     "pair_nodes",
     "pair_raw",
+    "pocs",
     "projects",
     "reviews",
     "task_events",

@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待工具链验收、T17 已完成、T18 待验证、T19 进行中；P4 T20 Proof/Exploit 已开始；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
 - **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
-- **最后更新**：2026-09-09 20:03（Asia/Shanghai）
+- **最后更新**：2026-09-09 20:18（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；已同步 `origin/main@6070ba2`（PR #13 已合入）；当前从该基线开发 `feat/p4-proof-exploit`，T20 首个实现检查点及 Dev Container 全量验证已完成。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -46,7 +46,7 @@
 | T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收 | 需要真实 Docker runtime 运行无害固定命令，验证容器清理、禁网、只读根文件系统、非 root、输出限制和运行时统计；依赖 T04/T09，按 M12/P4 验收 | 2026-09-09 |
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
-| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest` 和 `vulnweaver-proof`；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit；Sandbox 结果映射为不可变 Poc 结果并保留运行日志引用 | 接入 Worker/Job 持久化与控制面 API；补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-09 |
+| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit | 接入 Worker/Job 持久化与控制面 API；补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
 | R-003 `origin/main` 同步与冲突解决 | 已完成 | Codex | PR #12 源分支已合并 `origin/main@a88dfd0`；代码自动合并，动态台账按双方事实处理唯一冲突并消除重复问题编号；全量回归及静态、契约、锁文件检查通过 | 等待 PR #12 远端检查与评审流程合并 `main` | 2026-09-09 |
@@ -384,7 +384,7 @@
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
-| 2026-09-09 | T20 Proof/Exploit 首个安全编排检查点 | Dev Container 内 `uv sync --frozen`、`pnpm install --frozen-lockfile`、`pnpm run check`；PostgreSQL/Redis 使用 Compose 服务地址 | Ruff、Pyright 0 错误；pytest 308 passed、总分支覆盖率 81.87%；TypeScript/Svelte 0 错误/0 警告；Proof/契约验证通过 | 尚未接入 Worker/Job 持久化和 API；尚未执行真实 Proof Sandbox 回放、T21/T22 |
+| 2026-09-09 | T20 Proof 持久化检查点 | Dev Container 内 Compose 服务地址执行 `pnpm run check` | Ruff、Pyright 0 错误；pytest 308 passed、总分支覆盖率 81.70%；TypeScript/Svelte 0 错误/0 警告；迁移漂移检查通过 | 尚未接入 Worker/Job 持久化和 API；尚未执行真实 Proof Sandbox 回放、T21/T22 |
 | 2026-09-09 | R-003 PR #12 主线同步与冲突解决 | 合并 `origin/main@a88dfd0`；临时 no-editable 环境执行全量 pytest 与覆盖率；全仓库 Ruff；受影响模块 Pyright；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --offline --check` | 唯一台账冲突按双方事实解决；304 passed、1 skipped、总分支覆盖率 81.78%；所有静态、前端、契约和锁文件检查通过 | Linux 专用断言在 Windows 跳过；未运行真实 AFL++/CASR 镜像 E2E；远端 CI 待推送后确认 |
 | 2026-09-09 | R-002 审查缺陷修复 | 临时 no-editable 环境执行定向及全量 pytest；全仓库 Ruff；受影响 Sandbox/fuzzing/API Pyright；`pnpm run check:typescript`；契约生成与锁文件检查；固定摘要 Alpine 真实 Docker 配额溢出/复制/清理探测 | 定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；静态、前端、契约、锁文件检查通过；2 MiB 写入被 1 MiB 硬配额截断，输出回收且无容器/卷孤儿 | 未运行真实 AFL++/CASR 镜像完整流程；网络/内存/进程压力仍归 T18 验收；远端 CI 未运行 |
 | 2026-09-09 | T15-R5 静态分析失败与结果完整性 | 静态工具定向 pytest；现有只读、非 root Linux Worker 镜像中运行 Semgrep 无害 `eval("1+1")` 样本；真实 PostgreSQL 定向执行器/Task 聚合测试；Ruff、Pyright、Svelte、契约生成与锁文件检查 | 静态工具 7 passed、1 skipped；真实 Semgrep 成功并返回 1 个 Finding；失败 Job 保留结果工件且 Task 仅产生 validating/analyzing/completed 事件的集成验证通过；静态和前端检查无错误 | 未运行全量门禁、镜像重建或浏览器 E2E；Windows Proactor 不兼容 psycopg 异步测试；测试专用数据库待清理 |

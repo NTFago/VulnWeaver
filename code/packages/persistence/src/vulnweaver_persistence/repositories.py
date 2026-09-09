@@ -37,6 +37,7 @@ from vulnweaver_contracts import (
     PairNode,
     PairRaw,
     PermissionMode,
+    Poc,
     Project,
     QueueEvent,
     Review,
@@ -76,6 +77,7 @@ from vulnweaver_persistence.models import (
     pair_functions,
     pair_nodes,
     pair_raw,
+    pocs,
     projects,
     reviews,
     task_events,
@@ -348,11 +350,7 @@ class TaskRepository:
         statement = select(tasks).where(tasks.c.id == task_id)
         if for_update:
             statement = statement.with_for_update()
-        row = (
-            (await self._connection.execute(statement))
-            .mappings()
-            .one_or_none()
-        )
+        row = (await self._connection.execute(statement)).mappings().one_or_none()
         if row is None:
             raise EntityNotFound("task not found", details={"task_id": task_id})
         return _task_from_row(row)
@@ -1372,9 +1370,7 @@ class FindingRepository:
         row = (
             (
                 await self._connection.execute(
-                    select(findings)
-                    .where(findings.c.id == canonical["id"])
-                    .with_for_update()
+                    select(findings).where(findings.c.id == canonical["id"]).with_for_update()
                 )
             )
             .mappings()
@@ -1585,6 +1581,70 @@ class FindingRepository:
         return [_finding_evidence_from_row(row) for row in rows]
 
 
+class PocRepository:
+    """Immutable, idempotent proof-of-concept result storage."""
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def create(self, poc: Poc) -> Poc:
+        validate_contract("Poc", poc)
+        canonical = cast(Poc, {**poc, "created_at": _canonical_timestamp(poc["created_at"])})
+        values = {
+            **canonical,
+            "schema_version": str(canonical["schema_version"]),
+            "kind": str(canonical["kind"]),
+            "status": str(canonical["status"]),
+            "result": str(canonical["result"]) if canonical["result"] is not None else None,
+            "permission_mode": str(canonical["permission_mode"]),
+            "created_at": _parse_datetime(canonical["created_at"]),
+        }
+        inserted = await self._connection.execute(
+            insert(pocs).values(values).on_conflict_do_nothing(index_elements=["id"])
+        )
+        if not inserted.rowcount:
+            existing = await self.get(canonical["id"])
+            if existing != canonical:
+                raise EntityConflict(
+                    "poc identifier conflicts with an existing result",
+                    details={"poc_id": canonical["id"]},
+                )
+            return existing
+        poc_ids = list(
+            (
+                await self._connection.execute(
+                    select(pocs.c.id)
+                    .where(pocs.c.finding_id == canonical["finding_id"])
+                    .order_by(pocs.c.created_at, pocs.c.id)
+                )
+            ).scalars()
+        )
+        await self._connection.execute(
+            update(findings).where(findings.c.id == canonical["finding_id"]).values(poc_ids=poc_ids)
+        )
+        return canonical
+
+    async def get(self, poc_id: str) -> Poc:
+        row = (
+            (await self._connection.execute(select(pocs).where(pocs.c.id == poc_id)))
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("poc not found", details={"poc_id": poc_id})
+        return _poc_from_row(row)
+
+    async def list_for_finding(self, finding_id: str) -> list[Poc]:
+        rows = (
+            await self._connection.execute(
+                select(pocs)
+                .where(pocs.c.finding_id == finding_id)
+                .order_by(pocs.c.created_at, pocs.c.id)
+            )
+        ).mappings()
+        return [_poc_from_row(row) for row in rows]
+
+
 class AnnotationRepository:
     """Append-only human labels and corrections for one Task fact."""
 
@@ -1606,9 +1666,7 @@ class AnnotationRepository:
                     details={"target_id": canonical["target_id"]},
                 )
         else:
-            function = await PairRepository(self._connection).get_function(
-                canonical["target_id"]
-            )
+            function = await PairRepository(self._connection).get_function(canonical["target_id"])
             if function["artifact_version_id"] not in task["artifact_version_ids"]:
                 raise PersistenceInvariantError(
                     "annotation target does not belong to its task inputs",
@@ -1672,9 +1730,7 @@ class AnnotationRepository:
             .one_or_none()
         )
         if row is None:
-            raise EntityNotFound(
-                "annotation not found", details={"annotation_id": annotation_id}
-            )
+            raise EntityNotFound("annotation not found", details={"annotation_id": annotation_id})
         return _annotation_from_row(row)
 
     async def list_for_task(self, task_id: str) -> list[Annotation]:
@@ -1920,6 +1976,7 @@ class Repositories:
     evidence: EvidenceRepository
     findings: FindingRepository
     annotations: AnnotationRepository
+    pocs: PocRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -1936,6 +1993,7 @@ class Repositories:
         object.__setattr__(self, "evidence", EvidenceRepository(connection))
         object.__setattr__(self, "findings", FindingRepository(connection))
         object.__setattr__(self, "annotations", AnnotationRepository(connection))
+        object.__setattr__(self, "pocs", PocRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
@@ -2156,6 +2214,23 @@ def _finding_evidence_from_row(row: RowMapping) -> FindingEvidence:
     )
 
 
+def _poc_from_row(row: RowMapping) -> Poc:
+    return Poc(
+        schema_version=row["schema_version"],
+        id=row["id"],
+        finding_id=row["finding_id"],
+        kind=row["kind"],
+        status=row["status"],
+        result=row["result"],
+        script_ref=row["script_ref"],
+        run_log_ref=row["run_log_ref"],
+        image_digest=row["image_digest"],
+        permission_mode=row["permission_mode"],
+        resource_budget=row["resource_budget"],
+        created_at=_format_datetime(row["created_at"]),
+    )
+
+
 def _annotation_from_row(row: RowMapping) -> Annotation:
     return Annotation(
         schema_version=row["schema_version"],
@@ -2166,9 +2241,7 @@ def _annotation_from_row(row: RowMapping) -> Annotation:
         labels=row["labels"],
         note=row["note"],
         severity_override=(
-            Severity(row["severity_override"])
-            if row["severity_override"] is not None
-            else None
+            Severity(row["severity_override"]) if row["severity_override"] is not None else None
         ),
         author_id=row["author_id"],
         supersedes_annotation_id=row["supersedes_annotation_id"],
