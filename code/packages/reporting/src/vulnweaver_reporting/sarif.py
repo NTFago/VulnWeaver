@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 from vulnweaver_contracts import Finding
 
@@ -33,6 +33,24 @@ def build_sarif(findings: Sequence[Finding]) -> dict[str, Any]:
             "results": results,
         }],
     }
+
+
+def validate_sarif(report: Mapping[str, Any]) -> None:
+    """Validate the required SARIF envelope before publishing an artifact."""
+    if report.get("version") != "2.1.0" or not isinstance(report.get("runs"), list):
+        raise ValueError("report is not a SARIF 2.1.0 document")
+    for run in report["runs"]:
+        if not isinstance(run, Mapping):
+            raise ValueError("SARIF run must be an object")
+        typed_run = cast(Mapping[str, Any], run)
+        tool = typed_run.get("tool")
+        if not isinstance(tool, Mapping):
+            raise ValueError("SARIF run must contain a tool driver")
+        typed_tool = cast(Mapping[str, Any], tool)
+        if not isinstance(typed_tool.get("driver"), Mapping):
+            raise ValueError("SARIF run must contain a tool driver")
+        if not isinstance(typed_run.get("results"), list):
+            raise ValueError("SARIF run results must be an array")
 
 
 def _result(finding: Finding) -> dict[str, Any]:

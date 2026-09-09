@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from vulnweaver_contracts import Finding
-from vulnweaver_reporting import build_sarif
+from vulnweaver_reporting import build_sarif, validate_sarif
 
 
 def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
@@ -35,3 +35,13 @@ def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
     assert result["properties"]["findingId"] == "finding:1"
     assert len(result["message"]["text"]) == 4096
     assert result["locations"][0]["physicalLocation"]["region"]["startLine"] == 12
+    validate_sarif(report)
+
+
+def test_sarif_validation_rejects_incomplete_envelope() -> None:
+    try:
+        validate_sarif({"version": "2.1.0", "runs": [{}]})
+    except ValueError as error:
+        assert "tool driver" in str(error)
+    else:
+        raise AssertionError("invalid SARIF envelope was accepted")

@@ -1,6 +1,6 @@
 """Structured report serializers."""
 
 from vulnweaver_reporting.markdown import build_markdown
-from vulnweaver_reporting.sarif import build_sarif
+from vulnweaver_reporting.sarif import build_sarif, validate_sarif
 
-__all__ = ["build_markdown", "build_sarif"]
+__all__ = ["build_markdown", "build_sarif", "validate_sarif"]
