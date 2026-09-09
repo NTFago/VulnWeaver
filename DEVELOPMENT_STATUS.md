@@ -45,6 +45,7 @@
 | T20 Proof/Exploit 流程 | 进行中 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、Finding Proof Job 发起接口、SandboxRunnerClient、固定 Proof/Exploit profile 和无害容器回放已完成 | 通过 HTTP Runner 提交带 CAS 工件的 Proof/Exploit 请求，并验收策略拒绝、重放和部分失败 | 2026-09-09 |
 | T21 Markdown/PDF/SARIF 报告 | 进行中 | Codex | 报告生成、派生工件登记、Job/Worker 路由、版本化内容读取、Job 结果查询、PDF 生成和 Web 下载入口已完成 | 真实数据库 Finding 报告回放及完整 SARIF/PDF/浏览器验收 | 2026-09-09 |
 | T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、证据链与复现记录查询、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
+| T23 Web 首次注册与产品设置 | 已完成 | Codex（独立 worktree） | Web 一次性管理员注册、事务竞争裁决、认证/CSRF 设置 API、模型 URL/名称/API Key/重试参数设置页、API Key 写后不回显/显式清除、Worker DB 配置读取、迁移、Compose 与升级文档已完成 | 合并后在独立 TLS 部署完成真实浏览器首次启动验收；API Key 按用户选择明文落库，数据库/备份读取者可见 | 2026-09-10 |
 
 ## 4. 当前问题
 
@@ -78,12 +79,14 @@
 | ADR-018/019 | API 只登记任务请求；编排层负责初始 Job/Outbox、检查点、幂等重放和恢复。 |
 | ADR-020 | 静态工具失败保留结果工件并结构化结算失败；Task 阶段由实际 Job 推导。 |
 | ADR-021 | 以持久化审计计划驱动适用基线，以 Finding 驱动复核和条件动态深审；`NO_FINDINGS` 须以必跑基线完整、覆盖度门禁通过和自动报告成功为前提。（2026-09-10 已接受，D-001） |
+| ADR-022 | 空库通过 Web 一次性注册；模型连接与 API Key 由前端管理并持久化，API Key 不回显且传输依赖 HTTPS；基础设施与安全上限仍由部署配置注入。 |
 
 ## 8. 最近完成记录
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
 | 2026-09-10 | ADR-021 评审结论登记 | PR #17 合并入 `main`（`b704814`）；项目负责人批准 D-001，ADR-021 状态改为已接受，勾选评审结论并同步 `DEVELOPMENT_STATUS.md`；纯文档变更 | 按ADR-021实施顺序启动 AuditPlan/覆盖度/结算门禁设计任务 |
+| 2026-09-10 | T23 Web 首次注册与产品设置 | 独立网络与 tmpfs PostgreSQL 中 API/迁移/契约 34 passed；Ruff、Pyright、Svelte、Vite build、Compose config 通过；未触碰既有 VulnWeaver 容器/网络/卷 | 合并后在独立 TLS 部署完成浏览器首次启动 E2E |
 | 2026-09-09 | AGENTS.md 课设支撑性修订 | 对照课设功能要求审查开发规则：新增功能验收锚点、Dev Container 门禁约定、静态解析与运行样本边界澄清、教学漏洞样本规则、提示词资产管理和分支合并后清理规则；修正根目录文件清单与过期分支记录；已清理 7 个已合并本地功能分支和远程旧分支；纯文档修订，无代码行为变化 | 合并 PR #16 后继续按 T20/T21/T22 验收事项推进 |
 | 2026-09-09 | PR 前质量检查修复（`4318939`） | Pyright 定位可观测性端点 9 处类型错误，修复 `list_after` 位置传参运行时 Bug、failure 窄化和 `_count_values` 类型，并新增带失败 Job 的 API 回归测试；Dev Container 全量门禁通过（322 passed、81.22%） | 合并 PR 后继续 T20/T21/T22 真实回放 |
 | 2026-09-09 | 代码审查修复（Proof/Report，`6dfc0db`、`97115eb`） | `/code-review high --fix` 定位 7 处问题，已修复 5 处正确性缺陷并提交：Sandbox 状态 `is`→`==`、proof 输出文件名改为 `result.json`、移除报告版本过早读取、报告 job/幂等键按格式区分、调度器放行 pdf | Q-006/Q-007 两项待跟进 |
@@ -99,6 +102,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T23 定向门禁（隔离资源） | `codex-e2f0-*` 一次性容器、独立网络、tmpfs PostgreSQL：API/迁移/契约 34 passed（含 API Key 保留/清除）；Ruff、Pyright、Svelte、Vite 和 Compose 静态检查通过；测试资源已清除 | 未对既有运行栈执行迁移或浏览器 E2E |
 | 2026-09-09 | PR 前全量质量门禁（含集成环境） | Dev Container 内 `pnpm run check` 通过：Ruff、Pyright 0 错误，322 tests passed、1 skipped（Docker runtime 为 opt-in），分支覆盖率 81.22%，contracts tsc 与 svelte-check 0 错误 0 警告；PostgreSQL/Redis 集成测试经 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务后完整执行 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |
 | 2026-09-09 | T21 PDF 定向检查 | Dev Container 内 `svelte-check` 0 错误、0 警告；Vite build 成功；Ruff 通过；`pytest tests/reporting -q`：8 passed；API 测试 2 passed、10 skipped | API/Worker 真实数据库 PDF Job 和浏览器点击链路；API 跳过项因容器内未暴露宿主 55432 端口 |
 | 2026-09-09 | 全量质量门禁 | Dev Container 内 318 tests 通过，分支覆盖率 81.56%；Ruff、Pyright、TypeScript、Svelte、PostgreSQL/Redis 集成检查通过 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |

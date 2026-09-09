@@ -24,6 +24,22 @@ export interface Session {
   csrf_token?: string;
 }
 
+export interface InstallationStatus {
+  schema_version: "1.0.0";
+  registration_open: boolean;
+}
+
+export interface ProductSettings {
+  schema_version: "1.0.0";
+  review_model_base_url: string;
+  review_model_name: string;
+  review_model_timeout_seconds: number;
+  review_model_max_attempts: number;
+  review_model_repair_attempts: number;
+  review_model_min_interval_seconds: number;
+  api_key_configured: boolean;
+}
+
 
 export interface FindingEvidenceDetail {
   relation: FindingEvidence;
@@ -88,7 +104,14 @@ function writeHeaders(idempotent = false): HeadersInit {
 }
 
 export const api = {
+  installation: () => request<InstallationStatus>("/api/auth/installation"),
   me: () => request<Session>("/api/auth/me"),
+  register: (username: string, password: string) =>
+    request<Session>("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ schema_version: schemaVersion, username, password }),
+    }),
   login: (username: string, password: string) =>
     request<Session>("/api/auth/login", {
       method: "POST",
@@ -101,6 +124,15 @@ export const api = {
       method: "POST",
       headers: writeHeaders(true),
       body: JSON.stringify({ schema_version: schemaVersion, current_password, new_password }),
+    }),
+  settings: () => request<ProductSettings>("/api/settings"),
+  updateSettings: (settings: Omit<ProductSettings, "schema_version" | "api_key_configured"> & {
+    review_model_api_key: string | null; clear_review_model_api_key: boolean;
+  }) =>
+    request<ProductSettings>("/api/settings", {
+      method: "PUT",
+      headers: writeHeaders(),
+      body: JSON.stringify({ schema_version: schemaVersion, ...settings }),
     }),
   projects: () => request<Project[]>("/api/projects"),
   createProject: (payload: Omit<CreateProjectRequest, "schema_version">) =>

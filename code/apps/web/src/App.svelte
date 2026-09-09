@@ -14,9 +14,9 @@
     TaskResult,
     TaskStatus,
   } from "@vulnweaver/contracts";
-  import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type Session } from "./lib/api";
+  import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type ProductSettings, type Session } from "./lib/api";
 
-  type View = "overview" | "project" | "task";
+  type View = "overview" | "project" | "task" | "settings";
 
   const defaultBudget: ResourceBudget = {
     max_model_tokens: 100000,
@@ -40,6 +40,7 @@
   };
 
   let session: Session | null = null;
+  let registrationOpen = false;
   let booting = true;
   let busy = false;
   let error = "";
@@ -62,12 +63,17 @@
   let events: QueueEvent[] = [];
   let observability: Record<string, unknown> = {};
   let socket: WebSocket | null = null;
+  let productSettings: ProductSettings | null = null;
+  let reviewApiKey = "";
+  let clearReviewApiKey = false;
 
-  let username = "owner";
+  let username = "";
   let password = "";
   let currentPassword = "";
   let newPassword = "";
   let confirmPassword = "";
+  let registrationPassword = "";
+  let registrationConfirmation = "";
   let projectName = "";
   let projectScope = "已授权本地样本";
   let permissionMode: "request_permission" | "full_access" = "request_permission";
@@ -83,7 +89,9 @@
         session = await api.me();
         if (!session.must_change_password) await loadProjects();
       } catch (caught) {
-        if (!(caught instanceof ApiError) || caught.status !== 401) showError(caught);
+        if (caught instanceof ApiError && caught.status === 401) {
+          registrationOpen = (await api.installation()).registration_open;
+        } else showError(caught);
       } finally {
         booting = false;
       }
@@ -133,6 +141,22 @@
     } catch (caught) { busy = false; showError(caught); }
   }
 
+  async function register(): Promise<void> {
+    if (registrationPassword !== registrationConfirmation) { error = "两次输入的密码不一致"; return; }
+    begin();
+    try {
+      session = await api.register(username, registrationPassword);
+      registrationPassword = registrationConfirmation = "";
+      registrationOpen = false;
+      await loadProjects();
+      done("管理员账号已创建");
+    } catch (caught) {
+      busy = false;
+      if (caught instanceof ApiError && caught.status === 409) registrationOpen = false;
+      showError(caught);
+    }
+  }
+
   async function changePassword(): Promise<void> {
     if (newPassword !== confirmPassword) { error = "两次输入的新密码不一致"; return; }
     begin();
@@ -155,6 +179,37 @@
 
   async function loadProjects(): Promise<void> {
     projects = await api.projects();
+  }
+
+  async function openSettings(): Promise<void> {
+    begin();
+    try { socket?.close(); view = "settings"; productSettings = await api.settings(); done(); }
+    catch (caught) { busy = false; showError(caught); }
+  }
+
+  async function saveSettings(): Promise<void> {
+    if (!productSettings) return;
+    begin();
+    try {
+      const { schema_version: _schema, api_key_configured: _configured, ...values } = productSettings;
+      productSettings = await api.updateSettings({
+        ...values,
+        review_model_api_key: reviewApiKey || null,
+        clear_review_model_api_key: clearReviewApiKey,
+      });
+      reviewApiKey = ""; clearReviewApiKey = false;
+      done("设置已保存；模型连接设置会在分析 Worker 下次启动时生效");
+    } catch (caught) { busy = false; showError(caught); }
+  }
+
+  async function updatePasswordFromSettings(): Promise<void> {
+    if (newPassword !== confirmPassword) { error = "两次输入的新密码不一致"; return; }
+    begin();
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      currentPassword = newPassword = confirmPassword = "";
+      done("密码已更新，其他会话已撤销");
+    } catch (caught) { busy = false; showError(caught); }
   }
 
   async function createProject(): Promise<void> {
@@ -320,12 +375,15 @@
       <div class="trust-line"><span>● 默认禁网</span><span>● 原始工件不可变</span><span>● 控制面 / 执行面隔离</span></div>
     </section>
     <section class="auth-panel">
-      <form class="auth-form" on:submit|preventDefault={login}>
-        <p class="step">01 / 个人工作台</p><h2>登录</h2><p class="muted">使用部署时配置的个人账号。</p>
+      <form class="auth-form" on:submit|preventDefault={registrationOpen ? register : login}>
+        <p class="step">01 / 个人工作台</p><h2>{registrationOpen ? "创建管理员账号" : "登录"}</h2><p class="muted">{registrationOpen ? "这是全新安装。创建唯一的本地管理员后即可开始使用。" : "使用你的本地管理员账号继续。"}</p>
         {#if error}<div class="alert error" role="alert">{error}</div>{/if}
         <label>账号<input bind:value={username} autocomplete="username" required /></label>
-        <label>密码<input bind:value={password} type="password" autocomplete="current-password" required /></label>
-        <button class="primary wide" disabled={busy}>{busy ? "正在验证…" : "进入工作台"}</button>
+        {#if registrationOpen}
+          <label>密码<input bind:value={registrationPassword} type="password" minlength="12" autocomplete="new-password" required /></label>
+          <label>确认密码<input bind:value={registrationConfirmation} type="password" minlength="12" autocomplete="new-password" required /></label>
+        {:else}<label>密码<input bind:value={password} type="password" autocomplete="current-password" required /></label>{/if}
+        <button class="primary wide" disabled={busy}>{busy ? "正在处理…" : registrationOpen ? "创建账号并进入" : "进入工作台"}</button>
         <p class="fine-print">仅用于明确授权的本地样本与开源项目。</p>
       </form>
     </section>
@@ -346,14 +404,31 @@
   <div class="workspace">
     <header class="topbar"><button class="wordmark button-reset" on:click={goOverview}><span>VW</span> VULNWEAVER</button><div class="top-actions"><span class="system-state"><i></i> CONTROL PLANE</span><span class="account">{session.username}</span><button class="text-button" on:click={logout}>退出</button></div></header>
     <aside class="sidebar">
-      <nav aria-label="主导航"><button class:active={view === "overview"} on:click={goOverview}><b>01</b> 项目</button>{#if selectedProject}<button class:active={view === "project"} on:click={() => openProject(selectedProject!)}><b>02</b> 样本与任务</button>{/if}{#if selectedTask}<button class:active={view === "task"} on:click={() => openTask(selectedTask!)}><b>03</b> 执行轨迹</button>{/if}</nav>
+      <nav aria-label="主导航"><button class:active={view === "overview"} on:click={goOverview}><b>01</b> 项目</button>{#if selectedProject}<button class:active={view === "project"} on:click={() => openProject(selectedProject!)}><b>02</b> 样本与任务</button>{/if}{#if selectedTask}<button class:active={view === "task"} on:click={() => openTask(selectedTask!)}><b>03</b> 执行轨迹</button>{/if}<button class:active={view === "settings"} on:click={() => void openSettings()}><b>04</b> 设置</button></nav>
       <div class="sidebar-note"><span>SECURITY BOUNDARY</span><p>动态执行只允许经策略校验后进入一次性沙箱。</p></div>
     </aside>
     <main class="content">
       {#if error}<div class="alert error global" role="alert"><span>{error}</span><button on:click={() => error = ""}>关闭</button></div>{/if}
       {#if notice}<div class="alert success global" role="status"><span>{notice}</span><button on:click={() => notice = ""}>关闭</button></div>{/if}
 
-      {#if view === "overview"}
+      {#if view === "settings" && productSettings}
+        <section class="page-heading"><div><p class="eyebrow">INSTALLATION SETTINGS</p><h1>产品设置</h1><p>这些设置存储在 PostgreSQL。数据库、Cookie 安全策略、内部服务地址和 API 密钥仍由部署方安全注入。</p></div></section>
+        <form class="settings-form section-block" on:submit|preventDefault={saveSettings}>
+          <div class="section-head"><div><span>REVIEW MODEL</span><h2>独立复核模型</h2></div><small>{productSettings.api_key_configured ? "API Key 已配置（不回显）" : "API Key 未配置"}</small></div>
+          <label>OpenAI 兼容端点<input bind:value={productSettings.review_model_base_url} placeholder="https://example.com/v1" /></label>
+          <label>模型名称<input bind:value={productSettings.review_model_name} placeholder="review-model" /></label>
+          <label>API Key<input bind:value={reviewApiKey} type="password" autocomplete="new-password" placeholder={productSettings.api_key_configured ? "留空以保留现有值" : "输入 API Key"} /></label>
+          {#if productSettings.api_key_configured}<label class="check"><input type="checkbox" bind:checked={clearReviewApiKey} /><span><b>清除已保存的 API Key</b><small>保存后立即删除；输入新值会在未勾选时替换旧值。</small></span></label>{/if}
+          <div class="settings-grid"><label>超时（秒）<input bind:value={productSettings.review_model_timeout_seconds} type="number" min="1" max="600" /></label><label>最大尝试次数<input bind:value={productSettings.review_model_max_attempts} type="number" min="1" max="10" /></label><label>结构修复次数<input bind:value={productSettings.review_model_repair_attempts} type="number" min="0" max="5" /></label><label>请求最小间隔（秒）<input bind:value={productSettings.review_model_min_interval_seconds} type="number" min="0" max="3600" step="0.1" /></label></div>
+          <button class="primary" disabled={busy}>保存设置</button>
+        </form>
+        <form class="settings-form section-block full" on:submit|preventDefault={updatePasswordFromSettings}>
+          <div class="section-head"><div><span>ACCOUNT SECURITY</span><h2>更改密码</h2></div><small>成功后保留当前会话并撤销其他会话</small></div>
+          <label>当前密码<input bind:value={currentPassword} type="password" autocomplete="current-password" required /></label>
+          <div class="settings-grid"><label>新密码<input bind:value={newPassword} type="password" minlength="12" autocomplete="new-password" required /></label><label>确认新密码<input bind:value={confirmPassword} type="password" minlength="12" autocomplete="new-password" required /></label></div>
+          <button class="primary" disabled={busy}>更新密码</button>
+        </form>
+      {:else if view === "overview"}
         <section class="page-heading"><div><p class="eyebrow">AUTHORIZED WORKSPACE</p><h1>项目与分析范围</h1><p>每个项目隔离样本、任务和证据链，运行前明确授权边界。</p></div><button class="primary" on:click={() => showProjectForm = !showProjectForm}>{showProjectForm ? "收起" : "+ 新建项目"}</button></section>
         <section class="metric-strip"><div><strong>{projects.length}</strong><span>已授权项目</span></div><div><strong>{projects.filter((p) => p.exploit_validation_enabled).length}</strong><span>开启利用验证</span></div><div><strong>{projects.filter((p) => p.permission_mode === "request_permission").length}</strong><span>需运行许可</span></div></section>
         {#if showProjectForm}<form class="inline-form" on:submit|preventDefault={createProject}><div class="form-title"><span>NEW SCOPE</span><h2>创建项目</h2></div><label>项目名称<input bind:value={projectName} placeholder="例：网关 2.4 安全复核" required /></label><label>授权范围<input bind:value={projectScope} required /></label><label>运行模式<select bind:value={permissionMode}><option value="request_permission">每次动态执行前请求许可</option><option value="full_access">在已授权范围内自动执行</option></select></label><label class="check"><input type="checkbox" bind:checked={exploitEnabled} /><span><b>允许利用验证</b><small>仅对 confirmed Finding，且仍需经策略门禁。</small></span></label><button class="primary" disabled={busy}>创建并进入</button></form>{/if}

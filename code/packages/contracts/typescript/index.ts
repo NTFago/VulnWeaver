@@ -850,6 +850,24 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface RegistrationRequest {
+  schema_version: SchemaVersion;
+  username: string;
+  password: string;
+}
+
+export interface ProductSettings {
+  schema_version: SchemaVersion;
+  review_model_base_url: string;
+  review_model_name: string;
+  review_model_timeout_seconds: number;
+  review_model_max_attempts: number;
+  review_model_repair_attempts: number;
+  review_model_min_interval_seconds: number;
+  review_model_api_key?: string | null;
+  clear_review_model_api_key?: boolean;
+}
+
 export interface PasswordChangeRequest {
   schema_version: SchemaVersion;
   current_password: string;
