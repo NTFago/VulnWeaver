@@ -29,7 +29,18 @@ class ReportJobScheduler:
             retryable_failure_kinds=[FailureKind.TIMEOUT, FailureKind.ENVIRONMENT],
         )
 
-    async def schedule(self, repositories: Repositories, task_id: str) -> Job:
+    async def schedule(
+        self,
+        repositories: Repositories,
+        task_id: str,
+        *,
+        artifact_id: str,
+        version_id: str,
+        parent_version_id: str,
+        report_format: str = "markdown",
+    ) -> Job:
+        if report_format not in {"markdown", "sarif"}:
+            raise ValueError("unsupported report format")
         task = await repositories.tasks.get(task_id, for_update=True)
         created_at = task["updated_at"]
         job_id = f"job:report:{task_id}"
@@ -39,7 +50,16 @@ class ReportJobScheduler:
             task_id=task_id,
             kind=JobKind.REPORT,
             tool=self._tool,
-            arguments=cast(JsonObject, {"task_id": task_id}),
+            arguments=cast(
+                JsonObject,
+                {
+                    "task_id": task_id,
+                    "artifact_id": artifact_id,
+                    "version_id": version_id,
+                    "parent_version_id": parent_version_id,
+                    "format": report_format,
+                },
+            ),
             input_refs=[],
             status=JobStatus.QUEUED,
             idempotency_key=f"report:{task_id}",
