@@ -3,3 +3,98 @@
 .settings-form{max-width:880px}.settings-form>label,.settings-grid label{display:grid;gap:9px;margin:22px 0;color:#b8beb5;font-size:12px}.settings-form input{width:100%;border:1px solid var(--line);background:#0f110f;color:#eef1eb;padding:13px 14px}.settings-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:0 18px}.settings-form>.primary{margin-top:18px}@media(max-width:700px){.settings-grid{grid-template-columns:1fr}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
  .finding-row{width:100%;display:grid;grid-template-columns:16px 1fr auto;gap:10px;align-items:center;text-align:left;padding:14px 2px;border:0;border-bottom:1px solid var(--line);background:transparent;color:#e4e8e0}.finding-row:hover{background:#1d211d}.finding-row div{display:grid;gap:5px}.finding-row small,.finding-detail small{color:var(--muted);font-size:10px}.finding-detail{margin-top:16px;padding:16px;border-left:2px solid var(--accent);background:#1d211d}.finding-detail p{color:#b9c0b6;line-height:1.6;font-size:12px}.report-links{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+
+/* Workbench layout: a wide evidence rail with quieter, purpose-sized side regions. */
+.workspace{grid-template-columns:248px minmax(0,1fr)}
+.topbar{padding-inline:28px}
+.sidebar{padding:32px 20px 24px}
+.content{width:100%;max-width:1600px;margin-inline:auto;padding:52px clamp(28px,4vw,72px) 88px}
+.page-heading{min-height:184px;padding-bottom:38px}
+.page-heading>div{min-width:0}
+.page-heading h1{max-width:16ch;text-wrap:balance}
+.page-heading>div>p:last-child{max-width:68ch}
+.metric-strip{grid-template-columns:repeat(3,minmax(0,1fr));background:rgba(255,255,255,.008)}
+.metric-strip>div{min-width:0}
+.metric-strip strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.inline-form{grid-template-columns:minmax(180px,.85fr) minmax(240px,1.25fr) minmax(240px,1.2fr);padding:30px}
+.split-grid{grid-template-columns:minmax(320px,.88fr) minmax(420px,1.12fr);gap:24px}
+.task-grid{grid-template-columns:minmax(320px,.82fr) minmax(440px,1.18fr);gap:24px;margin-top:24px}
+.section-block{min-width:0;padding:28px}
+.section-block.full{margin-top:24px}
+.task-metrics{grid-template-columns:repeat(5,minmax(0,1fr))}
+.task-metrics>div{padding-inline:20px}
+.task-metrics strong{font-size:clamp(18px,1.7vw,27px)}
+.task-actions{flex-wrap:wrap;justify-content:flex-end}
+.task-actions .secondary{margin-top:0}
+.finding-row{padding:16px 8px;transition:background .12s,padding .12s}
+.finding-row:hover{padding-inline:12px}
+.finding-detail{padding:22px 24px}
+.proof-actions{display:grid;grid-template-columns:minmax(190px,1fr) minmax(220px,1fr) auto auto;gap:12px;align-items:end;margin-top:20px;padding-top:20px;border-top:1px solid var(--line)}
+.proof-actions label{display:grid;gap:8px;color:#aeb5ab;font-size:11px}
+.proof-actions input{width:100%;min-width:0;border:1px solid var(--line);border-radius:var(--radius);background:#111411;color:#eef1eb;padding:11px 12px}
+.proof-actions .secondary,.proof-actions .danger{margin:0;white-space:nowrap}
+.detail-evidence{display:grid;gap:9px;margin-top:18px;padding-top:18px;border-top:1px solid var(--line)}
+.detail-evidence>b{font-size:12px}
+.detail-evidence small{padding-left:12px;border-left:1px solid #454c43;line-height:1.55}
+.timeline,.job-list{max-height:540px;overflow:auto;scrollbar-color:#434a41 transparent;scrollbar-width:thin}
+.timeline details{min-width:0;margin-top:5px}
+.timeline summary{width:max-content;color:#7f867c;cursor:pointer;font-size:10px}
+.timeline details code{display:block;max-width:100%;margin-top:8px;padding:10px;overflow:auto;background:#111411;color:#b9c0b6;font-size:10px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.report-links .secondary{margin-top:0;text-decoration:none}
+
+@media(max-width:1180px){
+  .workspace{grid-template-columns:210px minmax(0,1fr)}
+  .content{padding-inline:32px}
+  .task-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .task-metrics>div:nth-child(3){border-right:0}
+  .task-metrics>div:nth-child(n+4){border-top:1px solid var(--line)}
+  .proof-actions{grid-template-columns:1fr 1fr}
+}
+
+@media(max-width:900px){
+  .workspace{grid-template:58px auto 1fr/1fr}
+  .topbar{padding-inline:18px}
+  .sidebar{top:58px;padding-inline:16px}
+  .sidebar nav{min-width:max-content}
+  .content{max-width:none;padding:36px 20px 64px}
+  .page-heading{min-height:0;padding-bottom:28px}
+  .page-heading h1{max-width:none}
+  .split-grid,.task-grid{grid-template-columns:1fr}
+  .task-grid{margin-top:20px}
+  .inline-form{grid-template-columns:1fr 1fr}
+  .inline-form .form-title{grid-column:1/-1}
+  .inline-form .check{grid-column:1/2}
+  .metric-strip{overflow:visible}
+  .task-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .task-metrics>div{min-width:0;border-top:1px solid var(--line)}
+  .task-metrics>div:nth-child(-n+2){border-top:0}
+  .task-metrics>div:nth-child(odd){border-right:1px solid var(--line)}
+  .task-metrics>div:nth-child(even){border-right:0}
+  .task-metrics>div:last-child{grid-column:1/-1}
+  .timeline,.job-list{max-height:none}
+}
+
+@media(max-width:620px){
+  .top-actions{gap:10px}
+  .account{max-width:110px;padding-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .content{padding-inline:16px}
+  .page-heading{gap:20px}
+  .page-heading h1{font-size:36px}
+  .page-heading>.primary,.scope-badge{align-self:stretch;text-align:center}
+  .inline-form{grid-template-columns:1fr;padding:22px}
+  .inline-form .check{grid-column:auto}
+  .section-block{padding:22px 18px}
+  .section-head{gap:14px}
+  .section-head .task-actions{width:100%;justify-content:flex-start}
+  .task-heading .task-actions{align-items:stretch;flex-direction:column}
+  .task-metrics{grid-template-columns:1fr}
+  .task-metrics>div,.task-metrics>div:nth-child(odd),.task-metrics>div:nth-child(even){border-right:0;border-top:1px solid var(--line)}
+  .task-metrics>div:first-child{border-top:0}
+  .task-metrics>div:last-child{grid-column:auto}
+  .metric-strip:not(.task-metrics){grid-template-columns:1fr}
+  .metric-strip:not(.task-metrics)>div{border-right:0;border-top:1px solid var(--line)}
+  .metric-strip:not(.task-metrics)>div:first-child{border-top:0}
+  .project-row{padding-block:18px}
+  .proof-actions{grid-template-columns:1fr}
+  .proof-actions .secondary,.proof-actions .danger{width:100%}
+}
