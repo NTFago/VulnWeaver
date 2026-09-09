@@ -15,7 +15,7 @@
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 `feat/t19-fuzz-triage`，T19-R2 检查点为 `d844548`，R-002 为当前分支最新本地提交，均未推送或合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；R-002 已完成，T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
+- **当前负责人**：Codex；已认领 R-003 `origin/main` 同步与冲突解决；T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
 
 ## 3. 开发进度
 
@@ -48,6 +48,7 @@
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
+| R-003 `origin/main` 同步与冲突解决 | 进行中 | Codex | 已刷新远端引用并预演合并；确认代码可自动合并，唯一内容冲突为双方均更新的动态交接台账 | 合并 `origin/main`，按双方事实合并台账并执行全量回归 | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
