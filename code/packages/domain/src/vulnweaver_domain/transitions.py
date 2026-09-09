@@ -34,16 +34,27 @@ class FindingConfirmationError(ValueError):
 TASK_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.CREATED: frozenset({TaskStatus.VALIDATING, TaskStatus.CANCELLED, TaskStatus.FAILED}),
     TaskStatus.VALIDATING: frozenset(
-        {TaskStatus.ANALYZING, TaskStatus.CANCELLED, TaskStatus.FAILED}
+        {
+            TaskStatus.ANALYZING,
+            TaskStatus.COMPLETED,
+            TaskStatus.CANCELLED,
+            TaskStatus.FAILED,
+        }
     ),
     TaskStatus.ANALYZING: frozenset(
-        {TaskStatus.REVIEWING, TaskStatus.CANCELLED, TaskStatus.FAILED}
+        {
+            TaskStatus.REVIEWING,
+            TaskStatus.COMPLETED,
+            TaskStatus.CANCELLED,
+            TaskStatus.FAILED,
+        }
     ),
     TaskStatus.REVIEWING: frozenset(
         {
             TaskStatus.VERIFYING,
             TaskStatus.EXPLOITING,
             TaskStatus.REPORTING,
+            TaskStatus.COMPLETED,
             TaskStatus.CANCELLED,
             TaskStatus.FAILED,
         }
@@ -52,12 +63,18 @@ TASK_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
         {
             TaskStatus.EXPLOITING,
             TaskStatus.REPORTING,
+            TaskStatus.COMPLETED,
             TaskStatus.CANCELLED,
             TaskStatus.FAILED,
         }
     ),
     TaskStatus.EXPLOITING: frozenset(
-        {TaskStatus.REPORTING, TaskStatus.CANCELLED, TaskStatus.FAILED}
+        {
+            TaskStatus.REPORTING,
+            TaskStatus.COMPLETED,
+            TaskStatus.CANCELLED,
+            TaskStatus.FAILED,
+        }
     ),
     TaskStatus.REPORTING: frozenset(
         {TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED}
