@@ -13,7 +13,7 @@
 - **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2 已补齐版本化基本块、Xref、Ghidra 伪代码和有界 angr 定点符号事实；T17 已完成二进制结果向 PAIR 的幂等导入、地址查询和 API 接入；T18 已形成并实际运行验证 Sandbox Runner 安全基线，但仍需补齐更广泛的动态负向场景。普通 ELF/PE 可生成函数、地址、指令、CFG、调用/跳转引用并在 PAIR 中查询；T16 最终工具镜像仍受 Q-006 影响。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t18-sandbox-runner` 基于 T17 提交 `80e2b22`，开始开发 T18，尚未推送或合并。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t18-sandbox-runner` 基于 T17 提交 `80e2b22`，T18 基线提交 `3551bea`，后续 pids 参数修正待提交，尚未推送或合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：Codex；T16 为待验证，T17 已完成，T18 实现完成待验证，继续负责 Sandbox Runner 安全基线任务包
 
@@ -113,8 +113,8 @@
 - 负责人：Codex
 - 状态：待验证（实现完成，真实 Docker runtime 验收未执行）
 - 修改文件：`code/packages/contracts/`、`code/packages/sandbox-runner/`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/contracts/test_validation.py`、`code/tests/sandbox_runner/`
-- 已完成：新增 `SandboxRequest`、`SandboxResult`、输出和资源用量契约；新增独立 `sandbox-runner` 包；请求必须精确匹配 ToolSpec 和受信任命令 profile，镜像摘要、工件类型、参数 Schema、资源预算、禁网/只读输入/隔离输出和无审批运行边界均由 Runner 再次校验；CAS 工件只通过服务自有 scratch 目录挂载，外部命令采用固定 argv、无 Shell，Docker runtime 固定 `--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root、pids/memory/cpu/tmpfs 约束；stdout/stderr/输出文件受大小限制并登记 CAS，执行后清理容器和 scratch，无法确认清理时结果变为 `orphaned`，支持按 ownership label 回收孤儿容器。
-- 测试与结果：Sandbox Runner/契约定向测试 19 passed；全量 `pnpm run check` 通过，278 passed、总分支覆盖率 82.56%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check` 和 Compose 配置通过；负向测试覆盖未注册工具、镜像摘要不匹配、工件类型拒绝、命令参数越界、ToolSpec 网络/文件系统策略不安全、未授权输出、清理失败和非法孤儿容器名。使用本机已有 `alpine@sha256:d9e853...` 镜像执行固定 `/bin/cat /input/input.bin` 成功，`/bin/touch /blocked` 受只读根文件系统阻断，`/usr/bin/yes` 输出洪泛被终止，`/bin/sleep 30` 在 1 秒预算后超时，均确认容器回收；`docker inspect` 确认 `NetworkMode=none`、只读根、`CapDrop=ALL`、`no-new-privileges=true`、`User=10001:10001`、`PidsLimit=128`、内存限制 64 MiB。
+- 已完成：新增 `SandboxRequest`、`SandboxResult`、输出和资源用量契约；新增独立 `sandbox-runner` 包；请求必须精确匹配 ToolSpec 和受信任命令 profile，镜像摘要、工件类型、参数 Schema、资源预算、禁网/只读输入/隔离输出和无审批运行边界均由 Runner 再次校验；CAS 工件只通过服务自有 scratch 目录挂载，外部命令采用固定 argv、无 Shell，Docker runtime 固定 `--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root、固定 pids=128/memory/cpu/tmpfs 约束；stdout/stderr/输出文件受大小限制并登记 CAS，执行后清理容器和 scratch，无法确认清理时结果变为 `orphaned`，支持按 ownership label 回收孤儿容器。
+- 测试与结果：Sandbox Runner/契约定向测试 19 passed（包含 pids 参数修正后的 6 个 Sandbox Runner 测试）；全量 `pnpm run check` 通过，278 passed、总分支覆盖率 82.56%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check` 和 Compose 配置通过；负向测试覆盖未注册工具、镜像摘要不匹配、工件类型拒绝、命令参数越界、ToolSpec 网络/文件系统策略不安全、未授权输出、清理失败和非法孤儿容器名。使用本机已有 `alpine@sha256:d9e853...` 镜像执行固定 `/bin/cat /input/input.bin` 成功，`/bin/touch /blocked` 受只读根文件系统阻断，`/usr/bin/yes` 输出洪泛被终止，`/bin/sleep 30` 在 1 秒预算后超时，均确认容器回收；`docker inspect` 确认 `NetworkMode=none`、只读根、`CapDrop=ALL`、`no-new-privileges=true`、`User=10001:10001`、`PidsLimit=128`、内存限制 64 MiB。
 - 问题：Docker 镜像构建仍受 Q-006 的 Docker Hub 元数据网络问题影响；真实 runtime 已用本机 Alpine 验证，但尚未执行网络流量和内存/进程压力的独立固定样本。
 - 阻碍点：无；可以继续实现 T19/T20 的调用适配，真实 runtime 验收在可用镜像和 Docker 配置下补跑。
 - 决策：无新增 ADR；Sandbox Runner 是唯一允许创建容器的组件，当前只提供库和 Docker CLI runtime，调用方不得传入 Docker 参数、宿主路径或任意 shell 字符串。

@@ -190,7 +190,7 @@ class DockerCliRuntime:
             "--security-opt",
             "no-new-privileges=true",
             "--pids-limit",
-            str(max(1, request.resource_budget["max_dynamic_runs"] or 128)),
+            "128",
             "--memory",
             str(request.resource_budget["memory_bytes"]),
             "--cpus",
