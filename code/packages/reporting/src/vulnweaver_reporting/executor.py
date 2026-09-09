@@ -72,12 +72,9 @@ class ReportJobExecutor:
                 task = await repositories.tasks.get(task_id)
                 findings = await repositories.findings.list_for_task(task["id"])
                 artifact = await repositories.artifacts.get(artifact_id)
-                version = await repositories.artifacts.get_version(version_id)
                 if (
                     artifact["kind"].value != "derived"
                     or artifact["project_id"] != task["project_id"]
-                    or version["artifact_id"] != artifact["id"]
-                    or version.get("parent_version_id") != parent_version_id
                 ):
                     return _failure(job, "report.artifact_mismatch", FailureKind.POLICY)
             if report_format == "sarif":

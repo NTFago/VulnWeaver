@@ -39,11 +39,11 @@ class ReportJobScheduler:
         parent_version_id: str,
         report_format: str = "markdown",
     ) -> Job:
-        if report_format not in {"markdown", "sarif"}:
+        if report_format not in {"markdown", "sarif", "pdf"}:
             raise ValueError("unsupported report format")
         task = await repositories.tasks.get(task_id, for_update=True)
         created_at = task["updated_at"]
-        job_id = f"job:report:{task_id}"
+        job_id = f"job:report:{task_id}:{report_format}"
         job = Job(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=job_id,
@@ -62,7 +62,7 @@ class ReportJobScheduler:
             ),
             input_refs=[],
             status=JobStatus.QUEUED,
-            idempotency_key=f"report:{task_id}",
+            idempotency_key=f"report:{task_id}:{report_format}",
             resource_budget=task["resource_budget"],
             retry_policy=self._retry_policy,
             attempt=0,
