@@ -232,3 +232,65 @@ def _finding(finding_id: str, task_id: str, version_id: str) -> Finding:
             "created_at": "2026-09-09T00:00:00Z",
         },
     )
+
+
+def test_out_of_phase_proof_job_settles_without_poisoning_the_worker(
+    persistence_database_url: str,
+) -> None:
+    """A proof job on a task that never entered reviewing must not raise.
+
+    The aggregation skips illegal phase hops (Q-008): the settlement succeeds,
+    the task advances only through legal transitions, and the worker is not
+    sent into a retry loop.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        project_id = f"project:{suffix}"
+        artifact_id = f"artifact:{suffix}"
+        version_id = f"artifact-version:{suffix}"
+        task_id = f"task:{suffix}"
+        proof = job(
+            f"job:proof:{suffix}",
+            task_id=task_id,
+            idempotency_key=f"proof:{suffix}",
+            kind=JobKind.PROOF,
+        )
+        proof["status"] = JobStatus.SUCCEEDED
+        hook = TaskAggregateSettlementHook()
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project(project_id))
+                await repositories.artifacts.add(
+                    artifact(artifact_id, project_id=project_id, current_version_id=version_id)
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(version_id, artifact_id=artifact_id)
+                )
+                await repositories.tasks.create(
+                    task(
+                        task_id,
+                        project_id=project_id,
+                        artifact_version_ids=[version_id],
+                        idempotency_key=f"task:{suffix}",
+                    )
+                )
+                await repositories.jobs.create_without_outbox(proof)
+                await hook.after_terminal(repositories, proof, _result(proof))
+
+            async with database.transaction() as repositories:
+                stored = await repositories.tasks.get(task_id)
+                # The illegal verifying hop is skipped; the remaining path
+                # (created -> validating -> completed) is fully legal.
+                assert stored["status"] is TaskStatus.COMPLETED
+                assert stored["result"] is TaskResult.NO_FINDINGS
+                events = await repositories.task_events.list_after(task_id)
+                assert [event["payload"]["status"] for event in events] == [
+                    TaskStatus.VALIDATING,
+                    TaskStatus.COMPLETED,
+                ]
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

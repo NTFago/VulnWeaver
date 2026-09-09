@@ -55,7 +55,7 @@
 | Q-005 | 复核源码事实目前主要是位置附近的有界片段和 PAIR 关系快照，尚未自动扩展跨函数调用邻域 | 复杂跨函数问题的模型召回率可能受影响；安全门禁仍会阻止弱事实确认 | 先以真实 P2 样本评估，必要时再扩展事实读取范围 | 待处理 | 未分配 |
 | Q-006 | Proof/Exploit 创建接口未校验客户端传入的 `script_ref` 是否归属当前 Finding 的 task 项目 | 用户可传入其他项目共享 CAS 存储中的派生对象引用，沙箱仅校验引用存在性，可能越出 Finding 项目范围执行脚本 | 已修复：Scheduler 与 Executor 通过 `find_project_version_by_object_ref` 按项目范围解析 `script_ref`，跨项目或未登记引用被拒绝（`proof.script_ref_outside_project`） | 已处理 | Codex |
 | Q-007 | ProofJobExecutor 的数据库事务横跨长时间沙箱 HTTP 调用 | 沙箱运行期间（默认最长 120s）持续占用一条 DB 连接，并发下可能耗尽连接池阻塞其他 DB 工作 | 已修复：拆分为「加载校验事务 → 无事务沙箱调用 → Poc 持久化事务」三段，SQLAlchemy 连接不再被沙箱调用占用 | 已处理 | Codex |
-| Q-008 | 任务聚合并集推导不允许跨阶段跳跃；若 Job 脱离正常管线（如手工向 `created` 任务挂 Proof Job），settlement hook 抛 `IllegalTransitionError` 并反复重试形成毒消息 | 非常规入口的 Job 会无限重试、重复触发沙箱执行 | 正常管线不触发；暂以运维规范约束（Job 必须经编排登记），必要时改为容错跳阶段或死信 | 待处理 | 未分配 |
+| Q-008 | 任务聚合并集推导不允许跨阶段跳跃；若 Job 脱离正常管线（如手工向 `created` 任务挂 Proof Job），settlement hook 抛 `IllegalTransitionError` 并反复重试形成毒消息 | 非常规入口的 Job 会无限重试、重复触发沙箱执行 | 已修复：`_transition_path` 只输出状态机允许的迁移（越阶段跳被跳过），结算钩子对残余非法迁移记录 `task_aggregation_transition_skipped` 并继续；回归测试确认越阶段 Proof Job 正常结算且任务仅经合法迁移收尾 | 已处理 | Codex |
 
 ## 5. 当前阻碍点
 
