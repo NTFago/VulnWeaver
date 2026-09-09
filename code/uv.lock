@@ -1356,6 +1356,7 @@ dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-sandbox-runner" },
 ]
 
 [package.metadata]
@@ -1364,6 +1365,7 @@ requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
 ]
 
 [[package]]
@@ -1601,6 +1603,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "uvicorn" },
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-binary-analysis" },
     { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-proof" },
     { name = "vulnweaver-sandbox-runner" },
@@ -1612,6 +1615,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "uvicorn", specifier = ">=0.34,<1" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
     { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },

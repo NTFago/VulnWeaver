@@ -6,6 +6,7 @@ import os
 
 import uvicorn
 from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_binary_analysis import binary_command_profile, binary_tool_spec
 from vulnweaver_contracts import ResourceBudget
 from vulnweaver_fuzzing import afl_casr_command_profile, afl_casr_tool_spec
 from vulnweaver_proof import proof_command_profile, proof_tool_spec
@@ -24,6 +25,20 @@ def build_app():
     digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     profiles: list[SandboxCommandProfile] = []
     proof_digest = os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
+    binary_digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip()
+    if binary_digest:
+        registry.register(
+            binary_tool_spec(
+                binary_digest,
+                _binary_resource_budget(),
+            )
+        )
+        profiles.append(
+            binary_command_profile(
+                os.environ.get("BINARY_TOOLS_IMAGE_REF", "vulnweaver-binary-tools:fixed"),
+                binary_digest,
+            )
+        )
     if proof_digest:
         registry.register(
             proof_tool_spec(
@@ -89,6 +104,18 @@ def _fuzz_resource_budget() -> ResourceBudget:
         "max_tool_concurrency": 1,
         "max_dynamic_runs": 1,
         "timeout_seconds": int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
+    }
+
+
+def _binary_resource_budget() -> ResourceBudget:
+    return {
+        "max_model_tokens": 0,
+        "cpu_millis": int(os.environ.get("BINARY_CPU_MILLIS", "4000")),
+        "memory_bytes": int(os.environ.get("BINARY_MEMORY_BYTES", str(3 * 1024 * 1024 * 1024))),
+        "disk_bytes": int(os.environ.get("BINARY_DISK_BYTES", str(1024 * 1024 * 1024))),
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 0,
+        "timeout_seconds": int(os.environ.get("BINARY_TIMEOUT_SECONDS", "600")),
     }
 
 

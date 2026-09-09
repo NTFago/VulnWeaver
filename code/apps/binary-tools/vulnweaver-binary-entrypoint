@@ -1,0 +1,128 @@
+#!/app/.venv/bin/python3
+"""Sandboxed binary-analysis entrypoint running the real VulnWeaver adapters.
+
+The sandbox materializes the target ELF/PE at /input/input.bin. This entrypoint
+inspects headers, detects compiler/packer with DIE, tests and performs UPX
+unpacking, disassembles with objdump, and runs bounded Ghidra headless
+decompilation, then publishes one bounded binary-facts.json to the output dir.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import dataclasses
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+from vulnweaver_binary_analysis import (
+    BinaryAnalysisLimits,
+    BinaryMetadata,
+    DetectItEasyAdapter,
+    GhidraHeadlessAdapter,
+    ObjdumpAdapter,
+    UpxAdapter,
+    inspect_binary,
+)
+GHIDRA_EXECUTABLE = "/opt/ghidra/support/analyzeHeadless"
+GHIDRA_SCRIPTS = "/opt/vulnweaver/ghidra-scripts"
+SCHEMA_VERSION = "1.0.0"
+
+
+def _run_dict(contribution) -> dict[str, object]:
+    counts = {
+        "functions": len(contribution.functions),
+        "instructions": len(contribution.instructions),
+        "basic_blocks": len(contribution.basic_blocks),
+        "xrefs": len(contribution.xrefs),
+        "pseudocode": len(contribution.pseudocode),
+    }
+    return {**dict(contribution.run), "counts": counts}
+
+
+def _sampled(items: tuple, limit: int = 5) -> list[object]:
+    return list(items[:limit])
+
+
+async def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--max-functions", type=int, required=True)
+    parser.add_argument("--max-instructions", type=int, required=True)
+    parser.add_argument("--max-pseudocode-functions", type=int, required=True)
+    args = parser.parse_args()
+    if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
+        print("binary limits must be positive", file=sys.stderr)
+        return 2
+
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    workdir = Path("/work") / "run"
+    workdir.mkdir(parents=True, exist_ok=True)
+    # The container rootfs is read-only, so HOME must point at /work.
+    os.environ["HOME"] = "/work/home"
+    Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
+    cancellation = asyncio.Event()
+
+    limits = BinaryAnalysisLimits(
+        max_functions=args.max_functions,
+        max_instructions=args.max_instructions,
+        max_pseudocode_functions=args.max_pseudocode_functions,
+    )
+    try:
+        # The Ghidra adapter creates scratch space next to the target, so the
+        # analysis copy must live on the writable /work tmpfs, not /input.
+        target = workdir / "target"
+        shutil.copyfile(args.input, target)
+        target.chmod(0o755)
+        metadata: BinaryMetadata = inspect_binary(target, limits)
+        die = await DetectItEasyAdapter().analyze(target, metadata, limits, cancellation)
+        unpacked_path = workdir / "unpacked"
+        upx = await UpxAdapter().unpack(target, unpacked_path, limits, cancellation)
+        objdump = await ObjdumpAdapter().analyze(target, metadata, limits, cancellation)
+        ghidra = await GhidraHeadlessAdapter(
+            GHIDRA_EXECUTABLE, GHIDRA_SCRIPTS
+        ).analyze(target, metadata, limits, cancellation)
+
+        facts = {
+            "schema_version": SCHEMA_VERSION,
+            "metadata": dataclasses.asdict(metadata),
+            "tools": {
+                "die": {
+                    **_run_dict(die),
+                    "compiler": die.compiler,
+                    "packer": die.packer,
+                    "packed": die.packed,
+                },
+                "upx": {
+                    "run": dict(upx.run),
+                    "packed": upx.packed,
+                    "unpacked": upx.unpacked_path is not None,
+                },
+                "objdump": _run_dict(objdump),
+                "ghidra": _run_dict(ghidra),
+            },
+            "samples": {
+                "objdump_functions": _sampled(objdump.functions),
+                "ghidra_pseudocode": _sampled(ghidra.pseudocode),
+            },
+        }
+        payload = json.dumps(facts, ensure_ascii=True, sort_keys=True, default=str)
+        if len(payload) > 8 * 1024 * 1024:
+            payload = payload[: 8 * 1024 * 1024]
+        (output_dir / "binary-facts.json").write_text(payload, encoding="utf-8")
+        return 0
+    except Exception as error:  # the structured output is the tool contract
+        import traceback
+
+        print(f"binary entrypoint failed: {error}", file=sys.stderr)
+        traceback.print_exc()
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

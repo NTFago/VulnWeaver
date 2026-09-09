@@ -432,6 +432,8 @@ class GhidraHeadlessAdapter:
             return ToolContribution(run=_unavailable_run(self.name, "not_configured"))
         with tempfile.TemporaryDirectory(prefix="vulnweaver-ghidra-", dir=path.parent) as temporary:
             root = Path(temporary)
+            # Ghidra refuses to create the project directory itself.
+            (root / "project").mkdir()
             output = root / "vulnweaver-ghidra.json"
             try:
                 result = await self._runner.run(

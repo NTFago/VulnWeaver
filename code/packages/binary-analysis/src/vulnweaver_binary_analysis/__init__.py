@@ -9,6 +9,10 @@ from vulnweaver_binary_analysis.headers import (
     extract_strings,
     inspect_binary,
 )
+from vulnweaver_binary_analysis.profiles import (
+    binary_command_profile,
+    binary_tool_spec,
+)
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
     BoundedCommandRunner,
@@ -35,6 +39,8 @@ from vulnweaver_binary_analysis.types import (
 
 __all__ = [
     "AngrAdapter",
+    "binary_command_profile",
+    "binary_tool_spec",
     "BinaryAnalysisAggregate",
     "BinaryAnalysisExecutionError",
     "BinaryAnalysisLimits",
