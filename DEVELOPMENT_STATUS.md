@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001/R-002 代码审计与修复已完成
-- **总体状态**：T15 已完成；P2 仅缺真实 REVIEW 模型四语言端到端验收。T16-R2/T17 已完成二进制分析与 PAIR 接入。T18 已补齐 POSIX 路径、组合输出预算、管理命令超时、取消清理、Docker tmpfs 输出硬配额和执行期资源采样，并用本机固定摘要 Alpine 验证配额溢出、输出回收和无孤儿清理；其余网络/内存/进程压力仍待验收。T19 已交付固定 AFL++/CASR profile、确定性 CAS 输入 bundle 和 Sandbox 编排；最小输入改为无压缩归档、累计预算、先校验后发布且只发布请求预算内记录，真实工具镜像验收仍待完成。API WebSocket 已能在空闲期感知断连并停止轮询。
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
+- **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 `feat/t19-fuzz-triage`，T19-R2 检查点为 `d844548`，R-002 为当前分支最新本地提交，均未推送或合并。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 PR #12 源分支 `feat/t19-fuzz-triage`，已纳入 `origin/main@a88dfd0`；唯一冲突为动态台账，已按双方事实完成语义合并并通过全量验证，等待 PR 远端检查与评审合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；已认领 R-003 `origin/main` 同步与冲突解决；T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
+- **当前负责人**：Codex；R-003 PR #12 与 `origin/main` 同步已完成；T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
 
 ## 3. 开发进度
 
@@ -48,12 +48,13 @@
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
-| R-003 `origin/main` 同步与冲突解决 | 进行中 | Codex | 已刷新远端引用并预演合并；确认代码可自动合并，唯一内容冲突为双方均更新的动态交接台账 | 合并 `origin/main`，按双方事实合并台账并执行全量回归 | 2026-09-09 |
+| R-003 `origin/main` 同步与冲突解决 | 已完成 | Codex | PR #12 源分支已合并 `origin/main@a88dfd0`；代码自动合并，动态台账按双方事实处理唯一冲突并消除重复问题编号；全量回归及静态、契约、锁文件检查通过 | 等待 PR #12 远端检查与评审流程合并 `main` | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
 | T15 R2/R3 Git 历史整合 | 已完成 | Codex | 核对快照基线与 `origin/main` 文件树一致，从 `origin/main@e9f7914` 创建正常历史分支并无冲突移植 3 个提交；Docker 全量门禁、锁文件、Compose 配置及受影响镜像构建均通过，本地 `main` 快进到整合结果 | 无；远端 `main` 尚未推送 | 2026-09-09 |
 | T15-R4 自动复核、Task 聚合与 Annotation/API | 已完成 | Codex | 最后一个静态 Job 终止时同事务为去重 Findings 创建 REVIEW Job/Outbox；执行器传递稳定 attempt 身份和 `max_model_tokens`；Worker 结算 hook 聚合 Task 并追加事件；0014 新增追加式 Annotation；补齐 Finding/Evidence、PAIR、AgentRun、Annotation 与人工 Review API | 无 | 2026-09-09 |
+| T15-R5 静态分析失败与结果完整性 | 已完成 | Codex | Semgrep 使用 tmpfs 内一次性 `HOME`/设置文件；工具失败或格式无效时保留结果工件并以结构化 Job 失败结算；Task 仅按实际 Job 生成阶段事件，UI 显示可读结果和失败上下文 | 历史 Task 不回写；重新投递或新建 Task 使用准确语义。报告生成不在本任务范围 | 2026-09-09 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -66,6 +67,7 @@
 | Q-004 | Evidence 仓储测试与 Finding 测试曾共用固定 input_ref，导致顺序依赖 | 已将 Evidence 测试数据改为独立摘要，全量套件按当前收集顺序稳定通过 | 保留精确断言，不再共享测试命名空间 | 已解决 | Codex |
 | Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
 | Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | 保留既有国内 Python/Debian 镜像配置；已确认失败发生在基础镜像元数据解析，未切换未经项目确认的镜像源 | 待处理 | Codex |
+| Q-007 | Semgrep 在 analysis-worker 只读根文件系统中默认写入 `~/.semgrep`，静态执行器曾将失败 `tool_run` 结算为成功，Task 因而错误显示 `completed/no_findings` 并出现未执行阶段事件 | 已修复；新任务会将这类故障结算为结构化 Job 失败和 Task `partial`，UI 可见工具/原因/退出码 | 历史 Task 不自动回写，需重新投递或新建任务；报告生成不在本次范围 | 已解决 | Codex |
 
 ## 5. 当前阻碍点
 
@@ -108,10 +110,23 @@
 | ADR-017 | 单个人账号使用 Argon2id、数据库会话、HttpOnly Cookie、会话绑定 CSRF、锁定和幂等改密 | 不引入 RBAC 的前提下建立可多实例、可撤销且抗资源滥用的浏览器认证边界 | `code/docs/adr/017-personal-browser-authentication.md` |
 | ADR-018 | API 只事务登记 `CREATED` Task、`task.requested` 与 Outbox，初始 Job 由编排层创建 | 防止接入层绕过 LangGraph 与 Policy Engine，保持控制面职责边界 | `code/docs/adr/018-task-intake-owned-by-orchestrator.md` |
 | ADR-019 | LangGraph 节点结果追加到 PostgreSQL 检查点；初始 Job/Outbox 使用确定性标识幂等重放；永久结果后 ACK，瞬时失败保留 Pending | 保证 task.requested 至少一次投递下的节点恢复、策略门禁和 Job 唯一性 | `code/docs/adr/019-task-orchestration-checkpoints.md` |
+| ADR-020 | 静态工具失败保留结果工件但以结构化 Job 失败结算；Task 阶段由实际 Job 推导 | 保持只读执行边界，并防止工具失败被误呈现为 `no_findings` 或虚构未执行阶段 | `code/docs/adr/020-static-analysis-failure-and-task-result-integrity.md` |
 
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 19:14：完成 R-003 PR #12 主线同步与冲突解决
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：合并 `origin/main@a88dfd0` 引入的 T15-R5 实现、测试、ADR-020，以及双方共同维护的 `DEVELOPMENT_STATUS.md`。
+- 已完成：将 PR #12 源分支与最新 `origin/main` 合并；代码文件全部自动合并，唯一冲突为动态台账；保留 T15-R5 与 T16-T19/R-001/R-002 两侧事实，并将重复的 Semgrep 问题编号调整为 Q-007。
+- 测试与结果：全量 Python 304 passed、1 skipped、总分支覆盖率 81.78%；全仓库 Ruff、受影响模块 Pyright、TypeScript/Svelte、契约生成和 `uv lock --offline --check` 均通过。
+- 问题：Windows editable `.pth` 的 Q-003 仍存在，本轮继续使用临时 no-editable 环境；Linux 专用静态工具断言在 Windows 跳过；Starlette 测试客户端有一条上游弃用警告。
+- 阻碍点：无。
+- 决策：无新增 ADR；冲突按双方意图最小化解决，未整文件覆盖任一侧修改。
+- 下一步：将合并提交推送到 PR #12，确认 GitHub 可合并状态和远端检查后按评审流程合入 `main`。
 
 ### 2026-09-09 19:00：完成 R-002 审查缺陷修复
 
@@ -136,6 +151,18 @@
 - 阻碍点：无。真实工具镜像、Sandbox 网络/资源压力和最终 E2E 仍属于 T19/T18/T16 的待验证范围。
 - 决策：无新增 ADR；继续遵循 ADR-006 的 Sandbox Runner 唯一动态执行边界。
 - 下一步：准备固定版本 AFL++/CASR 镜像及无害公开样本，在 Sandbox Runner 中完成真实预算终止、覆盖率、crash cluster 和容器隔离验收。
+
+### 2026-09-09 17:50：完成 T15-R5 静态分析失败与结果完整性修复
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/source-analysis/`、`code/packages/domain/`、`code/packages/orchestrator/`、`code/apps/web/`、对应测试与 `code/docs/adr/020-static-analysis-failure-and-task-result-integrity.md`
+- 已完成：Semgrep 在只读 Worker 中改用 tmpfs 内的一次性设置目录；失败、不可用或格式无效的静态工具结果会保留不可变工件并让 Job 以结构化失败结算；Task 依据实际 Job 生成阶段事件，并把混合结果显示为 `partial`；前端显示中文结果含义及工具、原因和退出码。
+- 测试与结果：静态工具单元测试 7 passed、1 skipped（Linux 专用断言）；只读、非 root 的现有 Linux Worker 镜像内真实 Semgrep 无害样本扫描成功并产出 1 个 Finding；真实 PostgreSQL 定向集成验证工具失败结算及 Task 阶段事件通过；Ruff、Pyright、Svelte、契约生成与锁文件检查通过。
+- 问题：Windows 宿主的默认 Proactor 事件循环不能运行 psycopg 异步 PostgreSQL 测试；Docker Desktop 已停止，无法在结束时删除本次测试专用数据库，待 Docker 恢复后可删除 `vulnweaver_test_a11ce0ffee12`。
+- 阻碍点：无。
+- 决策：ADR-020。
+- 下一步：为 P2 端到端验收配置 REVIEW 模型并用无害多语言样本复验完整链路。
 
 ### 2026-09-09 15:35：完成全量代码审计修复与 T19 安全分诊基础检查点
 
@@ -209,7 +236,6 @@
 - 阻碍点：无；镜像网络问题记录为 Q-006，不阻止继续实现 Ghidra/angr 规范化和 T17 契约。
 - 决策：无新增 ADR；继续遵循 M10、ADR-012/015/016/019，二进制样本不在宿主机执行，外部分析器只处理服务自有 scratch 副本。
 - 下一步：扩展 T16 结果以保存 Ghidra 伪代码、Xref/CFG 和 angr 定点分析事实，并在基础镜像可解析后重建 analysis-worker、回填精确 ToolSpec 镜像摘要并跑 ELF/PE Compose E2E。
-
 ### 2026-09-09 11:05：完成 T15-R4 自动复核、Task 聚合与 Annotation/API
 
 - 负责人：Codex
@@ -315,25 +341,15 @@
 - 决策：Evidence 作为不可变事实保存；确认、复核和 Finding 状态迁移留在后续检查点。
 - 下一步：在同一迁移链路上实现 Finding/FindingEvidence 的最小候选导入和查询，再加入 Review 策略门禁。
 
-### 2026-09-08 22:46：完成 T14 PAIR 源码导入与查询
-
-- 负责人：Codex
-- 状态：已完成
-- 修改文件：`code/packages/contracts/`、`code/packages/pair/`、`code/packages/persistence/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/*.json`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/pair/`、`code/tests/persistence/`、`code/tests/contracts/`
-- 已完成：新增 `PairFunction`、`PairNode`、`PairEdge`、`PairRaw` v1 契约；新增 PostgreSQL `pair_functions`、`pair_nodes`、`pair_edges`、`pair_raw` 表及索引；实现幂等 PAIR 仓储、源码函数/调用边导入、函数列表、源码位置和有界调用邻域查询；源码导入 Worker 成功后自动导入 PAIR；节点、函数和边保存 `pair_raw_id`，原始结果绑定工具身份与工件版本。
-- 测试与结果：全量 pytest **198 个通过**、1 个既有 Starlette 弃用警告；T14/迁移/契约定向测试 14 个通过；Ruff 全仓库通过；变更 Python 模块 Pyright 0 错误；contracts TypeScript `tsc --noEmit` 通过；契约生成检查、`uv lock --check`、Compose 配置解析通过；数据库已升级至 `0009_pair_tables`；analysis-worker 镜像构建成功，最终摘要为 `sha256:0041518fd3398da354721fd5b0557ba6e01e553e460724399283dbb29a021897`，Worker 以 UID 10001 启动。
-- 问题：Windows 工作区含中文路径时直接使用 uv editable `.pth` 仍受 GBK 读取问题影响；验证继续使用无 editable 临时环境。
-- 阻碍点：无
-- 决策：无新增重大架构决策；PAIR 关系表沿用 PostgreSQL 事实源，原始输出仍通过 CAS 工件引用保存。
-- 下一步：认领 T15，实现 Finding、Evidence、Review 持久化与静态工具/PAIR 结果消费。
-
 较早记录见 `code/docs/progress/2026-09-09-supplied-snapshot-history.md`，仅来自本次指定快照。
 
 ## 9. 验证记录
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | R-003 PR #12 主线同步与冲突解决 | 合并 `origin/main@a88dfd0`；临时 no-editable 环境执行全量 pytest 与覆盖率；全仓库 Ruff；受影响模块 Pyright；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --offline --check` | 唯一台账冲突按双方事实解决；304 passed、1 skipped、总分支覆盖率 81.78%；所有静态、前端、契约和锁文件检查通过 | Linux 专用断言在 Windows 跳过；未运行真实 AFL++/CASR 镜像 E2E；远端 CI 待推送后确认 |
 | 2026-09-09 | R-002 审查缺陷修复 | 临时 no-editable 环境执行定向及全量 pytest；全仓库 Ruff；受影响 Sandbox/fuzzing/API Pyright；`pnpm run check:typescript`；契约生成与锁文件检查；固定摘要 Alpine 真实 Docker 配额溢出/复制/清理探测 | 定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；静态、前端、契约、锁文件检查通过；2 MiB 写入被 1 MiB 硬配额截断，输出回收且无容器/卷孤儿 | 未运行真实 AFL++/CASR 镜像完整流程；网络/内存/进程压力仍归 T18 验收；远端 CI 未运行 |
+| 2026-09-09 | T15-R5 静态分析失败与结果完整性 | 静态工具定向 pytest；现有只读、非 root Linux Worker 镜像中运行 Semgrep 无害 `eval("1+1")` 样本；真实 PostgreSQL 定向执行器/Task 聚合测试；Ruff、Pyright、Svelte、契约生成与锁文件检查 | 静态工具 7 passed、1 skipped；真实 Semgrep 成功并返回 1 个 Finding；失败 Job 保留结果工件且 Task 仅产生 validating/analyzing/completed 事件的集成验证通过；静态和前端检查无错误 | 未运行全量门禁、镜像重建或浏览器 E2E；Windows Proactor 不兼容 psycopg 异步测试；测试专用数据库待清理 |
 | 2026-09-09 | T19-R2 AFL++/CASR Sandbox 编排 | 临时 no-editable uv 环境执行全量 `pytest --cov --cov-fail-under=80`；全仓库 Ruff；fuzzing 包 Pyright strict；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --check` | 297 passed、总分支覆盖率 82.46%；Ruff、fuzzing Pyright、TypeScript/Svelte、契约生成和锁文件检查通过 | 独立全仓库 Pyright 受本机缺少 langgraph/tree-sitter 类型依赖影响；未执行真实 AFL++/CASR、Sandbox 网络/内存/进程压力和最终工具镜像 E2E |
 | 2026-09-09 | T18 Sandbox Runner 结构化请求与 Docker 隔离检查点 | Sandbox Runner/契约定向测试；全量 `pnpm run check`；`uv lock --check`；Compose 配置；本机已有 Alpine 固定命令与 `docker inspect` | 278 passed、82.56% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；定向 19 passed；cat 成功、只读根阻断、输出洪泛终止、超时和容器回收通过；隔离参数实测确认 | 尚未执行独立网络流量、内存压力和进程数压力样本；analysis-worker 镜像构建受 Q-006 影响 |
 | 2026-09-09 | T17 二进制 PAIR 导入与地址查询全量验收 | `pnpm run check`（Compose 服务地址）；定向 PAIR/二进制/API/契约测试；`uv lock --check`；契约生成；Compose 配置 | 271 passed、83.86% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；T17 定向 45 passed；真实 PostgreSQL 导入/重放/地址查询通过 | 最终 analysis-worker 镜像与 Compose 二进制 E2E 受 Q-006 影响，属于 T16 镜像验收 |

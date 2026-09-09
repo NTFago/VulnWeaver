@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
@@ -38,6 +39,14 @@ class StaticToolOutput:
     stdout: bytes
     stderr: bytes
     reason: str | None = None
+
+
+class StaticToolOutputError(ValueError):
+    """The tool exited successfully but did not produce its declared format."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 class StaticToolAdapter(Protocol):
@@ -71,6 +80,20 @@ class SubprocessStaticTool:
         timeout_seconds: int,
         max_output_bytes: int = 16 * 1024 * 1024,
     ) -> StaticToolOutput:
+        return self._run(
+            root,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
+
+    def _run(
+        self,
+        root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int,
+        extra_environment: Mapping[str, str] | None = None,
+    ) -> StaticToolOutput:
         if max_output_bytes < 1:
             raise ValueError("static tool output limit must be positive")
         command = [self._executable, *self._arguments, "."]
@@ -82,7 +105,7 @@ class SubprocessStaticTool:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=_tool_environment(),
+                env=_tool_environment(extra_environment),
             )
         except FileNotFoundError:
             return StaticToolOutput(
@@ -148,9 +171,7 @@ class SubprocessStaticTool:
                 captured_stderr,
                 "timeout",
             )
-        status = (
-            StaticToolStatus.SUCCEEDED if process.returncode == 0 else StaticToolStatus.FAILED
-        )
+        status = StaticToolStatus.SUCCEEDED if process.returncode == 0 else StaticToolStatus.FAILED
         return StaticToolOutput(
             self.name,
             _tool_version(self.name, captured_stdout, captured_stderr),
@@ -201,11 +222,21 @@ class SemgrepAdapter(SubprocessStaticTool):
                 b"",
                 "rules_not_installed",
             )
-        return super().run(
-            root,
-            timeout_seconds=timeout_seconds,
-            max_output_bytes=max_output_bytes,
-        )
+        # Semgrep writes settings and user logs even when telemetry and version
+        # checks are disabled.  The worker root and source tree are intentionally
+        # read-only, so give only this process a disposable home and settings
+        # location under the writable tmpfs rather than weakening either boundary.
+        with tempfile.TemporaryDirectory(prefix="vulnweaver-semgrep-") as state_directory:
+            settings_file = Path(state_directory) / "settings.yml"
+            return self._run(
+                root,
+                timeout_seconds=timeout_seconds,
+                max_output_bytes=max_output_bytes,
+                extra_environment={
+                    "HOME": state_directory,
+                    "SEMGREP_SETTINGS_FILE": str(settings_file),
+                },
+            )
 
 
 class CppcheckAdapter(SubprocessStaticTool):
@@ -219,17 +250,17 @@ def parse_semgrep_output(raw: bytes, *, artifact_version_id: str) -> list[Static
     try:
         decoded: object = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return []
+        raise StaticToolOutputError("semgrep.invalid_json_output") from None
     if not isinstance(decoded, Mapping):
-        return []
+        raise StaticToolOutputError("semgrep.invalid_json_document")
     document = cast(Mapping[str, object], decoded)
     raw_results = document.get("results")
     if not isinstance(raw_results, list):
-        return []
+        raise StaticToolOutputError("semgrep.results_missing")
     diagnostics: list[StaticAnalysisDiagnostic] = []
     for raw_result in cast(list[object], raw_results):
         if not isinstance(raw_result, Mapping):
-            continue
+            raise StaticToolOutputError("semgrep.invalid_result")
         result = cast(Mapping[str, object], raw_result)
         check_id = result.get("check_id")
         path = result.get("path")
@@ -237,9 +268,9 @@ def parse_semgrep_output(raw: bytes, *, artifact_version_id: str) -> list[Static
         end = result.get("end")
         extra_value = result.get("extra")
         if not isinstance(check_id, str) or not isinstance(path, str):
-            continue
+            raise StaticToolOutputError("semgrep.invalid_result")
         if not isinstance(start, Mapping) or not isinstance(end, Mapping):
-            continue
+            raise StaticToolOutputError("semgrep.invalid_result")
         start_mapping = cast(Mapping[str, object], start)
         end_mapping = cast(Mapping[str, object], end)
         extra: Mapping[str, object] = (
@@ -281,7 +312,7 @@ def parse_cppcheck_output(
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:
-        return []
+        raise StaticToolOutputError("cppcheck.invalid_xml_output") from None
     diagnostics: list[StaticAnalysisDiagnostic] = []
     for error in root.findall(".//error"):
         rule_id = error.attrib.get("id")
@@ -418,7 +449,7 @@ def _read_bounded(
             return
 
 
-def _tool_environment() -> dict[str, str]:
+def _tool_environment(extra_environment: Mapping[str, str] | None = None) -> dict[str, str]:
     allowed = {
         "LANG",
         "LC_ALL",
@@ -430,7 +461,10 @@ def _tool_environment() -> dict[str, str]:
         "TMPDIR",
         "WINDIR",
     }
-    return {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    if extra_environment:
+        environment.update(extra_environment)
+    return environment
 
 
 def _tool_version(tool_name: str, stdout: bytes, stderr: bytes) -> str | None:
@@ -443,6 +477,7 @@ def _tool_version(tool_name: str, stdout: bytes, stderr: bytes) -> str | None:
             version = cast(Mapping[str, object], document).get("version")
             if isinstance(version, str) and version:
                 return version[:128]
+        return None
     if tool_name == "cppcheck":
         match = re.search(rb"<cppcheck\s+version=\"([^\"]+)\"", stdout + stderr)
         if match is not None:

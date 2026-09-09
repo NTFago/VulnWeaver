@@ -28,6 +28,7 @@ from vulnweaver_contracts import (
     ResourceBudget,
     SchemaVersion,
     SourceImportResult,
+    StaticAnalysisDiagnostic,
     StaticAnalysisResult,
     StaticToolStatus,
     StructuredFailure,
@@ -50,6 +51,7 @@ from vulnweaver_source_analysis.static_tools import (
     SemgrepAdapter,
     StaticToolAdapter,
     StaticToolOutput,
+    StaticToolOutputError,
 )
 
 
@@ -180,10 +182,15 @@ class StaticAnalysisExecutor:
                 min(job["resource_budget"]["disk_bytes"], 16 * 1024 * 1024),
                 languages,
             )
+            output, diagnostics = _parse_output(
+                output,
+                adapter,
+                artifact_version_id=artifact_version_id,
+            )
             result = _result(
                 tool_name,
                 output,
-                adapter,
+                diagnostics,
                 artifact_version_id=artifact_version_id,
                 created_at=job["created_at"],
             )
@@ -196,6 +203,8 @@ class StaticAnalysisExecutor:
                 source_index_version_id,
                 derived_version_id,
             )
+            if output.status is not StaticToolStatus.SUCCEEDED:
+                return _tool_failed_result(job["id"], output, derived_version_id)
             projection = await self._finding_projector.project(job, result, result_version)
             return WorkerResult(
                 schema_version=SchemaVersion.VALUE_1_0_0,
@@ -415,7 +424,7 @@ def _bounded_budget(outer: ResourceBudget, inner: ResourceBudget) -> ResourceBud
 def _result(
     tool_name: str,
     output: StaticToolOutput,
-    adapter: StaticToolAdapter,
+    diagnostics: list[StaticAnalysisDiagnostic],
     *,
     artifact_version_id: str,
     created_at: str,
@@ -423,7 +432,7 @@ def _result(
     return StaticAnalysisResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         artifact_version_id=artifact_version_id,
-        diagnostics=adapter.parse(output, artifact_version_id=artifact_version_id),
+        diagnostics=diagnostics,
         tool_runs=[
             {
                 "tool_name": tool_name,
@@ -435,6 +444,81 @@ def _result(
         ],
         created_at=created_at,
     )
+
+
+def _parse_output(
+    output: StaticToolOutput,
+    adapter: StaticToolAdapter,
+    *,
+    artifact_version_id: str,
+) -> tuple[StaticToolOutput, list[StaticAnalysisDiagnostic]]:
+    if output.status is not StaticToolStatus.SUCCEEDED:
+        return output, []
+    try:
+        return output, adapter.parse(output, artifact_version_id=artifact_version_id)
+    except StaticToolOutputError as error:
+        return (
+            StaticToolOutput(
+                tool_name=output.tool_name,
+                tool_version=output.tool_version,
+                status=StaticToolStatus.FAILED,
+                exit_code=output.exit_code,
+                stdout=output.stdout,
+                stderr=output.stderr,
+                reason=error.code,
+            ),
+            [],
+        )
+
+
+def _tool_failed_result(
+    job_id: str, output: StaticToolOutput, result_version_id: str
+) -> WorkerResult:
+    reason = output.reason or "tool_execution_failed"
+    if reason == "timeout":
+        kind = FailureKind.TIMEOUT
+        retryable = True
+        message = "static analysis tool timed out"
+    elif output.status is StaticToolStatus.UNAVAILABLE:
+        kind = FailureKind.DEPENDENCY
+        retryable = True
+        message = "static analysis tool is unavailable"
+    elif reason in _INVALID_OUTPUT_REASONS:
+        kind = FailureKind.TOOL
+        retryable = False
+        message = "static analysis tool produced an invalid result"
+    else:
+        kind = FailureKind.TOOL
+        retryable = False
+        message = "static analysis tool did not complete"
+    details: dict[str, object] = {
+        "tool_name": output.tool_name,
+        "tool_status": str(output.status),
+        "reason": reason,
+        "result_artifact_version_id": result_version_id,
+    }
+    if output.exit_code is not None:
+        details["exit_code"] = output.exit_code
+    return _failed_result(
+        job_id,
+        f"static_analysis.{reason}",
+        message,
+        details,
+        kind,
+        retryable,
+        produced_artifact_version_ids=[result_version_id],
+    )
+
+
+_INVALID_OUTPUT_REASONS = frozenset(
+    {
+        "semgrep.invalid_json_output",
+        "semgrep.invalid_json_document",
+        "semgrep.results_missing",
+        "semgrep.invalid_result",
+        "cppcheck.invalid_xml_output",
+    }
+)
 
 
 def _tool_name(job: Job) -> str:
@@ -516,12 +600,13 @@ def _failed_result(
     details: Mapping[str, object],
     kind: FailureKind = FailureKind.VALIDATION,
     retryable: bool = False,
+    produced_artifact_version_ids: list[str] | None = None,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         job_id=job_id,
         status=JobStatus.FAILED,
-        produced_artifact_version_ids=[],
+        produced_artifact_version_ids=produced_artifact_version_ids or [],
         evidence_ids=[],
         failure=StructuredFailure(
             code=code,

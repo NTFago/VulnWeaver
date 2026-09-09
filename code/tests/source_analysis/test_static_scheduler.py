@@ -111,6 +111,34 @@ class _DiagnosticAdapter:
         ]
 
 
+class _FailedAdapter:
+    name = "semgrep"
+
+    def run(
+        self,
+        _root: Path,
+        *,
+        timeout_seconds: int,
+        max_output_bytes: int = 16 * 1024 * 1024,
+    ) -> StaticToolOutput:
+        del timeout_seconds, max_output_bytes
+        return StaticToolOutput(
+            self.name,
+            None,
+            StaticToolStatus.FAILED,
+            1,
+            b"",
+            b"safe test failure",
+            "tool_exit_nonzero",
+        )
+
+    def parse(
+        self, _output: StaticToolOutput, *, artifact_version_id: str
+    ) -> list[StaticAnalysisDiagnostic]:
+        del artifact_version_id
+        raise AssertionError("failed tool output must not be parsed as a clean scan")
+
+
 def _tool_spec(name: str) -> dict[str, object]:
     return {
         "schema_version": "1.0.0",
@@ -460,6 +488,97 @@ def test_static_result_parent_matches_scanned_source_archive(
                 )
                 relations = await repositories.findings.list_evidence_relations(findings[0]["id"])
                 assert len(relations) == 2
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_static_tool_failure_is_published_and_returned_as_a_failed_job(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "artifacts")
+        try:
+            archive_bytes = io.BytesIO()
+            with zipfile.ZipFile(archive_bytes, "w") as archive:
+                archive.writestr("src/app.py", "value = input()")
+            payload = archive_bytes.getvalue()
+            stored = store.put_stream(io.BytesIO(payload), max_bytes=len(payload))
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project("project:static-failure"))
+                await repositories.artifacts.add(
+                    artifact(
+                        "artifact:static-failure",
+                        project_id="project:static-failure",
+                        current_version_id="artifact-version:static-failure-source",
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(
+                        "artifact-version:static-failure-source",
+                        artifact_id="artifact:static-failure",
+                        digest_character="f",
+                    )
+                )
+                await repositories.tasks.create(
+                    task(
+                        "task:static-failure",
+                        project_id="project:static-failure",
+                        artifact_version_ids=["artifact-version:static-failure-source"],
+                    )
+                )
+            job = cast(
+                Job,
+                {
+                    **_import_job(),
+                    "id": "job:static-failure",
+                    "task_id": "task:static-failure",
+                    "kind": JobKind.SOURCE_ANALYSIS,
+                    "tool": {
+                        "name": "semgrep",
+                        "version": "1.0.0",
+                        "image_digest": "sha256:" + "d" * 64,
+                    },
+                    "arguments": {
+                        "artifact_version_id": "artifact-version:static-failure-source",
+                        "source_index_version_id": "artifact-version:static-failure-source",
+                        "languages": ["python"],
+                    },
+                    "input_refs": [stored.object_ref],
+                },
+            )
+            executor = StaticAnalysisExecutor(
+                database,
+                store,
+                adapters={"semgrep": _FailedAdapter()},
+                scratch_root=tmp_path,
+            )
+
+            result = await executor.execute(job, asyncio.Event())
+
+            assert result["status"] is JobStatus.FAILED
+            assert result["failure"] is not None
+            assert result["failure"]["code"] == "static_analysis.tool_exit_nonzero"
+            assert result["failure"]["details"]["tool_name"] == "semgrep"
+            assert len(result["produced_artifact_version_ids"]) == 1
+            async with database.transaction() as repositories:
+                version = await repositories.artifacts.get_version(
+                    result["produced_artifact_version_ids"][0]
+                )
+                with store.open(version["object_ref"]) as stream:
+                    published = json.load(stream)
+                assert published["diagnostics"] == []
+                assert published["tool_runs"] == [
+                    {
+                        "tool_name": "semgrep",
+                        "tool_version": None,
+                        "status": "failed",
+                        "exit_code": 1,
+                        "reason": "tool_exit_nonzero",
+                    }
+                ]
         finally:
             await database.dispose()
 

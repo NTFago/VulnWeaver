@@ -9,6 +9,7 @@
     QueueEvent,
     ResourceBudget,
     Task,
+    TaskResult,
     TaskStatus,
   } from "@vulnweaver/contracts";
   import { api, ApiError, taskEventSocket, type Session } from "./lib/api";
@@ -29,6 +30,11 @@
     created: "已登记", validating: "校验中", analyzing: "分析中", reviewing: "复核中",
     verifying: "验证中", exploiting: "利用验证", reporting: "报告中", completed: "已完成",
     failed: "已失败", cancelled: "已取消",
+  };
+  const resultText: Record<TaskResult, string> = {
+    success: "已产生候选结果",
+    partial: "部分完成：有执行单元未成功",
+    no_findings: "扫描已完成，未发现候选问题",
   };
 
   let session: Session | null = null;
@@ -81,6 +87,19 @@
     } else {
       error = caught instanceof Error ? caught.message : "发生未知错误";
     }
+  }
+
+  function displayResult(result: TaskResult | null): string {
+    return result ? resultText[result] : "尚未生成";
+  }
+
+  function failureContext(job: Job): string {
+    if (!job.failure) return "";
+    const details = job.failure.details;
+    const tool = typeof details.tool_name === "string" ? `工具：${details.tool_name}` : "";
+    const reason = typeof details.reason === "string" ? `原因：${details.reason}` : "";
+    const exitCode = typeof details.exit_code === "number" ? `退出码：${details.exit_code}` : "";
+    return [tool, reason, exitCode].filter(Boolean).join(" · ");
   }
 
   function begin(): void {
@@ -276,9 +295,9 @@
           <div class="section-block"><div class="section-head"><div><span>ANALYSIS / 02</span><h2>创建任务</h2></div><small>选择一个或多个样本版本</small></div>{#if artifacts.length === 0}<div class="compact-empty">导入样本后，可在此创建分析任务。</div>{:else}<div class="sample-options">{#each artifacts as artifact}<label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option"><input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} /><span><b>{fileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span></label>{/each}</div><button class="primary" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务 <span>{selectedVersionIds.length || ""}</span></button>{/if}</div></section>
         <section class="section-block full"><div class="section-head"><div><span>RUNS / 03</span><h2>最近任务</h2></div><small>{tasks.length} 条记录</small></div>{#if tasks.length === 0}<div class="compact-empty">暂无执行记录。</div>{:else}<div class="task-list">{#each tasks as task}<button on:click={() => openTask(task)}><span class={`status-dot ${task.status}`}></span><span><b>{statusText[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span><time>{formatDate(task.updated_at)}</time><span>→</span></button>{/each}</div>{/if}</section>
       {:else if view === "task" && selectedTask}
-        <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1><p>结果：{selectedTask.result ?? "尚未生成"} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
+        <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1><p>结果：{displayResult(selectedTask.result)} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
         <section class="metric-strip task-metrics"><div><strong>{jobs.length}</strong><span>Jobs</span></div><div><strong>{events.length}</strong><span>事件</span></div><div><strong>{selectedTask.artifact_version_ids.length}</strong><span>输入工件</span></div><div><strong>{selectedTask.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div></section>
-        <section class="task-grid"><div class="section-block"><div class="section-head"><div><span>JOBS</span><h2>执行单元</h2></div><small>由编排层创建</small></div>{#if jobs.length === 0}<div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>{:else}<div class="job-list">{#each jobs as job}<article><span class={`status-dot ${job.status}`}></span><div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>{#if job.failure}<p>{job.failure.message}</p>{/if}</article>{/each}</div>{/if}</div>
+        <section class="task-grid"><div class="section-block"><div class="section-head"><div><span>JOBS</span><h2>执行单元</h2></div><small>由编排层创建</small></div>{#if jobs.length === 0}<div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>{:else}<div class="job-list">{#each jobs as job}<article><span class={`status-dot ${job.status}`}></span><div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>{#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}</article>{/each}</div>{/if}</div>
           <div class="section-block"><div class="section-head"><div><span>EVENT STREAM</span><h2>决策与状态轨迹</h2></div><small class="live"><i></i> LIVE</small></div>{#if events.length === 0}<div class="compact-empty">尚未接收事件。</div>{:else}<ol class="timeline">{#each [...events].reverse() as event}<li><span>{String(event.sequence).padStart(2, "0")}</span><div><b>{event.event_type}</b><small>{formatDate(event.occurred_at)} · {shortId(event.event_id)}</small></div></li>{/each}</ol>{/if}</div></section>
       {/if}
     </main>
