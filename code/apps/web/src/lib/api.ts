@@ -5,10 +5,16 @@ import type {
   CreateProjectRequest,
   CreateTaskRequest,
   ErrorResponse,
+  Finding,
+  Evidence,
+  FindingEvidence,
+  Poc,
   Job,
   Project,
   QueueEvent,
+  ResourceBudget,
   Task,
+  WorkerResult,
 } from "@vulnweaver/contracts";
 
 export interface Session {
@@ -16,6 +22,12 @@ export interface Session {
   username: string;
   must_change_password: boolean;
   csrf_token?: string;
+}
+
+
+export interface FindingEvidenceDetail {
+  relation: FindingEvidence;
+  evidence: Evidence;
 }
 
 export interface ArtifactDetail {
@@ -100,6 +112,10 @@ export const api = {
   artifacts: (projectId: string) => request<Artifact[]>(`/api/projects/${projectId}/artifacts`),
   artifact: (projectId: string, artifactId: string) =>
     request<ArtifactDetail>(`/api/projects/${projectId}/artifacts/${artifactId}`),
+  artifactContentUrl: (artifactId: string, versionId?: string) =>
+    `/api/artifacts/${encodeURIComponent(artifactId)}/content${versionId ? `?version_id=${encodeURIComponent(versionId)}` : ""}`,
+  artifactVersion: (versionId: string) =>
+    request<ArtifactVersion>(`/api/artifact-versions/${encodeURIComponent(versionId)}`),
   upload: (projectId: string, kind: ArtifactKind, file: File) =>
     request<ArtifactDetail>(`/api/projects/${projectId}/artifacts?kind=${kind}`, {
       method: "POST",
@@ -120,8 +136,30 @@ export const api = {
     }),
   task: (taskId: string) => request<Task>(`/api/tasks/${taskId}`),
   jobs: (taskId: string) => request<Job[]>(`/api/tasks/${taskId}/jobs`),
+  jobResult: (jobId: string) => request<WorkerResult | { job_id: string; status: string; result: null }>(`/api/jobs/${jobId}/result`),
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
+  findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
+  findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
+  observability: (taskId: string) => request<Record<string, unknown>>(`/api/tasks/${taskId}/observability`),
+  createProof: (findingId: string, payload: {
+    script_ref: string; image_digest: string; permission_mode: "request_permission" | "full_access";
+    resource_budget: ResourceBudget; kind: "proof_of_concept" | "exploit";
+  }) => request<Job>(`/api/findings/${encodeURIComponent(findingId)}/proof`, {
+    method: "POST", headers: writeHeaders(true),
+    body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
+  }),
+  createReport: (taskId: string, payload: {
+    artifact_id: string;
+    version_id: string;
+    parent_version_id?: string | null;
+    format: "markdown" | "pdf" | "sarif";
+  }) => request<Job>(`/api/tasks/${taskId}/reports`, {
+    method: "POST",
+    headers: writeHeaders(true),
+    body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
+  }),
   cancelTask: (taskId: string) =>
     request<Task>(`/api/tasks/${taskId}/cancel`, {
       method: "POST",

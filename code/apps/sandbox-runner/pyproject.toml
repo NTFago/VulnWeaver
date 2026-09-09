@@ -1,0 +1,28 @@
+[project]
+name = "vulnweaver-sandbox-runner-service"
+version = "0.1.0"
+description = "VulnWeaver isolated Sandbox Runner service"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "vulnweaver-artifact-store",
+    "vulnweaver-fuzzing",
+    "vulnweaver-proof",
+    "vulnweaver-sandbox-runner",
+    "vulnweaver-tool-runtime",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-artifact-store = { workspace = true }
+vulnweaver-fuzzing = { workspace = true }
+vulnweaver-proof = { workspace = true }
+vulnweaver-sandbox-runner = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_sandbox_runner_service"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,12 +16,18 @@ from vulnweaver_contracts import (
     EvidenceRelation,
     EvidenceStrength,
     EvidenceType,
+    FailureKind,
     Finding,
     FindingCategory,
     FindingEvidence,
     FindingStatus,
+    Job,
+    JobKind,
+    JobStatus,
     PairFunction,
+    ResourceBudget,
     Severity,
+    StructuredFailure,
 )
 from vulnweaver_persistence import Database
 from vulnweaver_persistence.models import personal_sessions
@@ -276,6 +282,71 @@ def test_upload_task_event_and_content_flow(client: TestClient) -> None:
         0,
         1,
     ]
+
+
+def test_task_observability_summarizes_jobs_events_and_findings(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf)
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "artifact:t22-observability"},
+        content=b"PK\x03\x04harmless",
+    )
+    version_id = upload.json()["versions"][0]["id"]
+    task_id = client.post(
+        f"/api/projects/{project['id']}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:t22-observability"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version_id],
+            "resource_budget": _budget(),
+        },
+    ).json()["id"]
+
+    async def seed_failed_job() -> None:
+        database = client.app.state.database
+        assert isinstance(database, Database)
+        async with database.transaction() as repositories:
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id="job:t22-observability",
+                    task_id=task_id,
+                    kind=JobKind.SOURCE_ANALYSIS,
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.FAILED,
+                    idempotency_key="job:t22-observability",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=1,
+                    lease=None,
+                    failure=StructuredFailure(
+                        code="static.tool_failed",
+                        kind=FailureKind.TOOL,
+                        message="tool failed",
+                        retryable=False,
+                        details={},
+                    ),
+                    created_at="2026-09-09T00:00:00Z",
+                    updated_at="2026-09-09T00:00:00Z",
+                )
+            )
+
+    asyncio.run(seed_failed_job())
+    summary = client.get(f"/api/tasks/{task_id}/observability")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["task_id"] == task_id
+    assert payload["jobs_total"] == 1
+    assert payload["jobs_by_status"] == {"failed": 1}
+    assert payload["failures_by_code"] == {"static.tool_failed": 1}
+    assert payload["events_total"] == 1
+    assert payload["findings_total"] == 0
+    assert payload["findings_by_status"] == {}
 
 
 def test_finding_evidence_review_and_annotation_api_are_auditable(

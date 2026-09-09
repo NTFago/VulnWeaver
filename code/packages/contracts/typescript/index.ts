@@ -638,6 +638,18 @@ export interface Poc {
   created_at: string;
 }
 
+export interface ProofRequest {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  job_id: Identifier;
+  finding_id: Identifier;
+  script_ref: ObjectReference;
+  image_digest: Sha256Digest;
+  permission_mode: PermissionMode;
+  resource_budget: ResourceBudget;
+  timeout_seconds: number;
+}
+
 export interface Review {
   schema_version: SchemaVersion;
   id: Identifier;

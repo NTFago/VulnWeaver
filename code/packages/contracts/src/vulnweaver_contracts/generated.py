@@ -729,6 +729,17 @@ class Poc(TypedDict):
     resource_budget: ResourceBudget
     created_at: str
 
+class ProofRequest(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    job_id: Identifier
+    finding_id: Identifier
+    script_ref: ObjectReference
+    image_digest: Sha256Digest
+    permission_mode: PermissionMode
+    resource_budget: ResourceBudget
+    timeout_seconds: int
+
 class Review(TypedDict):
     schema_version: SchemaVersion
     id: Identifier

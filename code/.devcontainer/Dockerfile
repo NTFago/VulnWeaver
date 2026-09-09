@@ -28,6 +28,11 @@ RUN sed -i \
         curl \
         git \
         libpq-dev \
+        libffi-dev \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        shared-mime-info \
+        fonts-dejavu \
         openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global "pnpm@${PNPM_VERSION}" --registry="${NPM_REGISTRY}" \

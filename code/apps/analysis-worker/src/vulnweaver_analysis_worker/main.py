@@ -9,8 +9,9 @@ import signal
 import sys
 from types import FrameType
 
-from vulnweaver_artifact_store import LocalContentAddressedStore
+from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
+from vulnweaver_contracts import ToolIdentity
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGateway,
@@ -26,7 +27,9 @@ from vulnweaver_orchestrator import (
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_proof import ProofExecutionService, ProofJobExecutor, SandboxRunnerClient
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
+from vulnweaver_reporting import ReportJobExecutor
 from vulnweaver_source_analysis import (
     AnalysisJobExecutor,
     SourceImportExecutor,
@@ -69,6 +72,16 @@ async def _run() -> None:
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
     review_executor, model_gateway = _review_executor(database, store)
+    report_executor = ReportJobExecutor(
+        database,
+        ArtifactRegistrationService(store, database),
+        tool=ToolIdentity(
+            name="vulnweaver-report",
+            version=os.environ.get("REPORT_TOOL_VERSION", "1.0.0"),
+            image_digest=None,
+        ),
+    )
+    proof_executor = _proof_executor(database)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -98,6 +111,8 @@ async def _run() -> None:
         ),
         review_executor,
         binary_executor,
+        proof=proof_executor,
+        report=report_executor,
     )
     worker = ReliableWorker(
         database,
@@ -177,6 +192,7 @@ def _review_executor(
     gateway = ModelGateway(
         ModelGatewaySettings(
             routes={ModelTier.REVIEW: ModelRoute(primary=endpoint)},
+            proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
             max_repair_attempts=_environment_int("REVIEW_MODEL_REPAIR_ATTEMPTS", 1),
             min_request_interval_seconds=float(
                 os.environ.get("REVIEW_MODEL_MIN_INTERVAL_SECONDS", "0")
@@ -185,6 +201,22 @@ def _review_executor(
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
     return ReviewJobExecutor(reviewer), gateway
+
+
+def _proof_executor(database: Database) -> ProofJobExecutor | None:
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    client = SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")),
+    )
+    service = ProofExecutionService(
+        client,
+        tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
+        tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+    )
+    return ProofJobExecutor(database, service)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

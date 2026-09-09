@@ -168,6 +168,20 @@ class TransportResponse:
 class HttpxChatTransport:
     """Small vendor-neutral HTTP transport for OpenAI-compatible APIs."""
 
+    def __init__(self, *, proxy_url: str | None = None) -> None:
+        if proxy_url is not None:
+            parsed = urlparse(proxy_url)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("model proxy URL must be an http(s) URL without credentials")
+        self._proxy_url = proxy_url
+
     async def post_json(
         self,
         url: str,
@@ -181,6 +195,7 @@ class HttpxChatTransport:
             async with httpx.AsyncClient(
                 timeout=timeout_seconds,
                 follow_redirects=False,
+                proxy=self._proxy_url,
             ) as client:
                 response = await client.post(url, headers=dict(headers), json=payload)
         except (httpx.TimeoutException, httpx.TransportError) as error:
@@ -247,6 +262,7 @@ class InMemoryAgentRunRecorder:
 @dataclass(frozen=True, slots=True)
 class ModelGatewaySettings:
     routes: Mapping[ModelTier | str, ModelRoute]
+    proxy_url: str | None = None
     max_repair_attempts: int = 1
     min_request_interval_seconds: float = 0.0
     max_repair_context_chars: int = 16_384
@@ -260,6 +276,8 @@ class ModelGatewaySettings:
             raise ValueError("model request interval must be between 0 and 60 seconds")
         if self.max_repair_context_chars < 256 or self.max_repair_context_chars > 1_000_000:
             raise ValueError("repair context size is outside the safe range")
+        if self.proxy_url is not None:
+            HttpxChatTransport(proxy_url=self.proxy_url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,7 +344,7 @@ class ModelGateway:
         sleeper: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._settings = settings
-        self._transport = transport or HttpxChatTransport()
+        self._transport = transport or HttpxChatTransport(proxy_url=settings.proxy_url)
         self._recorder = recorder or InMemoryAgentRunRecorder()
         self._redaction = redaction or RedactionPolicy()
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -690,7 +708,7 @@ def _decode_and_validate(content: str, definition: str) -> JsonObject:
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        decoded: object = json.loads(cleaned)
+        decoded = _decode_json_object(cleaned)
     except json.JSONDecodeError as error:
         raise ModelOutputError(
             "model output was not valid JSON",
@@ -710,6 +728,21 @@ def _decode_and_validate(content: str, definition: str) -> JsonObject:
             details={"contract": definition, "errors": list(error.errors)[:8]},
         ) from error
     return candidate
+
+
+def _decode_json_object(content: str) -> object:
+    """Decode a JSON object while tolerating bounded prose around it."""
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as first_error:
+        start = content.find("{")
+        if start < 0:
+            raise first_error
+        decoder = json.JSONDecoder()
+        decoded, end = decoder.raw_decode(content[start:])
+        if not isinstance(decoded, dict) or len(content) - (start + end) > 2048:
+            raise first_error
+        return cast(JsonObject, decoded)
 
 
 def _repair_messages(

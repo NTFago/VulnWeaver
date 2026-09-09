@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import cast
@@ -8,6 +9,7 @@ import pytest
 from vulnweaver_contracts import AgentRun, JsonObject, RunStatus
 from vulnweaver_model_gateway import (
     AgentRunConflict,
+    HttpxChatTransport,
     InMemoryAgentRunRecorder,
     ModelEndpoint,
     ModelGateway,
@@ -70,6 +72,36 @@ def response(content: str, *, status: int = 200, input_tokens: int = 4) -> Trans
             "usage": {"prompt_tokens": input_tokens, "completion_tokens": 3},
         },
     )
+
+
+def test_model_proxy_rejects_credentials_and_accepts_plain_http_url() -> None:
+    HttpxChatTransport(proxy_url="http://egress-proxy:8080")
+    with pytest.raises(ValueError, match="proxy URL"):
+        HttpxChatTransport(proxy_url="http://user:secret@egress-proxy:8080")
+
+
+def test_gateway_accepts_bounded_prose_around_json_object() -> None:
+    content = (
+        'Here is the result: {"schema_version":"1.0.0","id":"review:probe",'
+        '"finding_id":"finding:probe","outcome":"unverifiable","rationale":"probe",'
+        '"model":"review","supersedes_review_id":null,"created_at":"2026-09-09T00:00:00Z"}\nDone.'
+    )
+    transport = FakeTransport([response(content)])
+    settings = ModelGatewaySettings(
+        routes={ModelTier.AUDIT: ModelRoute(primary=endpoint())},
+        max_repair_attempts=0,
+    )
+    gateway = ModelGateway(settings, transport=transport)
+    result = asyncio.run(
+        gateway.complete_structured(
+            tier=ModelTier.AUDIT,
+            task_id="task:json-prose",
+            run_id="run:json-prose",
+            messages=[{"role": "user", "content": "Return JSON."}],
+            output_contract="Review",
+        )
+    )
+    assert result.succeeded
 
 
 def gateway(

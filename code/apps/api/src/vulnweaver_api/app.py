@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import logging
+from collections.abc import Iterable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     Security,
@@ -33,19 +35,25 @@ from vulnweaver_contracts import (
     Finding,
     Job,
     PairFunction,
+    Poc,
+    PocKind,
     Project,
+    ProofRequest,
     QueueEvent,
     ResourceBudget,
     Review,
     SchemaVersion,
     Task,
     TaskStatus,
+    ToolIdentity,
     validate_contract,
 )
 from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
-from vulnweaver_persistence import Database, DatabaseSettings, IdempotencyConflict
+from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, IdempotencyConflict
 from vulnweaver_persistence.fingerprints import request_fingerprint
+from vulnweaver_proof import ProofJobScheduler
+from vulnweaver_reporting import ReportJobScheduler
 
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
@@ -61,6 +69,8 @@ from vulnweaver_api.schemas import (
     ArtifactDetail,
     CreateAnnotationBody,
     CreateProjectBody,
+    CreateProofJobBody,
+    CreateReportJobBody,
     CreateTaskBody,
     ErrorResponse,
     FindingEvidenceDetail,
@@ -404,11 +414,17 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
     @app.get("/api/artifacts/{artifact_id}/content")
     async def artifact_content(
-        artifact_id: str, _: Annotated[str, Depends(require_account)]
+        artifact_id: str,
+        version_id: str | None = Query(default=None),
+        _: Annotated[str, Depends(require_account)] = "",
     ) -> StreamingResponse:
         async with database.transaction() as repositories:
             artifact = await repositories.artifacts.get(artifact_id)
-            version = await repositories.artifacts.get_version(artifact["current_version_id"])
+            version = await repositories.artifacts.get_version(
+                version_id or artifact["current_version_id"]
+            )
+            if version["artifact_id"] != artifact_id:
+                raise HTTPException(status_code=404, detail="artifact version not found")
 
         def chunks():
             with store.open(version["object_ref"]) as stream:
@@ -522,6 +538,22 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             await repositories.tasks.get(task_id)
             return await repositories.jobs.list_for_task(task_id)
 
+    @app.get("/api/jobs/{job_id}/result")
+    async def job_result(job_id: str, _: Annotated[str, Depends(require_account)]) -> Any:
+        async with database.transaction() as repositories:
+            job = await repositories.jobs.get(job_id)
+            result = await repositories.jobs.get_result(job_id)
+            if result is None:
+                return {"job_id": job["id"], "status": job["status"], "result": None}
+            return result
+
+    @app.get("/api/artifact-versions/{version_id}")
+    async def artifact_version(
+        version_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> ArtifactVersion:
+        async with database.transaction() as repositories:
+            return await repositories.artifacts.get_version(version_id)
+
     @app.get("/api/tasks/{task_id}/agent-runs")
     async def task_agent_runs(
         task_id: str, _: Annotated[str, Depends(require_account)]
@@ -562,6 +594,32 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
             return functions
 
+    @app.get("/api/tasks/{task_id}/observability")
+    async def task_observability(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> dict[str, Any]:
+        async with database.transaction() as repositories:
+            await repositories.tasks.get(task_id)
+            jobs = await repositories.jobs.list_for_task(task_id)
+            events = await repositories.task_events.list_after(task_id)
+            findings = await repositories.findings.list_for_task(task_id)
+        failures: dict[str, int] = {}
+        for job in jobs:
+            failure = job["failure"]
+            if failure is None:
+                continue
+            code = failure.get("code", "unknown")
+            failures[code] = failures.get(code, 0) + 1
+        return {
+            "task_id": task_id,
+            "jobs_total": len(jobs),
+            "jobs_by_status": _count_values(job["status"] for job in jobs),
+            "events_total": len(events),
+            "findings_total": len(findings),
+            "findings_by_status": _count_values(finding["status"] for finding in findings),
+            "failures_by_code": failures,
+        }
+
     @app.get("/api/tasks/{task_id}/findings")
     async def task_findings(
         task_id: str, _: Annotated[str, Depends(require_account)]
@@ -569,6 +627,80 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             await repositories.tasks.get(task_id)
             return await repositories.findings.list_for_task(task_id)
+
+    @app.post("/api/tasks/{task_id}/reports", status_code=202)
+    async def create_report_job(
+        task_id: str,
+        body: CreateReportJobBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> Job:
+        scheduler = ReportJobScheduler(
+            tool=ToolIdentity(name="vulnweaver-report", version="1.0.0", image_digest=None)
+        )
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id, for_update=True)
+            source_version = await repositories.artifacts.get_version(body.version_id)
+            source_artifact = await repositories.artifacts.get(body.artifact_id)
+            if (
+                source_version["artifact_id"] != source_artifact["id"]
+                or source_artifact["project_id"] != task["project_id"]
+            ):
+                raise ApiInputError(
+                    "report.source_mismatch",
+                    "report source does not belong to the task project",
+                    "artifact_id",
+                )
+            report_artifact_id = f"artifact:report:{task_id}:{body.format}"
+            report_version_id = f"artifact-version:report:{task_id}:{body.format}"
+            report_artifact = Artifact(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=report_artifact_id,
+                project_id=task["project_id"],
+                kind=ArtifactKind.DERIVED,
+                current_version_id=report_version_id,
+                created_at=task["updated_at"],
+            )
+            try:
+                await repositories.artifacts.get(report_artifact_id)
+            except EntityNotFound:
+                await repositories.artifacts.add(report_artifact)
+            return await scheduler.schedule(
+                repositories,
+                task_id,
+                artifact_id=report_artifact_id,
+                version_id=report_version_id,
+                parent_version_id=source_version["id"],
+                report_format=body.format,
+            )
+
+    @app.post("/api/findings/{finding_id}/proof", status_code=202)
+    async def create_proof_job(
+        finding_id: str,
+        body: CreateProofJobBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> Job:
+        job_id = f"job:proof:{uuid4().hex}"
+        request = cast(ProofRequest, {
+            "schema_version": SchemaVersion.VALUE_1_0_0,
+            "id": f"proof:{uuid4().hex}",
+            "job_id": job_id,
+            "finding_id": finding_id,
+            "script_ref": body.script_ref,
+            "image_digest": body.image_digest,
+            "permission_mode": body.permission_mode,
+            "resource_budget": body.resource_budget.model_dump(mode="json"),
+            "timeout_seconds": body.resource_budget.timeout_seconds,
+        })
+        validate_contract("ProofRequest", request)
+        scheduler = ProofJobScheduler(
+            tool=ToolIdentity(name="proof-tool", version="1.0.0", image_digest=body.image_digest)
+        )
+        async with database.transaction() as repositories:
+            return await scheduler.schedule(
+                repositories,
+                request,
+                kind=PocKind.EXPLOIT if body.kind == "exploit" else PocKind.PROOF_OF_CONCEPT,
+            )
 
     @app.get("/api/findings/{finding_id}/evidence")
     async def finding_evidence(
@@ -584,6 +716,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
                 for relation in relations
             ]
+
+    @app.get("/api/findings/{finding_id}/pocs")
+    async def finding_pocs(
+        finding_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[Poc]:
+        async with database.transaction() as repositories:
+            await repositories.findings.get(finding_id)
+            return await repositories.pocs.list_for_finding(finding_id)
 
     @app.get("/api/tasks/{task_id}/annotations")
     async def task_annotations(
@@ -816,3 +956,10 @@ def _read_password_file(path: Path) -> str:
     if not password:
         raise ValueError("personal password file is empty")
     return password
+
+
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts

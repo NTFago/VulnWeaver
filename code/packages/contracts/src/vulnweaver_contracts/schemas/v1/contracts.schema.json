@@ -968,6 +968,22 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "ProofRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "job_id", "finding_id", "script_ref", "image_digest", "permission_mode", "resource_budget", "timeout_seconds"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
+        "script_ref": {"$ref": "#/$defs/ObjectReference"},
+        "image_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "permission_mode": {"$ref": "#/$defs/PermissionMode"},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
     "Review": {
       "type": "object",
       "additionalProperties": false,

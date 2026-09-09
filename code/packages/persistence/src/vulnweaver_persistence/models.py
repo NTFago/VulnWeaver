@@ -35,6 +35,9 @@ from vulnweaver_contracts import (
     PairEdgeType,
     PairNodeKind,
     PermissionMode,
+    PocKind,
+    PocResult,
+    PocStatus,
     RunStatus,
     TaskResult,
     TaskStatus,
@@ -413,6 +416,32 @@ annotations = Table(
         name="severity_override",
     ),
 )
+
+pocs = Table(
+    "pocs",
+    metadata,
+    Column("schema_version", SCHEMA_VERSION, nullable=False),
+    Column("id", IDENTIFIER, primary_key=True),
+    Column(
+        "finding_id", IDENTIFIER, ForeignKey("findings.id", ondelete="RESTRICT"), nullable=False
+    ),
+    Column("kind", String(32), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("result", String(32), nullable=True),
+    Column("script_ref", Text, nullable=False),
+    Column("run_log_ref", Text, nullable=True),
+    Column("image_digest", DIGEST, nullable=False),
+    Column("permission_mode", String(32), nullable=False),
+    Column("resource_budget", JSONB, nullable=False),
+    Column("created_at", TIMESTAMP, nullable=False),
+    _schema_constraint(),
+    _enum_constraint("kind", PocKind, "kind"),
+    _enum_constraint("status", PocStatus, "status"),
+    _enum_constraint("result", PocResult, "result"),
+    CheckConstraint("image_digest ~ '^sha256:[0-9a-f]{64}$'", name="sha256_digest"),
+    _enum_constraint("permission_mode", PermissionMode, "permission_mode"),
+)
+Index("ix_pocs_finding_id", pocs.c.finding_id)
 Index("ix_annotations_task_id", annotations.c.task_id)
 Index("ix_annotations_target", annotations.c.target_kind, annotations.c.target_id)
 

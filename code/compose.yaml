@@ -1,6 +1,13 @@
 name: vulnweaver
 
 services:
+  proof-tool:
+    image: vulnweaver-proof:fixed
+    build:
+      context: .
+      dockerfile: apps/proof-tool/Dockerfile
+    profiles: [tools]
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -195,10 +202,16 @@ services:
       REVIEW_MODEL_BASE_URL: ${REVIEW_MODEL_BASE_URL:-}
       REVIEW_MODEL_NAME: ${REVIEW_MODEL_NAME:-}
       REVIEW_MODEL_API_KEY: ${REVIEW_MODEL_API_KEY:-}
+      REVIEW_MODEL_PROXY_URL: ${REVIEW_MODEL_PROXY_URL:-}
       REVIEW_MODEL_TIMEOUT_SECONDS: ${REVIEW_MODEL_TIMEOUT_SECONDS:-60}
       REVIEW_MODEL_MAX_ATTEMPTS: ${REVIEW_MODEL_MAX_ATTEMPTS:-2}
       REVIEW_MODEL_REPAIR_ATTEMPTS: ${REVIEW_MODEL_REPAIR_ATTEMPTS:-1}
       REVIEW_MODEL_MIN_INTERVAL_SECONDS: ${REVIEW_MODEL_MIN_INTERVAL_SECONDS:-0}
+      REPORT_TOOL_VERSION: ${REPORT_TOOL_VERSION:-1.0.0}
+      SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-}
+      SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-60}
+      PROOF_TOOL_NAME: ${PROOF_TOOL_NAME:-proof-tool}
+      PROOF_TOOL_VERSION: ${PROOF_TOOL_VERSION:-1.0.0}
       DIE_EXECUTABLE: ${DIE_EXECUTABLE:-diec}
       OBJDUMP_EXECUTABLE: ${OBJDUMP_EXECUTABLE:-objdump}
       UPX_EXECUTABLE: ${UPX_EXECUTABLE:-upx}
@@ -215,6 +228,7 @@ services:
         condition: service_healthy
     networks:
       - analysis-plane
+      - model-egress
     read_only: true
     tmpfs:
       - /tmp
@@ -222,6 +236,37 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    restart: unless-stopped
+
+  sandbox-runner:
+    image: vulnweaver-sandbox-runner:dev
+    build:
+      context: .
+      dockerfile: apps/sandbox-runner/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    environment:
+      ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
+      SANDBOX_ROOT: /var/lib/vulnweaver/sandbox
+      DOCKER_HOST_SANDBOX_ROOT: ${DOCKER_HOST_SANDBOX_ROOT:-}
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      AFL_CASR_IMAGE_REF: ${AFL_CASR_IMAGE_REF:-vulnweaver-afl-casr:fixed}
+      AFL_CASR_IMAGE_DIGEST: ${AFL_CASR_IMAGE_DIGEST:-}
+      PROOF_IMAGE_REF: ${PROOF_IMAGE_REF:-vulnweaver-proof:fixed}
+      PROOF_IMAGE_DIGEST: ${PROOF_IMAGE_DIGEST:-}
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+      - sandbox-runtime:/var/lib/vulnweaver/sandbox
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - analysis-plane
     restart: unless-stopped
 
   web:
@@ -251,11 +296,14 @@ networks:
   analysis-plane:
     driver: bridge
     internal: true
+  model-egress:
+    driver: bridge
 
 volumes:
   postgres-data:
   redis-data:
   artifact-data:
+  sandbox-runtime:
 
 secrets:
   vulnweaver_personal_password:

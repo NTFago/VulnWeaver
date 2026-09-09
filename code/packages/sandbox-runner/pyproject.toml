@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Policy-bound isolated runtime for VulnWeaver dynamic verification"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi>=0.115,<1",
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
     "vulnweaver-tool-runtime",
