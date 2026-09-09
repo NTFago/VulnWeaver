@@ -15,6 +15,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     JsonObject,
+    Poc,
     SchemaVersion,
     StructuredFailure,
     ToolIdentity,
@@ -71,6 +72,9 @@ class ReportJobExecutor:
             async with self._database.transaction() as repositories:
                 task = await repositories.tasks.get(task_id)
                 findings = await repositories.findings.list_for_task(task["id"])
+                pocs: list[Poc] = []
+                for finding in findings:
+                    pocs.extend(await repositories.pocs.list_for_finding(finding["id"]))
                 artifact = await repositories.artifacts.get(artifact_id)
                 if (
                     artifact["kind"].value != "derived"
@@ -83,10 +87,12 @@ class ReportJobExecutor:
                 content = json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode()
             elif report_format == "pdf":
                 with tempfile.TemporaryDirectory(prefix="vulnweaver-report-") as directory:
-                    output = render_pdf(findings, Path(directory) / "report.pdf")
+                    output = render_pdf(
+                        findings, Path(directory) / "report.pdf", pocs=pocs
+                    )
                     content = output.read_bytes()
             else:
-                content = build_markdown(findings).encode()
+                content = build_markdown(findings, pocs).encode()
             result = await register_report(
                 self._registration,
                 artifact,

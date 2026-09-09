@@ -9,6 +9,7 @@ dependencies = [
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
     "vulnweaver-persistence",
+    "vulnweaver-proof",
     "vulnweaver-reporting",
     "vulnweaver-queue",
     "vulnweaver-source-analysis",
@@ -30,6 +31,7 @@ vulnweaver-binary-analysis = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
 vulnweaver-orchestrator = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-proof = { workspace = true }
 vulnweaver-reporting = { workspace = true }
 vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }

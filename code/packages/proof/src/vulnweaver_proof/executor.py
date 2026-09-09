@@ -30,6 +30,8 @@ from vulnweaver_contracts import (
 from vulnweaver_domain import evaluate_exploit_eligibility
 from vulnweaver_persistence import Database
 
+from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
+
 
 class ProofSandbox(Protocol):
     async def run(self, request: SandboxRequest, cancellation: asyncio.Event) -> SandboxResult: ...
@@ -56,18 +58,30 @@ class ProofJobExecutor:
         request = cast(ProofRequest, raw_request)
         kind = PocKind.EXPLOIT if job["kind"] is JobKind.EXPLOIT else PocKind.PROOF_OF_CONCEPT
         try:
+            # The sandbox call must stay outside any database transaction so a
+            # slow runner cannot pin a pooled connection for the whole timeout.
             async with self._database.transaction() as repositories:
                 finding = await repositories.findings.get(request["finding_id"])
                 task = await repositories.tasks.get(finding["task_id"])
                 project = await repositories.projects.get(task["project_id"])
-                poc = await self._service.run(
-                    request,
-                    finding_status=finding["status"],
-                    exploit_validation_enabled=project["exploit_validation_enabled"],
-                    cancellation=cancellation,
-                    kind=kind,
+                await ensure_script_ref_belongs_to_project(
+                    repositories, script_ref=request["script_ref"], project_id=project["id"]
                 )
+                finding_status = finding["status"]
+                exploit_validation_enabled = project["exploit_validation_enabled"]
+            poc = await self._service.run(
+                request,
+                finding_status=finding_status,
+                exploit_validation_enabled=exploit_validation_enabled,
+                cancellation=cancellation,
+                kind=kind,
+            )
+            async with self._database.transaction() as repositories:
                 await repositories.pocs.create(poc)
+        except ScriptRefOwnershipError as error:
+            return _worker_failure(
+                job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
+            )
         except (ProofExecutionError, TypeError, ValueError) as error:
             return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
         status = JobStatus.CANCELLED if poc["status"] is PocStatus.CANCELLED else (
