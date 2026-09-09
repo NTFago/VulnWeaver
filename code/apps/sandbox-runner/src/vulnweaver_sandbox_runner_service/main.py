@@ -7,20 +7,27 @@ import os
 import uvicorn
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_fuzzing import afl_casr_command_profile
-from vulnweaver_sandbox_runner import DockerCliRuntime, SandboxRunner, create_sandbox_app
+from vulnweaver_sandbox_runner import (
+    DockerCliRuntime,
+    SandboxCommandProfile,
+    SandboxRunner,
+    create_sandbox_app,
+)
 from vulnweaver_tool_runtime import ToolSpecLoader
 
 
 def build_app():
     directory = os.environ.get("TOOL_SPEC_DIRECTORY", "/etc/vulnweaver/tool-specs")
     registry = ToolSpecLoader.load_directory(directory)
-    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "")
-    if not digest:
-        raise RuntimeError("AFL_CASR_IMAGE_DIGEST is required")
-    profile = afl_casr_command_profile(
-        os.environ.get("AFL_CASR_IMAGE_REF", "vulnweaver-afl-casr:fixed"),
-        digest,
-    )
+    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
+    profiles: list[SandboxCommandProfile] = []
+    if digest:
+        profiles.append(
+            afl_casr_command_profile(
+                os.environ.get("AFL_CASR_IMAGE_REF", "vulnweaver-afl-casr:fixed"),
+                digest,
+            )
+        )
     store = LocalContentAddressedStore(
         os.environ.get("ARTIFACT_STORE_ROOT", "/var/lib/vulnweaver/artifacts")
     )
@@ -28,7 +35,7 @@ def build_app():
     runner = SandboxRunner(
         store,
         registry,
-        [profile],
+        profiles,
         runtime=DockerCliRuntime(
             root=sandbox_root,
             docker_host_root=os.environ.get("DOCKER_HOST_SANDBOX_ROOT") or None,
