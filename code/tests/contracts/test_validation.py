@@ -198,6 +198,26 @@ def test_unknown_contract_version_is_rejected() -> None:
         ensure_supported_version("2.0.0")
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_contracts_reject_non_finite_json_numbers(value: float) -> None:
+    with pytest.raises(ContractValidationError, match="non-finite numbers"):
+        validate_contract(
+            "PairEdge",
+            {
+                "schema_version": "1.0.0",
+                "id": "pair-edge:non-finite",
+                "artifact_version_id": "artifact-version:pair",
+                "source_node_id": "pair-node:main",
+                "target_node_id": "pair-node:helper",
+                "type": "call",
+                "scope": "source",
+                "confidence": value,
+                "evidence_id": None,
+                "attributes": {},
+            },
+        )
+
+
 def test_pair_source_contracts_validate() -> None:
     location = {
         "artifact_version_id": "artifact-version:pair",

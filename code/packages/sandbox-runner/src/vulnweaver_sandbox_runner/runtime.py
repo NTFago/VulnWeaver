@@ -54,9 +54,16 @@ class DockerCliRuntime:
     """Invoke Docker with an immutable, non-privileged argument profile."""
 
     def __init__(
-        self, *, docker_executable: str = "docker", root: str | Path = "/var/lib/vulnweaver/sandbox"
+        self,
+        *,
+        docker_executable: str = "docker",
+        root: str | Path = "/var/lib/vulnweaver/sandbox",
+        command_timeout_seconds: float = 15.0,
     ) -> None:
+        if not 1 <= command_timeout_seconds <= 60:
+            raise ValueError("Docker command timeout must be between 1 and 60 seconds")
         self._docker = docker_executable
+        self._command_timeout_seconds = command_timeout_seconds
         self._root = Path(root).expanduser().resolve()
         self._root.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +128,7 @@ class DockerCliRuntime:
             overflowed.cancel()
             if not communicate.done():
                 communicate.cancel()
+            await asyncio.gather(cancelled, overflowed, communicate, return_exceptions=True)
 
     async def cleanup(self, container_name: str) -> bool:
         if not _safe_container_name(container_name):
@@ -135,7 +143,7 @@ class DockerCliRuntime:
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
-        await process.communicate()
+        await _communicate_with_timeout(process, self._command_timeout_seconds)
         return process.returncode == 0
 
     async def list_owned(self, label: str) -> tuple[str, ...]:
@@ -154,7 +162,7 @@ class DockerCliRuntime:
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
-        stdout, _ = await process.communicate()
+        stdout, _ = await _communicate_with_timeout(process, self._command_timeout_seconds)
         if process.returncode != 0:
             return ()
         return tuple(
@@ -216,8 +224,17 @@ class DockerCliRuntime:
             raise ValueError("invalid sandbox image reference")
         if re.fullmatch(r"sha256:[0-9a-f]{64}", request.image_digest) is None:
             raise ValueError("sandbox image must be digest pinned")
-        if not request.argv or any(not item or "\x00" in item for item in request.argv):
-            raise ValueError("sandbox argv must be non-empty strings without NUL bytes")
+        if not request.argv or len(request.argv) > 64:
+            raise ValueError("sandbox argv must contain between 1 and 64 arguments")
+        if any(
+            not item
+            or len(item) > 4096
+            or "\x00" in item
+            or "\n" in item
+            or "\r" in item
+            for item in request.argv
+        ):
+            raise ValueError("sandbox argv contains an invalid argument")
         _assert_within(self._root, request.input_dir)
         _assert_within(self._root, request.output_dir)
         if request.timeout_seconds < 1 or request.max_output_bytes < 1:
@@ -237,7 +254,7 @@ class DockerCliRuntime:
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
-        await process.communicate()
+        await _communicate_with_timeout(process, self._command_timeout_seconds)
 
     async def _usage(self, container_name: str) -> tuple[int, int]:
         if not _safe_container_name(container_name):
@@ -254,7 +271,7 @@ class DockerCliRuntime:
             stderr=asyncio.subprocess.PIPE,
             env=_runtime_environment(),
         )
-        stdout, _ = await process.communicate()
+        stdout, _ = await _communicate_with_timeout(process, self._command_timeout_seconds)
         if process.returncode != 0:
             return 0, 0
         try:
@@ -268,6 +285,19 @@ class DockerCliRuntime:
 
 def _runtime_environment() -> dict[str, str]:
     return {"PATH": os.environ.get("PATH", ""), "LANG": "C", "LC_ALL": "C"}
+
+
+async def _communicate_with_timeout(
+    process: asyncio.subprocess.Process, timeout_seconds: float
+) -> tuple[bytes, bytes]:
+    communication = asyncio.create_task(process.communicate())
+    try:
+        return await asyncio.wait_for(asyncio.shield(communication), timeout_seconds)
+    except (TimeoutError, asyncio.CancelledError):
+        with suppress(ProcessLookupError):
+            process.kill()
+        await asyncio.gather(communication, return_exceptions=True)
+        raise
 
 
 def _safe_container_name(value: str) -> bool:

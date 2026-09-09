@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Iterable, Mapping
 from functools import lru_cache
 from importlib.resources import files
@@ -47,6 +48,12 @@ def get_contract_schema(definition: str) -> dict[str, Any]:
 def validate_contract(definition: str, payload: Mapping[str, object]) -> None:
     """Validate a mapping and report every deterministic validation failure."""
 
+    non_finite_paths = _non_finite_number_paths(payload)
+    if non_finite_paths:
+        raise ContractValidationError(
+            definition,
+            [f"{path}: non-finite numbers are not valid JSON" for path in non_finite_paths],
+        )
     validator = Draft202012Validator(
         get_contract_schema(definition), format_checker=FormatChecker()
     )
@@ -79,3 +86,21 @@ def _validation_error_key(error: ValidationError) -> tuple[str, str]:
 def _json_path(error: ValidationError) -> str:
     parts = [str(part) for part in error.absolute_path]
     return "$" if not parts else "$." + ".".join(parts)
+
+
+def _non_finite_number_paths(value: object, path: str = "$") -> list[str]:
+    if isinstance(value, float) and not math.isfinite(value):
+        return [path]
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[object, object], value)
+        failures: list[str] = []
+        for key, nested in mapping.items():
+            failures.extend(_non_finite_number_paths(nested, f"{path}.{key}"))
+        return failures
+    if isinstance(value, (list, tuple)):
+        values = cast(list[object] | tuple[object, ...], value)
+        failures = []
+        for index, nested in enumerate(values):
+            failures.extend(_non_finite_number_paths(nested, f"{path}.{index}"))
+        return failures
+    return []

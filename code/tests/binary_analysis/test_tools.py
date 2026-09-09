@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Coroutine, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 import vulnweaver_binary_analysis.tools as binary_tools
@@ -25,6 +26,18 @@ from vulnweaver_binary_analysis import (
 from vulnweaver_binary_analysis.tools import CommandResult
 
 from tests.binary_analysis.samples import elf64_sample
+
+
+def _run_subprocess_scenario(scenario: Coroutine[Any, Any, None]) -> None:
+    if sys.platform != "win32":
+        asyncio.run(scenario)
+        return
+    policy_type = getattr(asyncio, "WindowsProactorEventLoopPolicy")  # noqa: B009
+    loop = policy_type().new_event_loop()
+    try:
+        loop.run_until_complete(scenario)
+    finally:
+        loop.close()
 
 
 class _RecordingRunner:
@@ -345,7 +358,7 @@ def test_bounded_command_runner_stops_output_floods() -> None:
                 cancellation=asyncio.Event(),
             )
 
-    asyncio.run(scenario())
+    _run_subprocess_scenario(scenario())
 
 
 def test_bounded_command_runner_honors_cancellation() -> None:
@@ -360,4 +373,22 @@ def test_bounded_command_runner_honors_cancellation() -> None:
                 cancellation=cancellation,
             )
 
-    asyncio.run(scenario())
+    _run_subprocess_scenario(scenario())
+
+
+def test_bounded_command_runner_terminates_process_on_parent_cancellation() -> None:
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            BoundedCommandRunner().run(
+                (sys.executable, "-c", "import time; time.sleep(30)"),
+                timeout_seconds=60,
+                max_output_bytes=128,
+                cancellation=asyncio.Event(),
+            )
+        )
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    _run_subprocess_scenario(scenario())

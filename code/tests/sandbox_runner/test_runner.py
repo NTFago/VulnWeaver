@@ -101,20 +101,31 @@ def request(
 
 
 class _FakeRuntime:
-    def __init__(self, *, cleanup_result: bool = True, unexpected_output: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        cleanup_result: bool = True,
+        unexpected_output: bool = False,
+        cancel_parent: bool = False,
+        stdout: bytes = b"stdout",
+    ) -> None:
         self.cleanup_result = cleanup_result
         self.unexpected_output = unexpected_output
+        self.cancel_parent = cancel_parent
+        self.stdout = stdout
         self.requests: list[RuntimeRequest] = []
         self.cleaned: list[str] = []
 
     async def run(self, request: RuntimeRequest, cancellation: asyncio.Event) -> RuntimeExecution:
         self.requests.append(request)
+        if self.cancel_parent:
+            raise asyncio.CancelledError
         if cancellation.is_set():
             return RuntimeExecution("cancelled", None, b"", b"", 1, 0, 0)
         (request.output_dir / "report.txt").write_text("safe output", encoding="utf-8")
         if self.unexpected_output:
             (request.output_dir / "secret.txt").write_text("unexpected", encoding="utf-8")
-        return RuntimeExecution("succeeded", 0, b"stdout", b"", 12, 3, 4096)
+        return RuntimeExecution("succeeded", 0, self.stdout, b"", 12, 3, 4096)
 
     async def cleanup(self, container_name: str) -> bool:
         self.cleaned.append(container_name)
@@ -276,6 +287,40 @@ def test_runner_rejects_unapproved_output_and_reports_orphan_cleanup(tmp_path: P
     assert len(runtime.cleaned) == 1
 
 
+def test_runner_rejects_combined_file_and_stream_output_before_publication(
+    tmp_path: Path,
+) -> None:
+    runtime = _FakeRuntime(stdout=b"x" * (1024 * 1024))
+    sandbox, store = runner(tmp_path, runtime)
+    input_object = store.put_stream(io.BytesIO(b"input"), max_bytes=1024)
+    value = request()
+    value["input_ref"] = input_object.object_ref
+
+    result = asyncio.run(sandbox.run(value, asyncio.Event()))
+
+    assert result["status"] is SandboxStatus.FAILED
+    assert result["failure"] is not None
+    assert result["failure"]["code"] == "sandbox.output_limit_exceeded"
+    assert result["outputs"] == []
+    assert result["stdout_ref"] is None
+    assert result["stderr_ref"] is None
+    assert result["resource_usage"]["output_bytes"] == 1024 * 1024 + len("safe output")
+
+
+def test_runner_propagates_parent_cancellation_after_cleanup(tmp_path: Path) -> None:
+    runtime = _FakeRuntime(cancel_parent=True)
+    sandbox, store = runner(tmp_path, runtime)
+    input_object = store.put_stream(io.BytesIO(b"input"), max_bytes=1024)
+    value = request()
+    value["input_ref"] = input_object.object_ref
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(sandbox.run(value, asyncio.Event()))
+
+    assert len(runtime.cleaned) == 1
+    assert runtime.cleaned[0].startswith("vw-sbx-")
+
+
 def test_runner_recovers_only_owned_safe_container_names(tmp_path: Path) -> None:
     runtime = _FakeRuntime()
     sandbox, _ = runner(tmp_path, runtime)
@@ -315,3 +360,8 @@ def test_docker_runtime_builds_fixed_isolated_flags_and_rejects_host_mounts(
     outside = replace(value, input_dir=tmp_path.parent / "outside")
     with pytest.raises(ValueError):
         runtime.validate_request(outside)
+
+    with pytest.raises(ValueError, match="invalid argument"):
+        runtime.validate_request(replace(value, argv=("entrypoint", "line\nbreak")))
+    with pytest.raises(ValueError, match="timeout"):
+        DockerCliRuntime(root=tmp_path, command_timeout_seconds=0)

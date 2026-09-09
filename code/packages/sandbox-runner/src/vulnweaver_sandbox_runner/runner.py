@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
@@ -35,7 +35,7 @@ from vulnweaver_sandbox_runner.runtime import (
     SandboxRuntime,
 )
 
-CommandBuilder = Callable[[Mapping[str, object], Path, Path], Sequence[str]]
+CommandBuilder = Callable[[Mapping[str, object], PurePath, PurePath], Sequence[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +101,7 @@ class SandboxRunner:
         input_dir.mkdir()
         output_dir.mkdir()
         result: SandboxResult | None = None
+        cancellation_error: asyncio.CancelledError | None = None
         runtime_started = False
         try:
             input_path = input_dir / "input.bin"
@@ -108,7 +109,9 @@ class SandboxRunner:
                 await asyncio.to_thread(self._materialize_input, request["input_ref"], input_path)
                 argv = tuple(
                     profile.build_argv(
-                        request["arguments"], Path("/input/input.bin"), Path("/output")
+                        request["arguments"],
+                        PurePosixPath("/input/input.bin"),
+                        PurePosixPath("/output"),
                     )
                 )
                 _validate_argv(argv)
@@ -137,7 +140,8 @@ class SandboxRunner:
                 runtime_started = True
                 try:
                     execution = await self._runtime.run(runtime_request, cancellation)
-                except asyncio.CancelledError:
+                except asyncio.CancelledError as error:
+                    cancellation_error = error
                     result = _result(
                         request["id"],
                         SandboxStatus.CANCELLED,
@@ -196,6 +200,8 @@ class SandboxRunner:
             if not cleaned:
                 result = _orphaned(result)
             shutil.rmtree(work_dir, ignore_errors=True)
+        if cancellation_error is not None:
+            raise cancellation_error
         return result
 
     async def recover_orphans(self) -> tuple[str, ...]:
@@ -307,7 +313,9 @@ class SandboxRunner:
             _validate_argv(
                 tuple(
                     profile.build_argv(
-                        request["arguments"], Path("/input/input.bin"), Path("/output")
+                        request["arguments"],
+                        PurePosixPath("/input/input.bin"),
+                        PurePosixPath("/output"),
                     )
                 )
             )
@@ -333,18 +341,12 @@ class SandboxRunner:
         execution: RuntimeExecution,
         output_dir: Path,
     ) -> SandboxResult:
-        output_refs, output_bytes = _collect_outputs(
-            self._store,
+        approved_outputs, output_bytes = _approved_outputs(
             output_dir,
             request["output_file_names"],
-            request["resource_budget"]["disk_bytes"],
         )
-        stdout_ref, stdout_bytes = _store_stream(
-            self._store, execution.stdout, request["resource_budget"]["disk_bytes"]
-        )
-        stderr_ref, stderr_bytes = _store_stream(
-            self._store, execution.stderr, request["resource_budget"]["disk_bytes"] - stdout_bytes
-        )
+        stdout_bytes = len(execution.stdout)
+        stderr_bytes = len(execution.stderr)
         total_output = output_bytes + stdout_bytes + stderr_bytes
         usage = _usage(
             execution.duration_millis,
@@ -360,6 +362,10 @@ class SandboxRunner:
                 usage,
                 status=SandboxStatus.FAILED,
             )
+        output_refs = _store_outputs(self._store, approved_outputs)
+        remaining = request["resource_budget"]["disk_bytes"] - output_bytes
+        stdout_ref, _ = _store_stream(self._store, execution.stdout, remaining)
+        stderr_ref, _ = _store_stream(self._store, execution.stderr, remaining - stdout_bytes)
         status = _status(execution.status)
         failure = None
         if status is SandboxStatus.FAILED:
@@ -399,23 +405,28 @@ class SandboxRunner:
         )
 
 
-def _collect_outputs(
-    store: ArtifactStore,
+def _approved_outputs(
     output_dir: Path,
     allowed_names: list[str],
-    max_bytes: int,
-) -> tuple[list[SandboxOutput], int]:
+) -> tuple[tuple[Path, ...], int]:
     allowed = set(allowed_names)
-    outputs: list[SandboxOutput] = []
+    approved: dict[str, Path] = {}
     total = 0
-    for path in sorted(output_dir.iterdir(), key=lambda item: item.name):
+    for path in output_dir.iterdir():
         if path.is_symlink() or not path.is_file() or path.name not in allowed:
             raise ValueError("sandbox produced an unapproved output path")
+        if path.name in approved:
+            raise ValueError("sandbox produced a duplicate output path")
         size = path.stat().st_size
         total += size
-        if total > max_bytes:
-            raise ValueError("sandbox output exceeds its disk budget")
-        stored = _store_path(store, path, max_bytes - (total - size))
+        approved[path.name] = path
+    return tuple(approved[name] for name in sorted(approved)), total
+
+
+def _store_outputs(store: ArtifactStore, paths: tuple[Path, ...]) -> list[SandboxOutput]:
+    outputs: list[SandboxOutput] = []
+    for path in paths:
+        stored = _store_path(store, path, path.stat().st_size)
         outputs.append(
             SandboxOutput(
                 path=path.name,
@@ -424,7 +435,7 @@ def _collect_outputs(
                 size_bytes=stored.size_bytes,
             )
         )
-    return outputs, total
+    return outputs
 
 
 def _store_path(store: ArtifactStore, path: Path, max_bytes: int) -> StoredObject:

@@ -24,7 +24,7 @@ def test_evidence_repository_is_immutable_and_idempotent(persistence_database_ur
                         ToolIdentity,
                         {"name": "semgrep", "version": "1.0.0", "image_digest": None},
                     ),
-                    "input_ref": "cas://sha256/" + "b" * 64,
+                    "input_ref": "cas://sha256/" + "9" * 64,
                     "command_hash": None,
                     "exit_code": 0,
                     "stdout_ref": "cas://sha256/" + "c" * 64,

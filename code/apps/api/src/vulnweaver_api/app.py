@@ -3,6 +3,7 @@
 
 import asyncio
 import hashlib
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,6 +74,7 @@ from vulnweaver_api.schemas import (
 from vulnweaver_api.settings import ApiSettings
 from vulnweaver_api.uploads import remove_stale_uploads, stage_upload
 
+LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
 
@@ -737,6 +739,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         except WebSocketDisconnect:
             return
         except Exception:
+            LOGGER.exception("task event WebSocket failed", extra={"task_id": task_id})
             await websocket.close(code=1011)
 
     return app

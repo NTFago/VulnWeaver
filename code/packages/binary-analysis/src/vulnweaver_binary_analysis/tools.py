@@ -165,10 +165,14 @@ class BoundedCommandRunner:
                 await _terminate(process)
                 raise
             return CommandResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
+        except asyncio.CancelledError:
+            await _terminate(process)
+            raise
         finally:
             cancelled.cancel()
             if not communicate.done():
                 communicate.cancel()
+            await asyncio.gather(cancelled, communicate, return_exceptions=True)
 
 
 class ObjdumpAdapter:
@@ -1085,6 +1089,7 @@ async def _bounded_communicate(
             stdout_task.cancel()
         if not stderr_task.done():
             stderr_task.cancel()
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
 
 
 async def _read_bounded(reader: asyncio.StreamReader, budget: _OutputBudget) -> bytes:

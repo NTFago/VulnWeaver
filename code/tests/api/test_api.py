@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,9 +24,6 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_persistence import Database
 from vulnweaver_persistence.models import personal_sessions
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @pytest.fixture
