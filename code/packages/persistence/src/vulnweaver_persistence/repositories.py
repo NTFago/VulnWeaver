@@ -84,6 +84,7 @@ from vulnweaver_persistence.models import (
     tasks,
 )
 from vulnweaver_persistence.personal_auth import PersonalAuthRepository
+from vulnweaver_persistence.product_settings import ProductSettingsRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -2001,6 +2002,7 @@ class Repositories:
     task_events: TaskEventRepository
     api_requests: ApiRequestRepository
     personal_auth: PersonalAuthRepository
+    product_settings: ProductSettingsRepository
     agent_runs: AgentRunRepository
     checkpoints: CheckpointRepository
     pair: PairRepository
@@ -2018,6 +2020,7 @@ class Repositories:
         object.__setattr__(self, "task_events", TaskEventRepository(connection))
         object.__setattr__(self, "api_requests", ApiRequestRepository(connection))
         object.__setattr__(self, "personal_auth", PersonalAuthRepository(connection))
+        object.__setattr__(self, "product_settings", ProductSettingsRepository(connection))
         object.__setattr__(self, "agent_runs", AgentRunRepository(connection))
         object.__setattr__(self, "checkpoints", CheckpointRepository(connection))
         object.__setattr__(self, "pair", PairRepository(connection))

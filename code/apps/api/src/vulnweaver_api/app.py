@@ -7,7 +7,6 @@ import logging
 from collections.abc import Iterable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated, Any, cast
 from uuid import uuid4
 
@@ -75,9 +74,13 @@ from vulnweaver_api.schemas import (
     ErrorResponse,
     FindingEvidenceDetail,
     HealthResponse,
+    InstallationStatusResponse,
     LoginRequest,
     MeResponse,
     PasswordChangeRequest,
+    ProductSettingsBody,
+    ProductSettingsResponse,
+    RegistrationRequest,
     ReviewFindingBody,
     SessionResponse,
 )
@@ -108,12 +111,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def lifespan(_: FastAPI):
         await auth.initialize()
         await asyncio.to_thread(remove_stale_uploads, configuration.upload_staging_root)
-        if (
-            configuration.bootstrap_password_file is not None
-            and not await auth.is_initialized()
-        ):
-            password = _read_password_file(configuration.bootstrap_password_file)
-            await auth.bootstrap(configuration.personal_username, password)
         yield
         await database.dispose()
 
@@ -184,6 +181,27 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             csrf_token=result.csrf_token,
         )
 
+    @app.get("/api/auth/installation", response_model=InstallationStatusResponse)
+    async def installation_status() -> InstallationStatusResponse:
+        return InstallationStatusResponse(registration_open=not await auth.is_initialized())
+
+    @app.post("/api/auth/register", response_model=SessionResponse, status_code=201)
+    async def register(body: RegistrationRequest, response: Response) -> SessionResponse:
+        validate_contract("RegistrationRequest", body.model_dump(mode="json"))
+        result = await auth.register(body.username, body.password)
+        set_session_cookies(
+            response,
+            session_token=result.token,
+            csrf_token=result.csrf_token,
+            secure=configuration.secure_cookie,
+            max_age=configuration.session_ttl_seconds,
+        )
+        return SessionResponse(
+            username=result.account.username,
+            must_change_password=False,
+            csrf_token=result.csrf_token,
+        )
+
     @app.get("/api/auth/me", response_model=MeResponse)
     async def me(
         session: Annotated[str | None, Security(session_cookie)],
@@ -226,6 +244,62 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             idempotency_key=normalize_idempotency_key(idempotency_key),
         )
 
+    @app.get("/api/settings", response_model=ProductSettingsResponse)
+    async def get_product_settings(
+        _: Annotated[str, Depends(require_account)],
+    ) -> ProductSettingsResponse:
+        async with database.transaction() as repositories:
+            values = await repositories.product_settings.get()
+        return _product_settings_response(values)
+
+    @app.put("/api/settings", response_model=ProductSettingsResponse)
+    async def put_product_settings(
+        body: ProductSettingsBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> ProductSettingsResponse:
+        values = body.model_dump(
+            mode="json",
+            exclude={
+                "schema_version",
+                "review_model_api_key",
+                "clear_review_model_api_key",
+            },
+        )
+        validate_contract("ProductSettings", body.model_dump(mode="json"))
+        base_url = str(values["review_model_base_url"]).strip().rstrip("/")
+        model_name = str(values["review_model_name"]).strip()
+        if bool(base_url) != bool(model_name):
+            raise ApiInputError(
+                "incomplete_model_configuration",
+                "model endpoint and model name must be configured together",
+                "review_model_base_url",
+            )
+        if base_url and not base_url.startswith(("https://", "http://")):
+            raise ApiInputError(
+                "invalid_model_endpoint",
+                "model endpoint must use HTTP or HTTPS",
+                "review_model_base_url",
+            )
+        if body.clear_review_model_api_key and body.review_model_api_key is not None:
+            raise ApiInputError(
+                "conflicting_secret_update",
+                "API key cannot be replaced and cleared in the same request",
+                "clear_review_model_api_key",
+            )
+        values["review_model_base_url"] = base_url
+        values["review_model_name"] = model_name
+        async with database.transaction() as repositories:
+            previous = await repositories.product_settings.get()
+            stored_key = previous.get("review_model_api_key")
+            if body.clear_review_model_api_key:
+                stored_key = None
+            elif body.review_model_api_key is not None:
+                stored_key = body.review_model_api_key
+            if stored_key is not None:
+                values["review_model_api_key"] = stored_key
+            await repositories.product_settings.replace(values)
+        return _product_settings_response(values)
+
     @app.get("/health/live", response_model=HealthResponse)
     async def live() -> HealthResponse:
         return HealthResponse(status="ok")
@@ -234,10 +308,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def ready() -> HealthResponse:
         await database.healthcheck()
         await asyncio.to_thread(store.healthcheck)
-        async with database.transaction() as repositories:
-            account = await repositories.personal_auth.account()
-        if account is None:
-            raise HTTPException(status_code=503, detail="personal account is not initialized")
         return HealthResponse(status="ready")
 
     @app.get("/api/projects")
@@ -771,7 +841,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 labels=labels,
                 note=body.note,
                 severity_override=body.severity_override,
-                author_id=_personal_author_id(configuration.personal_username),
+                author_id=_personal_author_id("personal"),
                 supersedes_annotation_id=body.supersedes_annotation_id,
                 created_at=_now(),
             )
@@ -825,7 +895,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 finding_id=finding_id,
                 outcome=body.outcome,
                 rationale=body.rationale,
-                model=f"human:{_personal_author_id(configuration.personal_username)}",
+                model=f"human:{_personal_author_id('personal')}",
                 supersedes_review_id=body.supersedes_review_id,
                 created_at=_now(),
             )
@@ -948,14 +1018,22 @@ def _personal_author_id(username: str) -> str:
     return "account:" + hashlib.sha256(username.encode()).hexdigest()[:24]
 
 
-def _read_password_file(path: Path) -> str:
-    resolved = path.expanduser().resolve(strict=True)
-    if resolved.stat().st_size > 4096:
-        raise ValueError("personal password file is too large")
-    password = resolved.read_text(encoding="utf-8").rstrip("\r\n")
-    if not password:
-        raise ValueError("personal password file is empty")
-    return password
+def _product_settings_response(values: dict[str, object]) -> ProductSettingsResponse:
+    public_values = {
+        key: value for key, value in values.items() if key != "review_model_api_key"
+    }
+    parsed = ProductSettingsBody.model_validate(
+        {"schema_version": "1.0.0", **public_values}
+    )
+    return ProductSettingsResponse(
+        review_model_base_url=parsed.review_model_base_url,
+        review_model_name=parsed.review_model_name,
+        review_model_timeout_seconds=parsed.review_model_timeout_seconds,
+        review_model_max_attempts=parsed.review_model_max_attempts,
+        review_model_repair_attempts=parsed.review_model_repair_attempts,
+        review_model_min_interval_seconds=parsed.review_model_min_interval_seconds,
+        api_key_configured="review_model_api_key" in values,
+    )
 
 
 def _count_values(values: Iterable[str]) -> dict[str, int]:
