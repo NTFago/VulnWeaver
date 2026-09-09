@@ -58,7 +58,8 @@ def build_app():
         ),
         root=sandbox_root,
     )
-    return create_sandbox_app(runner, bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN"))
+    token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None
+    return create_sandbox_app(runner, bearer_token=token)
 
 
 def _resource_budget() -> ResourceBudget:

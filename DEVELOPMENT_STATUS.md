@@ -131,6 +131,17 @@
 - 决策：Proof 与 Exploit 继续共用受 ToolSpec 和 Sandbox 策略约束的执行入口，不开放任意命令参数。
 - 下一步：构建并固定无害 Proof 工具镜像摘要，启动独立 Runner 后回放 Proof/Exploit 请求。
 
+### 2026-09-09 21:12：修复独立 Runner 服务启动依赖与空认证配置
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/apps/sandbox-runner/pyproject.toml`、`code/apps/sandbox-runner/src/vulnweaver_sandbox_runner_service/main.py`、`code/uv.lock`
+- 已完成：将 `vulnweaver-proof` 纳入独立 Runner 镜像运行依赖；空的 `SANDBOX_RUNNER_TOKEN` 现在按未启用认证处理，非空 token 仍进入 bearer 校验。
+- 测试与结果：Dev Container 中重新构建并启动 `sandbox-runner`，容器保持运行，`GET /health` 返回 `{\"status\":\"ok\"}`。
+- 问题：真实 Proof/AFL++/CASR 镜像仍未配置。
+- 阻碍点：无。
+- 下一步：构建并固定无害 Proof 工具镜像摘要，回放 Proof/Exploit 请求。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex

@@ -1598,6 +1598,7 @@ dependencies = [
     { name = "uvicorn" },
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-fuzzing" },
+    { name = "vulnweaver-proof" },
     { name = "vulnweaver-sandbox-runner" },
     { name = "vulnweaver-tool-runtime" },
 ]
@@ -1608,6 +1609,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.34,<1" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
+    { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
 ]

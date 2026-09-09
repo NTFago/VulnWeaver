@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn>=0.34,<1",
     "vulnweaver-artifact-store",
     "vulnweaver-fuzzing",
+    "vulnweaver-proof",
     "vulnweaver-sandbox-runner",
     "vulnweaver-tool-runtime",
 ]
@@ -19,6 +20,7 @@ build-backend = "uv_build"
 [tool.uv.sources]
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-fuzzing = { workspace = true }
+vulnweaver-proof = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 
