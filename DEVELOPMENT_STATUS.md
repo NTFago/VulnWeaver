@@ -124,7 +124,7 @@
 - 修改文件：`code/packages/contracts/`、`code/packages/proof/`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/proof/`。
 - 已完成：新增 `ProofRequest` v1 契约；实现固定工具/版本绑定、脚本 CAS 引用、镜像摘要和预算约束；未确认 Finding 或关闭项目利用验证时不调用 Sandbox；将 Sandbox 成功、超时、取消和策略拒绝映射为 `Poc` 状态/结果，并保留 stdout/stderr 日志引用。
 - 测试与结果：Proof 与契约定向测试 19 passed；契约生成 `--check`、JSON Schema 解析、Python 编译通过。
-- 问题：Windows 默认 editable `.venv` 仍受 Q-003 影响，当前使用工作区源码路径进行定向验证；本机 ruff/pyright 命令不可直接调用，远端质量门禁需在 PR 中复核。
+- 问题：Windows 默认 editable `.venv` 仍受 Q-003 影响，当前使用工作区源码路径进行定向验证；本机 ruff/pyright 命令不可直接调用。系统 Python 的全量 pytest 因缺少 `langgraph`、`tree_sitter_c` 等工作区依赖在收集阶段中止，不能替代 CI/Dev Container 全量门禁；远端质量门禁需在 PR 中复核。
 - 阻碍点：无。
 - 决策：动态 Proof/Exploit 继续只通过 Sandbox Runner；本检查点不执行任何生成脚本或不可信样本。
 - 下一步：把 Proof 请求接入 Job/Worker 结算和 API，再补充可回放 recipe 及 P4 无害 Docker 验收。
