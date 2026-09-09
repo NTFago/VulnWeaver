@@ -13,7 +13,7 @@
 - **总体状态**：T15 已完成；静态分析全部终止后自动创建幂等 REVIEW Job，模型调用受 Job 租约、attempt 与 Task token 预算约束，Job 终态事务同步聚合 Task 并追加状态事件；函数/Finding Annotation、人工复核和 Finding/Evidence/PAIR/AgentRun 查询 API 已交付。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前 `feat/t15-completion` 基于 `main@b948b89` 完成并验证 T15 收尾，尚未合并或推送。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；`feat/t15-completion` 的 `80ad20a` 已 fast-forward 合并到本地 `main`，本地尚未推送，`origin/main` 仍为 `b948b89`。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
 - **当前负责人**：无；T15-R4 已完成，下一任务包待认领
 
