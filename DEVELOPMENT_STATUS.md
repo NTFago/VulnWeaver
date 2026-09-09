@@ -142,6 +142,17 @@
 - 阻碍点：无。
 - 下一步：构建并固定无害 Proof 工具镜像摘要，回放 Proof/Exploit 请求。
 
+### 2026-09-09 21:28：补齐任务页 Finding 与报告操作
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/apps/web/src/App.svelte`、`code/apps/web/src/lib/api.ts`、`DEVELOPMENT_STATUS.md`
+- 已完成：任务页加载并展示 Finding 摘要，显示严重性、类别、CWE 和置信度；接入 Markdown/SARIF 报告 Job 创建操作，并复用当前任务输入版本及 CSRF/幂等请求头。
+- 测试与结果：Dev Container 内 `pnpm run check:typescript` 通过，Svelte 检查 0 错误、0 警告。
+- 问题：报告下载/工件详情页面尚未接入，当前操作只负责投递报告 Job。
+- 阻碍点：无。
+- 下一步：补充报告 Job 产物查询与下载入口，再执行 Web 端到端回放。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex

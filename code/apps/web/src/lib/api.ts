@@ -5,6 +5,7 @@ import type {
   CreateProjectRequest,
   CreateTaskRequest,
   ErrorResponse,
+  Finding,
   Job,
   Project,
   QueueEvent,
@@ -122,6 +123,17 @@ export const api = {
   jobs: (taskId: string) => request<Job[]>(`/api/tasks/${taskId}/jobs`),
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
+  findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  createReport: (taskId: string, payload: {
+    artifact_id: string;
+    version_id: string;
+    parent_version_id: string;
+    format: "markdown" | "sarif";
+  }) => request<Job>(`/api/tasks/${taskId}/reports`, {
+    method: "POST",
+    headers: writeHeaders(true),
+    body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
+  }),
   cancelTask: (taskId: string) =>
     request<Task>(`/api/tasks/${taskId}/cancel`, {
       method: "POST",
