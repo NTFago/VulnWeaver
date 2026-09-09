@@ -1547,12 +1547,14 @@ name = "vulnweaver-reporting"
 version = "0.1.0"
 source = { editable = "packages/reporting" }
 dependencies = [
+    { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
     { name = "weasyprint" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "weasyprint", specifier = ">=68,<69" },
 ]
