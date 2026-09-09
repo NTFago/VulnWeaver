@@ -6,6 +6,9 @@ import type {
   CreateTaskRequest,
   ErrorResponse,
   Finding,
+  Evidence,
+  FindingEvidence,
+  Poc,
   Job,
   Project,
   QueueEvent,
@@ -18,6 +21,12 @@ export interface Session {
   username: string;
   must_change_password: boolean;
   csrf_token?: string;
+}
+
+
+export interface FindingEvidenceDetail {
+  relation: FindingEvidence;
+  evidence: Evidence;
 }
 
 export interface ArtifactDetail {
@@ -130,6 +139,8 @@ export const api = {
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
+  findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
   createReport: (taskId: string, payload: {
     artifact_id: string;
     version_id: string;

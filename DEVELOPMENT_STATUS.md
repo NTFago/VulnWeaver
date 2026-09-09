@@ -44,7 +44,7 @@
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成 | 真实 AFL++/CASR 镜像回放；不得在宿主执行样本 | 2026-09-09 |
 | T20 Proof/Exploit 流程 | 进行中 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、SandboxRunnerClient、固定 Proof/Exploit profile 和无害容器回放已完成 | 通过 HTTP Runner 提交带 CAS 工件的 Proof/Exploit 请求，并验收策略拒绝、重放和部分失败 | 2026-09-09 |
 | T21 Markdown/PDF/SARIF 报告 | 进行中 | Codex | 报告生成、派生工件登记、Job/Worker 路由、版本化内容读取、Job 结果查询、PDF 生成和 Web 下载入口已完成 | 真实数据库 Finding 报告回放及完整 SARIF/PDF/浏览器验收 | 2026-09-09 |
-| T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
+| T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、证据链与复现记录查询、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
 
 ## 4. 当前问题
 
@@ -73,6 +73,8 @@
 | ADR-020 | 静态工具失败保留结果工件并结构化结算失败；Task 阶段由实际 Job 推导。 |
 
 ## 8. 最近完成记录
+
+| 2026-09-09 | T22 Finding 证据链详情 | Web 点击 Finding 后加载证据关系和 Poc 记录并展示工具、强度、摘要和执行状态；Dev Container 内 Svelte 检查通过 | 浏览器完整任务链路和可观测性收口 |
 
 | 2026-09-09 | T21 PDF 报告端到端接入 | API/Worker/Web 支持 PDF，Worker 通过临时文件调用 WeasyPrint 后写入 CAS；Dev Container 内 Web typecheck/build、Ruff 和 reporting 测试通过 | 真实数据库报告 Job 与浏览器回放 |
 

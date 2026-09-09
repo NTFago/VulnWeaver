@@ -5,6 +5,7 @@
     ArtifactKind,
     ArtifactVersion,
     Finding,
+  Poc,
     Job,
     Project,
     QueueEvent,
@@ -13,7 +14,7 @@
     TaskResult,
     TaskStatus,
   } from "@vulnweaver/contracts";
-  import { api, ApiError, taskEventSocket, type Session } from "./lib/api";
+  import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type Session } from "./lib/api";
 
   type View = "overview" | "project" | "task";
 
@@ -53,6 +54,8 @@
   let jobs: Job[] = [];
   let findings: Finding[] = [];
   let selectedFinding: Finding | null = null;
+  let selectedEvidence: FindingEvidenceDetail[] = [];
+  let selectedPocs: Poc[] = [];
   let reportVersionIds: string[] = [];
   let events: QueueEvent[] = [];
   let socket: WebSocket | null = null;
@@ -209,7 +212,7 @@
     begin();
     try {
       socket?.close(); selectedTask = await api.task(task.id); view = "task";
-      selectedFinding = null;
+      selectedFinding = null; selectedEvidence = []; selectedPocs = [];
       [jobs, events, findings] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id)]);
       await refreshReportResults();
       connectEvents(task.id); done();
@@ -239,6 +242,16 @@
     const versions = await Promise.all(reportVersionIds.map((id) => api.artifactVersion(id)));
     for (const version of versions) artifactVersions.set(version.id, version);
     artifactVersions = new Map(artifactVersions);
+  }
+
+  async function selectFinding(finding: Finding): Promise<void> {
+    selectedFinding = finding;
+    try {
+      [selectedEvidence, selectedPocs] = await Promise.all([
+        api.findingEvidence(finding.id),
+        api.findingPocs(finding.id),
+      ]);
+    } catch (caught) { showError(caught); }
   }
 
   async function cancelTask(): Promise<void> {
@@ -333,7 +346,7 @@
       {:else if view === "task" && selectedTask}
         <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1><p>结果：{displayResult(selectedTask.result)} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
         <section class="metric-strip task-metrics"><div><strong>{jobs.length}</strong><span>Jobs</span></div><div><strong>{events.length}</strong><span>事件</span></div><div><strong>{findings.length}</strong><span>候选问题</span></div><div><strong>{selectedTask.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div></section>
-        <section class="section-block full"><div class="section-head"><div><span>FINDINGS / REPORTS</span><h2>问题与报告</h2></div><div class="task-actions"><button class="secondary" on:click={() => createReport("markdown")} disabled={busy}>生成 Markdown</button><button class="secondary" on:click={() => createReport("sarif")} disabled={busy}>生成 SARIF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button></div></div>{#if findings.length === 0}<div class="compact-empty">当前任务尚未产生候选问题。</div>{:else}<div class="finding-list">{#each findings as finding}<button class="finding-row" on:click={() => selectedFinding = finding}><span class={`status-dot ${finding.status}`}></span><div><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></div><span>{Math.round(finding.confidence * 100)}%</span></button>{/each}</div>{/if}{#if selectedFinding}<article class="finding-detail"><b>{selectedFinding.title}</b><p>{selectedFinding.fix_suggestion}</p><small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small></article>{/if}{#if reportVersionIds.length > 0}<div class="report-links">{#each reportVersionIds as versionId}{#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}{/each}</div>{/if}</section>
+        <section class="section-block full"><div class="section-head"><div><span>FINDINGS / REPORTS</span><h2>问题与报告</h2></div><div class="task-actions"><button class="secondary" on:click={() => createReport("markdown")} disabled={busy}>生成 Markdown</button><button class="secondary" on:click={() => createReport("sarif")} disabled={busy}>生成 SARIF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button></div></div>{#if findings.length === 0}<div class="compact-empty">当前任务尚未产生候选问题。</div>{:else}<div class="finding-list">{#each findings as finding}<button class="finding-row" on:click={() => void selectFinding(finding)}><span class={`status-dot ${finding.status}`}></span><div><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></div><span>{Math.round(finding.confidence * 100)}%</span></button>{/each}</div>{/if}{#if selectedFinding}<article class="finding-detail"><b>{selectedFinding.title}</b><p>{selectedFinding.fix_suggestion}</p><small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small>{#if selectedEvidence.length > 0}<div class="detail-evidence"><b>证据链</b>{#each selectedEvidence as item}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>{/if}{#if selectedPocs.length > 0}<div class="detail-evidence"><b>复现记录</b>{#each selectedPocs as poc}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>{/if}</article>{/if}{#if reportVersionIds.length > 0}<div class="report-links">{#each reportVersionIds as versionId}{#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}{/each}</div>{/if}</section>
         <section class="task-grid"><div class="section-block"><div class="section-head"><div><span>JOBS</span><h2>执行单元</h2></div><small>由编排层创建</small></div>{#if jobs.length === 0}<div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>{:else}<div class="job-list">{#each jobs as job}<article><span class={`status-dot ${job.status}`}></span><div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>{#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}</article>{/each}</div>{/if}</div>
           <div class="section-block"><div class="section-head"><div><span>EVENT STREAM</span><h2>决策与状态轨迹</h2></div><small class="live"><i></i> LIVE</small></div>{#if events.length === 0}<div class="compact-empty">尚未接收事件。</div>{:else}<ol class="timeline">{#each [...events].reverse() as event}<li><span>{String(event.sequence).padStart(2, "0")}</span><div><b>{event.event_type}</b><small>{formatDate(event.occurred_at)} · {shortId(event.event_id)}</small></div></li>{/each}</ol>{/if}</div></section>
       {/if}
