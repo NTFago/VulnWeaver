@@ -9,10 +9,10 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前日期**：2026-09-09（Asia/Shanghai）
+- **当前日期**：2026-09-10（Asia/Shanghai）
 - **当前阶段**：P2 源码静态分析代码已完成，待真实 REVIEW 模型四语言端到端验收；P3 二进制分析和 Sandbox Runner 处于工具镜像/动态验收阶段；P4 Proof/Exploit 已完成主要代码接入，待 Runner HTTP 端到端回放；P5 报告、全链路 UI 和 E2E 正在收口。
-- **当前分支**：`docs/agents-md-review`，已推送并创建 PR #16 待合并。`feat/p4-proof-exploit` 已通过 PR #15 合并入 `main`；本次维护已清理 7 个已合并本地功能分支和已合并的远程旧分支，远程现仅保留 `main`。
-- **当前负责人**：Codex。当前优先处理 T20/T21/T22 的真实回放与最终验收，同时保留 T16/T18/T19 的工具链验收事项。
+- **当前分支**：`codex/docs-audit-pipeline-adr`，基于 `main@34a3779` 创建，用于提交 ADR-021 待评审方案；PR #15、PR #16 均已合并入 `main`。
+- **当前负责人**：Codex。当前仅整理 ADR-021 评审稿，不修改生产代码；T20/T21/T22 的真实回放与最终验收，以及 T16/T18/T19 的工具链验收事项保持不变。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
 
@@ -61,7 +61,11 @@
 
 ## 6. 待确认事项
 
-当前无待确认事项。已确认决策和完整 ADR 文件见 `code/docs/adr/`。
+| ID | 待确认事项 | 推荐默认值 | 决策人 | 状态 |
+|---|---|---|---|---|
+| D-001 | ADR-021 是否采用“审计计划驱动的必跑基线 + Finding 驱动的条件深审”，并由计划完整性约束 `NO_FINDINGS` | 采用；先完成计划、覆盖度、自动 Markdown 和结算完整性，再扩展检测面与动态分支 | 项目负责人 | 待评审 |
+
+已确认决策和完整 ADR 文件见 `code/docs/adr/`；ADR-021 尚未生效，不得据此开始生产代码开发。
 
 ## 7. 当前相关技术决策
 
@@ -73,6 +77,7 @@
 | ADR-015/016 | PostgreSQL Job 租约是执行权事实来源；WorkerResult 先落库，再按结果结算 ACK、重试或死信。 |
 | ADR-018/019 | API 只登记任务请求；编排层负责初始 Job/Outbox、检查点、幂等重放和恢复。 |
 | ADR-020 | 静态工具失败保留结果工件并结构化结算失败；Task 阶段由实际 Job 推导。 |
+| ADR-021（待评审） | 建议以持久化审计计划驱动适用基线，以 Finding 驱动复核和动态深审；评审通过前不生效。 |
 
 ## 8. 最近完成记录
 
@@ -108,4 +113,4 @@
 3. 使用真实数据库任务完成 T20 Proof/Exploit 的 CAS 工件回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
 4. 配置 `analysis-plane` 可达的 REVIEW 模型，完成 C/C++/Python/Java P2 端到端验收；随后执行 T22 浏览器全链路、可观测性和最终报告验收。
 
-更新时间：2026-09-09（Asia/Shanghai）
+更新时间：2026-09-10（Asia/Shanghai）
