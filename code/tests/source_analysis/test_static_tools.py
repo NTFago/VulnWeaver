@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -12,7 +13,10 @@ from vulnweaver_source_analysis import (
     parse_cppcheck_output,
     parse_semgrep_output,
 )
-from vulnweaver_source_analysis.static_tools import SubprocessStaticTool
+from vulnweaver_source_analysis.static_tools import (
+    StaticToolOutputError,
+    SubprocessStaticTool,
+)
 
 
 def test_semgrep_json_is_normalized_to_contract_diagnostics() -> None:
@@ -34,7 +38,7 @@ def test_semgrep_json_is_normalized_to_contract_diagnostics() -> None:
     assert diagnostic["cwe_ids"] == ["CWE-95"]
 
 
-def test_cppcheck_xml_is_normalized_and_invalid_xml_is_ignored() -> None:
+def test_cppcheck_xml_is_normalized_and_invalid_xml_is_rejected() -> None:
     raw = (
         b'<results><errors><error id="bufferAccessOutOfBounds" severity="error" '
         b'msg="buffer access" cwe="119">'
@@ -48,7 +52,8 @@ def test_cppcheck_xml_is_normalized_and_invalid_xml_is_ignored() -> None:
     assert diagnostics[0]["tool_name"] == "cppcheck"
     assert diagnostics[0]["severity"] is Severity.HIGH
     assert diagnostics[0]["cwe_ids"] == ["CWE-119"]
-    assert parse_cppcheck_output(b"not xml", artifact_version_id="artifact-version:source") == []
+    with pytest.raises(StaticToolOutputError, match="cppcheck.invalid_xml_output"):
+        parse_cppcheck_output(b"not xml", artifact_version_id="artifact-version:source")
 
     output = StaticToolOutput(
         tool_name="cppcheck",
@@ -59,6 +64,36 @@ def test_cppcheck_xml_is_normalized_and_invalid_xml_is_ignored() -> None:
         stderr=raw,
     )
     assert len(CppcheckAdapter().parse(output, artifact_version_id="artifact-version:source")) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="analysis-worker runs the Semgrep adapter on Linux")
+def test_semgrep_uses_disposable_settings_outside_read_only_source_tree(tmp_path: Path) -> None:
+    config = tmp_path / "rules.yml"
+    config.write_text("rules: []", encoding="utf-8")
+    executable = tmp_path / "semgrep-stub"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "settings = Path(os.environ['SEMGREP_SETTINGS_FILE'])\n"
+        "assert Path(os.environ['HOME']) == settings.parent\n"
+        "settings.write_text('metrics: off\\n', encoding='utf-8')\n"
+        "print(json.dumps({'version': 'test', 'results': []}))\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    source = tmp_path / "source"
+    source.mkdir()
+    source.chmod(0o555)
+
+    output = SemgrepAdapter(executable=str(executable), config_path=str(config)).run(
+        source, timeout_seconds=5
+    )
+
+    assert output.status is StaticToolStatus.SUCCEEDED
+    assert output.tool_version == "test"
+    assert not (source / ".semgrep").exists()
 
 
 def test_missing_executable_becomes_structured_unavailable_result(tmp_path) -> None:
