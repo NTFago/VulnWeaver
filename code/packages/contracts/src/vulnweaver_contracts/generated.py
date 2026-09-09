@@ -151,6 +151,13 @@ class SandboxStatus(StrEnum):
     ORPHANED = 'orphaned'
     POLICY_DENIED = 'policy_denied'
 
+class FuzzStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    PARTIAL = 'partial'
+    FAILED = 'failed'
+    TIMED_OUT = 'timed_out'
+    CANCELLED = 'cancelled'
+
 class NetworkAccess(StrEnum):
     NONE = 'none'
     ALLOWLIST = 'allowlist'
@@ -206,6 +213,40 @@ class PairEdgeType(StrEnum):
     DATA_FLOW = 'data_flow'
     TAINT = 'taint'
     XREF = 'xref'
+
+class CrashRecord(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    input_digest: Sha256Digest
+    signal: str | None
+    exit_code: int | None
+    stack_frames: list[str]
+    stack_hash: Sha256Digest
+    stderr_ref: ObjectReference | None
+    tool: ToolIdentity
+    created_at: str
+
+class FuzzRequest(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    sandbox_request: SandboxRequest
+    artifact_version_id: Identifier
+    seed_refs: list[ObjectReference]
+    max_executions: int
+    max_duration_seconds: int
+    max_crashes: int
+    collect_coverage: bool
+
+class FuzzResult(TypedDict):
+    schema_version: SchemaVersion
+    job_id: Identifier
+    status: FuzzStatus
+    executions: int
+    coverage_percent: float | None
+    crash_ids: list[Identifier]
+    created_at: str
+    failure: StructuredFailure | None
 
 class SandboxOutput(TypedDict):
     path: str

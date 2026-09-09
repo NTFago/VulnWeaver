@@ -43,6 +43,45 @@ export type RiskLevel = "low" | "medium" | "high" | "critical";
 
 export type SandboxStatus = "succeeded" | "failed" | "timed_out" | "cancelled" | "orphaned" | "policy_denied";
 
+export type FuzzStatus = "succeeded" | "partial" | "failed" | "timed_out" | "cancelled";
+
+export interface CrashRecord {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  input_digest: Sha256Digest;
+  signal: string | null;
+  exit_code: number | null;
+  stack_frames: Array<string>;
+  stack_hash: Sha256Digest;
+  stderr_ref: ObjectReference | null;
+  tool: ToolIdentity;
+  created_at: string;
+}
+
+export interface FuzzRequest {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  sandbox_request: SandboxRequest;
+  artifact_version_id: Identifier;
+  seed_refs: Array<ObjectReference>;
+  max_executions: number;
+  max_duration_seconds: number;
+  max_crashes: number;
+  collect_coverage: boolean;
+}
+
+export interface FuzzResult {
+  schema_version: SchemaVersion;
+  job_id: Identifier;
+  status: FuzzStatus;
+  executions: number;
+  coverage_percent: number | null;
+  crash_ids: Array<Identifier>;
+  created_at: string;
+  failure: StructuredFailure | null;
+}
+
 export interface SandboxOutput {
   path: string;
   object_ref: ObjectReference;

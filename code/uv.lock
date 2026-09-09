@@ -11,6 +11,7 @@ members = [
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
+    "vulnweaver-fuzzing",
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
     "vulnweaver-orchestrator-service",
@@ -1262,6 +1263,17 @@ dependencies = [
 requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
 
 [[package]]
+name = "vulnweaver-fuzzing"
+version = "0.1.0"
+source = { editable = "packages/fuzzing" }
+dependencies = [
+    { name = "vulnweaver-contracts" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
+
+[[package]]
 name = "vulnweaver-model-gateway"
 version = "0.1.0"
 source = { editable = "packages/model-gateway" }
@@ -1465,6 +1477,7 @@ dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-dispatcher" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-orchestrator-service" },
@@ -1495,6 +1508,7 @@ requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-dispatcher", editable = "apps/dispatcher" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-orchestrator-service", editable = "apps/orchestrator" },

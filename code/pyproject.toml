@@ -20,6 +20,7 @@ dependencies = [
     "vulnweaver-queue",
     "vulnweaver-source-analysis",
     "vulnweaver-sandbox-runner",
+    "vulnweaver-fuzzing",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
@@ -53,6 +54,7 @@ members = [
     "packages/queue",
     "packages/source-analysis",
     "packages/sandbox-runner",
+    "packages/fuzzing",
     "packages/tool-runtime",
     "packages/worker",
 ]
@@ -73,6 +75,7 @@ vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
+vulnweaver-fuzzing = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
@@ -102,6 +105,7 @@ extraPaths = [
     "packages/queue/src",
     "packages/source-analysis/src",
     "packages/sandbox-runner/src",
+    "packages/fuzzing/src",
     "packages/tool-runtime/src",
     "packages/worker/src",
 ]
@@ -133,6 +137,7 @@ source_pkgs = [
     "vulnweaver_queue",
     "vulnweaver_source_analysis",
     "vulnweaver_sandbox_runner",
+    "vulnweaver_fuzzing",
     "vulnweaver_tool_runtime",
     "vulnweaver_worker",
 ]
