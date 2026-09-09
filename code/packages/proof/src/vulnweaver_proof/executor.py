@@ -117,7 +117,7 @@ class ProofExecutionService:
         *,
         tool_name: str,
         tool_version: str,
-        output_file_names: tuple[str, ...] = ("proof-result.json",),
+        output_file_names: tuple[str, ...] = ("result.json",),
     ) -> None:
         if not tool_name or not tool_version or not output_file_names:
             raise ValueError("proof tool identity and outputs are required")
@@ -203,21 +203,21 @@ class ProofExecutionService:
 
 
 def _poc_status(status: SandboxStatus) -> PocStatus:
-    if status is SandboxStatus.SUCCEEDED:
+    if status == SandboxStatus.SUCCEEDED:
         return PocStatus.COMPLETED
-    if status is SandboxStatus.CANCELLED:
+    if status == SandboxStatus.CANCELLED:
         return PocStatus.CANCELLED
     return PocStatus.FAILED
 
 
 def _poc_result(result: SandboxResult) -> PocResult:
     status = result["status"]
-    if status is SandboxStatus.SUCCEEDED:
+    if status == SandboxStatus.SUCCEEDED:
         return PocResult.EXPLOITABLE
-    if status is SandboxStatus.TIMED_OUT:
+    if status == SandboxStatus.TIMED_OUT:
         return PocResult.TIMEOUT
-    if status is SandboxStatus.POLICY_DENIED:
+    if status == SandboxStatus.POLICY_DENIED:
         return PocResult.POLICY_DENIED
-    if status is SandboxStatus.CANCELLED:
+    if status == SandboxStatus.CANCELLED:
         return PocResult.ENVIRONMENT_ERROR
     return PocResult.TOOL_ERROR
