@@ -115,8 +115,6 @@ services:
         UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/vulnweaver}
-      PERSONAL_USERNAME: ${PERSONAL_USERNAME:-owner}
-      PERSONAL_PASSWORD_FILE: ${PERSONAL_PASSWORD_FILE:-/run/secrets/vulnweaver_personal_password}
       ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-536870912}
       MAX_UPLOAD_CONCURRENCY: ${MAX_UPLOAD_CONCURRENCY:-2}
@@ -127,8 +125,6 @@ services:
       MAX_PASSWORD_CONCURRENCY: ${MAX_PASSWORD_CONCURRENCY:-2}
       MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-8}
       SECURE_COOKIE: ${SECURE_COOKIE:-true}
-    secrets:
-      - vulnweaver_personal_password
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
     depends_on:
@@ -199,14 +195,7 @@ services:
       WORKER_CONCURRENCY: ${ANALYSIS_WORKER_CONCURRENCY:-1}
       WORKER_LEASE_SECONDS: ${ANALYSIS_WORKER_LEASE_SECONDS:-120}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
-      REVIEW_MODEL_BASE_URL: ${REVIEW_MODEL_BASE_URL:-}
-      REVIEW_MODEL_NAME: ${REVIEW_MODEL_NAME:-}
-      REVIEW_MODEL_API_KEY: ${REVIEW_MODEL_API_KEY:-}
       REVIEW_MODEL_PROXY_URL: ${REVIEW_MODEL_PROXY_URL:-}
-      REVIEW_MODEL_TIMEOUT_SECONDS: ${REVIEW_MODEL_TIMEOUT_SECONDS:-60}
-      REVIEW_MODEL_MAX_ATTEMPTS: ${REVIEW_MODEL_MAX_ATTEMPTS:-2}
-      REVIEW_MODEL_REPAIR_ATTEMPTS: ${REVIEW_MODEL_REPAIR_ATTEMPTS:-1}
-      REVIEW_MODEL_MIN_INTERVAL_SECONDS: ${REVIEW_MODEL_MIN_INTERVAL_SECONDS:-0}
       REPORT_TOOL_VERSION: ${REPORT_TOOL_VERSION:-1.0.0}
       SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-}
       SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-60}
@@ -304,7 +293,3 @@ volumes:
   redis-data:
   artifact-data:
   sandbox-runtime:
-
-secrets:
-  vulnweaver_personal_password:
-    file: ${PERSONAL_PASSWORD_FILE_HOST:-./secrets/personal_password.txt}

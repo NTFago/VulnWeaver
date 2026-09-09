@@ -698,3 +698,12 @@ personal_sessions = Table(
     CheckConstraint("password_version > 0", name="password_version_positive"),
 )
 Index("ix_personal_sessions_expires_at", personal_sessions.c.expires_at)
+
+product_settings = Table(
+    "product_settings",
+    metadata,
+    Column("id", String(32), primary_key=True),
+    Column("values", JSONB, nullable=False),
+    Column("updated_at", TIMESTAMP, nullable=False, server_default=text("now()")),
+    CheckConstraint("id = 'installation'", name="single_installation_settings"),
+)

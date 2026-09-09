@@ -36,6 +36,40 @@ class LoginRequest(StrictModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class RegistrationRequest(StrictModel):
+    schema_version: Literal["1.0.0"]
+    username: str = Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class InstallationStatusResponse(StrictModel):
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    registration_open: bool
+
+
+class ProductSettingsBody(StrictModel):
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    review_model_base_url: str = Field(default="", max_length=2048)
+    review_model_name: str = Field(default="", max_length=256)
+    review_model_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    review_model_max_attempts: int = Field(default=2, ge=1, le=10)
+    review_model_repair_attempts: int = Field(default=1, ge=0, le=5)
+    review_model_min_interval_seconds: float = Field(default=0, ge=0, le=3600)
+    review_model_api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+    clear_review_model_api_key: bool = False
+
+
+class ProductSettingsResponse(StrictModel):
+    schema_version: Literal["1.0.0"] = "1.0.0"
+    review_model_base_url: str
+    review_model_name: str
+    review_model_timeout_seconds: float
+    review_model_max_attempts: int
+    review_model_repair_attempts: int
+    review_model_min_interval_seconds: float
+    api_key_configured: bool
+
+
 class PasswordChangeRequest(StrictModel):
     schema_version: Literal["1.0.0"]
     current_password: str = Field(min_length=1, max_length=1024)

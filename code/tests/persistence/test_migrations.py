@@ -28,6 +28,7 @@ EXPECTED_TABLES = {
     "pair_raw",
     "pocs",
     "projects",
+    "product_settings",
     "reviews",
     "task_events",
     "tasks",

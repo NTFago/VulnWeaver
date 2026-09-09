@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -35,13 +36,10 @@ from vulnweaver_persistence.models import personal_sessions
 
 @pytest.fixture
 def client(persistence_database_url: str, tmp_path: Path) -> TestClient:
-    password_file = tmp_path / "personal-password.txt"
-    password_file.write_text("Initial-passphrase-123\n", encoding="utf-8")
     app = create_app(
         ApiSettings(
             database_url=persistence_database_url,
             artifact_store_root=tmp_path / "artifacts",
-            bootstrap_password_file=password_file,
             secure_cookie=False,
             upload_max_bytes=1024 * 1024,
             max_active_sessions=2,
@@ -53,7 +51,8 @@ def client(persistence_database_url: str, tmp_path: Path) -> TestClient:
     try:
         with engine.begin() as connection:
             connection.exec_driver_sql(
-                "TRUNCATE personal_sessions, personal_accounts, api_requests, task_events, "
+                "TRUNCATE product_settings, personal_sessions, personal_accounts, "
+                "api_requests, task_events, "
                 "outbox_events, job_attempt_failures, job_results, jobs, tasks, "
                 "artifact_versions, artifacts, projects CASCADE"
             )
@@ -63,45 +62,18 @@ def client(persistence_database_url: str, tmp_path: Path) -> TestClient:
 
 def _login_and_change_password(client: TestClient) -> str:
     login = client.post(
-        "/api/auth/login",
+        "/api/auth/register",
         json={
             "schema_version": "1.0.0",
             "username": "owner",
-            "password": "Initial-passphrase-123",
+            "password": "Changed-passphrase-456",
         },
     )
-    assert login.status_code == 200
-    assert login.json()["must_change_password"] is True
+    assert login.status_code == 201
+    assert login.json()["must_change_password"] is False
     assert "HttpOnly" in login.headers["set-cookie"]
     assert "SameSite=strict" in login.headers["set-cookie"]
-    csrf = login.json()["csrf_token"]
-
-    blocked = client.get("/api/projects")
-    assert blocked.status_code == 403
-    assert blocked.json()["error_code"] == "password_change_required"
-
-    changed = client.post(
-        "/api/auth/password",
-        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "password:initial-change"},
-        json={
-            "schema_version": "1.0.0",
-            "current_password": "Initial-passphrase-123",
-            "new_password": "Changed-passphrase-456",
-        },
-    )
-    assert changed.status_code == 204
-    replay = client.post(
-        "/api/auth/password",
-        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "password:initial-change"},
-        json={
-            "schema_version": "1.0.0",
-            "current_password": "Initial-passphrase-123",
-            "new_password": "Changed-passphrase-456",
-        },
-    )
-    assert replay.status_code == 204
-    assert client.get("/api/auth/me").json()["must_change_password"] is False
-    return csrf
+    return login.json()["csrf_token"]
 
 
 def _budget() -> dict[str, int]:
@@ -114,6 +86,96 @@ def _budget() -> dict[str, int]:
         "max_dynamic_runs": 0,
         "timeout_seconds": 60,
     }
+
+
+def test_first_registration_is_single_use_and_establishes_session(client: TestClient) -> None:
+    assert client.get("/api/auth/installation").json()["registration_open"] is True
+    first = client.post(
+        "/api/auth/register",
+        json={"schema_version": "1.0.0", "username": "owner", "password": "Long-passphrase-123"},
+    )
+    assert first.status_code == 201
+    assert client.get("/api/auth/installation").json()["registration_open"] is False
+    second = client.post(
+        "/api/auth/register",
+        json={"schema_version": "1.0.0", "username": "other", "password": "Other-passphrase-456"},
+    )
+    assert second.status_code == 409
+    assert client.get("/api/auth/me").json()["username"] == "owner"
+
+
+def test_concurrent_first_registration_has_exactly_one_winner(client: TestClient) -> None:
+    def submit(username: str) -> int:
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "schema_version": "1.0.0",
+                "username": username,
+                "password": "Concurrent-passphrase-123",
+            },
+        )
+        return response.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(submit, ("owner-a", "owner-b")))
+    assert sorted(statuses) == [201, 409]
+
+
+def test_product_settings_require_auth_and_never_echo_api_key(
+    client: TestClient,
+) -> None:
+    assert client.get("/api/settings").status_code == 401
+    assert client.put("/api/settings", json={"schema_version": "1.0.0"}).status_code == 401
+    csrf = _login_and_change_password(client)
+    saved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "https://models.example/v1/",
+            "review_model_name": "reviewer",
+            "review_model_timeout_seconds": 45,
+            "review_model_max_attempts": 3,
+            "review_model_repair_attempts": 1,
+            "review_model_min_interval_seconds": 0.5,
+            "review_model_api_key": "must-never-be-returned",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["review_model_base_url"] == "https://models.example/v1"
+    assert "must-never-be-returned" not in saved.text
+    assert "review_model_api_key" not in saved.json()
+    assert saved.json()["api_key_configured"] is True
+    assert client.get("/api/settings").json() == saved.json()
+    spoofed = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={**saved.json(), "review_model_api_key": None, "api_key_configured": None},
+    )
+    # Response-only fields are rejected, so clients cannot spoof secret state.
+    assert spoofed.status_code == 422
+    writable = {
+        key: value
+        for key, value in saved.json().items()
+        if key not in {"api_key_configured", "review_model_api_key"}
+    }
+    preserved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={**writable, "review_model_api_key": None},
+    )
+    assert preserved.status_code == 200
+    assert preserved.json()["api_key_configured"] is True
+    cleared = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            **writable,
+            "clear_review_model_api_key": True,
+        },
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["api_key_configured"] is False
 
 
 def test_websocket_disconnect_listener_consumes_until_disconnect() -> None:
@@ -736,18 +798,14 @@ def test_settings_validation_and_environment(
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@db:5432/v")
     monkeypatch.setenv("ARTIFACT_STORE_ROOT", str(tmp_path / "objects"))
-    monkeypatch.setenv("PERSONAL_USERNAME", "personal-user")
     monkeypatch.setenv("UPLOAD_MAX_BYTES", "4096")
     monkeypatch.setenv("SESSION_TTL_SECONDS", "600")
     monkeypatch.setenv("SECURE_COOKIE", "false")
     settings = ApiSettings.from_env()
-    assert settings.personal_username == "personal-user"
     assert settings.upload_max_bytes == 4096
     assert settings.session_ttl_seconds == 600
     assert settings.secure_cookie is False
 
-    with pytest.raises(ValueError, match="username"):
-        ApiSettings(settings.database_url, tmp_path, personal_username="")
     with pytest.raises(ValueError, match="upload"):
         ApiSettings(settings.database_url, tmp_path, upload_max_bytes=0)
     with pytest.raises(ValueError, match="session"):
@@ -755,6 +813,7 @@ def test_settings_validation_and_environment(
 
 
 def test_repeated_login_failures_lock_personal_account(client: TestClient) -> None:
+    _login_and_change_password(client)
     for _ in range(5):
         response = client.post(
             "/api/auth/login",
@@ -770,7 +829,7 @@ def test_repeated_login_failures_lock_personal_account(client: TestClient) -> No
         json={
             "schema_version": "1.0.0",
             "username": "owner",
-            "password": "Initial-passphrase-123",
+            "password": "Changed-passphrase-456",
         },
     )
     assert locked.status_code == 401
@@ -806,11 +865,9 @@ def test_active_sessions_are_bounded(client: TestClient, persistence_database_ur
         engine.dispose()
 
 
-def test_restart_does_not_require_or_rehash_bootstrap_secret(client: TestClient) -> None:
+def test_restart_uses_persisted_registered_account(client: TestClient) -> None:
+    _login_and_change_password(client)
     settings = client.app.state.settings
-    assert settings.bootstrap_password_file is not None
-    settings.bootstrap_password_file.unlink()
-
     restarted = create_app(settings)
     with TestClient(restarted) as restarted_client:
         login = restarted_client.post(
@@ -818,7 +875,7 @@ def test_restart_does_not_require_or_rehash_bootstrap_secret(client: TestClient)
             json={
                 "schema_version": "1.0.0",
                 "username": "owner",
-                "password": "Initial-passphrase-123",
+                "password": "Changed-passphrase-456",
             },
         )
         assert login.status_code == 200

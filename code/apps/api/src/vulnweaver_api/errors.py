@@ -16,6 +16,7 @@ from vulnweaver_api.auth import (
     AuthenticationFailed,
     PasswordChangeRequired,
     PasswordPolicyViolation,
+    RegistrationClosed,
 )
 from vulnweaver_api.middleware import new_identifier
 from vulnweaver_api.schemas import ErrorDetail, ErrorResponse
@@ -82,6 +83,10 @@ def install_error_handlers(app: FastAPI) -> None:
         request: Request, error: PasswordPolicyViolation
     ) -> JSONResponse:
         return _error(request, 422, "password_policy_violation", str(error))
+
+    @app.exception_handler(RegistrationClosed)
+    async def registration_closed(request: Request, error: RegistrationClosed) -> JSONResponse:
+        return _error(request, 409, "registration_closed", str(error))
 
     @app.exception_handler(IdempotencyKeyError)
     async def idempotency_key_error(
