@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import vulnweaver_binary_analysis.tools as binary_tools
 from vulnweaver_binary_analysis import (
     AngrAdapter,
     BinaryAnalysisLimits,
@@ -46,7 +48,13 @@ class _RecordingRunner:
         if "-d" in command and command[0] == "objdump":
             return CommandResult(
                 0,
-                b"0000000000401000 <main>:\n  401000: 55  push %rbp\n",
+                (
+                    b"0000000000401000 <main>:\n"
+                    b"  401000: e8 01 00 00 00  call 401006 <helper>\n"
+                    b"  401005: c3  ret\n"
+                    b"0000000000401006 <helper>:\n"
+                    b"  401006: c3  ret\n"
+                ),
                 b"",
             )
         if "-t" in command and command[0] == "objdump":
@@ -61,6 +69,112 @@ class _RecordingRunner:
             Path(command[3]).write_bytes(elf64_sample())
             return CommandResult(0, b"Unpacked 1 file.\n", b"")
         raise AssertionError(f"unexpected command: {command}")
+
+
+class _GhidraRunner:
+    async def run(
+        self,
+        arguments: Sequence[str],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation: asyncio.Event,
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        del timeout_seconds, max_output_bytes, cancellation, cwd
+        command = tuple(arguments)
+        script_index = command.index("ExportVulnWeaver.java")
+        output = Path(command[script_index + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "functions": [
+                        {
+                            "name": "main",
+                            "address": 0x401000,
+                            "size": 7,
+                            "attributes": {"source": "ghidra"},
+                        }
+                    ],
+                    "instructions": [
+                        {
+                            "address": 0x401000,
+                            "bytes": "e801000000",
+                            "mnemonic": "CALL",
+                            "operands": "401006 <helper>",
+                            "function_name": "main",
+                        },
+                        {
+                            "address": 0x401005,
+                            "bytes": "c3",
+                            "mnemonic": "RET",
+                            "operands": "",
+                            "function_name": "main",
+                        },
+                    ],
+                    "basic_blocks": [],
+                    "xrefs": [],
+                    "pseudocode": [
+                        {
+                            "function_name": "main",
+                            "address": 0x401000,
+                            "text": "int main(void) { return helper(); }",
+                            "tool_name": "ghidra",
+                        }
+                    ],
+                    "symbolic_facts": [],
+                    "imports": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CommandResult(0, b"headless complete", b"")
+
+
+class _AngrRunner:
+    def __init__(self) -> None:
+        self.target_argument = ""
+
+    async def run(
+        self,
+        arguments: Sequence[str],
+        *,
+        timeout_seconds: float,
+        max_output_bytes: int,
+        cancellation: asyncio.Event,
+        cwd: Path | None = None,
+    ) -> CommandResult:
+        del timeout_seconds, max_output_bytes, cancellation, cwd
+        command = tuple(arguments)
+        output = Path(command[4])
+        self.target_argument = command[-1]
+        targets = [int(value) for value in self.target_argument.split(",") if value]
+        output.write_text(
+            json.dumps(
+                {
+                    "functions": [],
+                    "instructions": [],
+                    "basic_blocks": [],
+                    "xrefs": [],
+                    "pseudocode": [],
+                    "symbolic_facts": [
+                        {
+                            "function_address": address,
+                            "status": "partial",
+                            "steps": 32,
+                            "explored_states": 32,
+                            "reached_addresses": [address],
+                            "unconstrained_states": 0,
+                            "reason": "state_or_step_limit",
+                        }
+                        for address in targets
+                    ],
+                    "imports": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return CommandResult(0, b"angr complete", b"")
 
 
 def test_objdump_output_is_normalized_with_file_offsets(tmp_path: Path) -> None:
@@ -118,6 +232,9 @@ def test_objdump_and_die_adapters_use_fixed_arguments_and_merge_facts(
         assert objdump.run["status"] == "succeeded"
         assert objdump.functions[0]["name"] == "main"
         assert objdump.imports[0]["library"] == "libc.so.6"
+        assert len(objdump.basic_blocks) == 2
+        assert objdump.xrefs[0]["type"] == "call"
+        assert objdump.xrefs[0]["target_symbol"] == "helper"
         assert die.compiler == "Compiler: GCC"
         assert die.packer == "UPX"
 
@@ -147,6 +264,55 @@ def test_upx_adapter_writes_only_the_caller_owned_destination(tmp_path: Path) ->
         str(destination),
         str(source),
     )
+
+
+def test_ghidra_structured_export_preserves_pseudocode_and_derives_cfg(
+    tmp_path: Path,
+) -> None:
+    sample = tmp_path / "sample.elf"
+    sample.write_bytes(elf64_sample())
+    metadata = inspect_binary(sample)
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+
+    contribution = asyncio.run(
+        GhidraHeadlessAdapter("analyzeHeadless", scripts, runner=_GhidraRunner()).analyze(
+            sample, metadata, BinaryAnalysisLimits(), asyncio.Event()
+        )
+    )
+
+    assert contribution.run["status"] == "succeeded"
+    assert contribution.pseudocode[0]["function_name"] == "main"
+    assert contribution.pseudocode[0]["tool_name"] == "ghidra"
+    assert contribution.basic_blocks[0]["start_address"] == 0x401000
+    assert contribution.xrefs[0]["target_address"] == 0x401006
+    assert contribution.xrefs[0]["type"] == "call"
+
+
+def test_angr_adapter_forwards_validated_targets_and_parses_symbolic_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sample = tmp_path / "sample.elf"
+    sample.write_bytes(elf64_sample())
+    metadata = inspect_binary(sample)
+    runner = _AngrRunner()
+    monkeypatch.setattr(binary_tools.importlib.util, "find_spec", lambda name: object())
+
+    contribution = asyncio.run(
+        AngrAdapter(enabled=True, runner=runner).analyze_targets(
+            sample,
+            metadata,
+            BinaryAnalysisLimits(),
+            asyncio.Event(),
+            (0x401000,),
+        )
+    )
+
+    assert runner.target_argument == str(0x401000)
+    assert contribution.run["status"] == "succeeded"
+    assert contribution.symbolic_facts[0]["function_address"] == 0x401000
+    assert contribution.symbolic_facts[0]["status"] == "partial"
+    assert contribution.symbolic_facts[0]["reason"] == "state_or_step_limit"
 
 
 def test_unconfigured_heavy_adapters_are_explicitly_unavailable(tmp_path: Path) -> None:

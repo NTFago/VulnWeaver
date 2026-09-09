@@ -10,7 +10,13 @@
     "additionalProperties": false,
     "required": ["artifact_version_id"],
     "properties": {
-      "artifact_version_id": {"type": "string", "minLength": 1, "maxLength": 128}
+      "artifact_version_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "target_addresses": {
+        "type": "array",
+        "maxItems": 8,
+        "uniqueItems": true,
+        "items": {"type": "integer", "minimum": 0}
+      }
     }
   },
   "output_schema": {"type": "object"},

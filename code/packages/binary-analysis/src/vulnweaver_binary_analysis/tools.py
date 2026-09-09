@@ -16,10 +16,16 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from vulnweaver_contracts import (
+    BinaryBasicBlock,
     BinaryFunction,
     BinaryImport,
     BinaryInstruction,
+    BinaryPseudocode,
+    BinarySymbolicFact,
+    BinarySymbolicStatus,
     BinaryToolRun,
+    BinaryXref,
+    BinaryXrefType,
     JsonObject,
     StaticToolStatus,
 )
@@ -41,6 +47,8 @@ _SYMBOL = re.compile(
 _DLL_NAME = re.compile(r"^\s*DLL Name:\s*(.+?)\s*$", re.IGNORECASE)
 _PE_IMPORT = re.compile(r"^\s*[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s+(.+?)\s*$")
 _NEEDED = re.compile(r"^\s*NEEDED\s+(.+?)\s*$")
+_DIRECT_TARGET = re.compile(r"^\s*(?:0x)?([0-9a-fA-F]+)(?:\s+<([^>]+)>)?")
+_COMMENT_TARGET = re.compile(r"#\s*(?:0x)?([0-9a-fA-F]+)(?:\s+<([^>]+)>)?")
 
 
 class BinaryToolAdapter(Protocol):
@@ -211,6 +219,7 @@ class ObjdumpAdapter:
         )
         functions = _merge_functions(functions, symbol_functions, limits.max_functions)
         imports = parse_objdump_imports(private.stdout.decode("utf-8", "replace"), metadata)
+        basic_blocks, xrefs = derive_objdump_control_flow(instructions, limits)
         if any(code != 0 for code in exit_codes):
             status = StaticToolStatus.FAILED
             reason = "one_or_more_objdump_views_failed"
@@ -228,6 +237,8 @@ class ObjdumpAdapter:
             ),
             functions=functions,
             instructions=instructions,
+            basic_blocks=basic_blocks,
+            xrefs=xrefs,
             imports=imports,
         )
 
@@ -283,7 +294,7 @@ class DetectItEasyAdapter:
             return ToolContribution(run=_failed_run(self.name, "timeout", None))
         except ToolOutputLimitExceeded:
             return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-        output = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_tool_output_bytes)
+        output = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
         compiler, packer = _detect_compiler_and_packer(output)
         return ToolContribution(
             run=BinaryToolRun(
@@ -433,6 +444,8 @@ class GhidraHeadlessAdapter:
                         str(output),
                         str(limits.max_functions),
                         str(limits.max_instructions),
+                        str(limits.max_pseudocode_functions),
+                        str(limits.max_pseudocode_chars),
                         "-deleteProject",
                     ),
                     timeout_seconds=limits.command_timeout_seconds,
@@ -448,16 +461,22 @@ class GhidraHeadlessAdapter:
                 return ToolContribution(run=_failed_run(self.name, "timeout", None))
             except ToolOutputLimitExceeded:
                 return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_tool_output_bytes)
+            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
             if result.exit_code != 0 or not output.is_file():
                 return ToolContribution(
                     run=_failed_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
                 document = _load_json_file(output, limits.max_tool_output_bytes)
-                functions, instructions, imports = _parse_structured_output(
-                    document, metadata, limits
-                )
+                (
+                    functions,
+                    instructions,
+                    basic_blocks,
+                    xrefs,
+                    pseudocode,
+                    symbolic_facts,
+                    imports,
+                ) = _parse_structured_output(document, metadata, limits)
             except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
                 return ToolContribution(
                     run=_failed_run(self.name, "invalid_export", raw, result.exit_code)
@@ -473,6 +492,10 @@ class GhidraHeadlessAdapter:
                 ),
                 functions=functions,
                 instructions=instructions,
+                basic_blocks=basic_blocks,
+                xrefs=xrefs,
+                pseudocode=pseudocode,
+                symbolic_facts=symbolic_facts,
                 imports=imports,
             )
 
@@ -491,6 +514,16 @@ class AngrAdapter:
         limits: BinaryAnalysisLimits,
         cancellation: asyncio.Event,
     ) -> ToolContribution:
+        return await self.analyze_targets(path, metadata, limits, cancellation, ())
+
+    async def analyze_targets(
+        self,
+        path: Path,
+        metadata: BinaryMetadata,
+        limits: BinaryAnalysisLimits,
+        cancellation: asyncio.Event,
+        target_addresses: tuple[int, ...],
+    ) -> ToolContribution:
         if not self._enabled:
             return ToolContribution(run=_unavailable_run(self.name, "not_configured"))
         if importlib.util.find_spec("angr") is None:
@@ -507,6 +540,11 @@ class AngrAdapter:
                         str(output),
                         str(limits.max_functions),
                         str(limits.max_instructions),
+                        str(limits.max_basic_blocks),
+                        str(limits.max_xrefs),
+                        str(limits.max_symbolic_steps),
+                        str(limits.max_symbolic_states),
+                        ",".join(str(value) for value in target_addresses),
                     ),
                     timeout_seconds=limits.command_timeout_seconds,
                     max_output_bytes=limits.max_tool_output_bytes,
@@ -521,16 +559,22 @@ class AngrAdapter:
                 return ToolContribution(run=_failed_run(self.name, "timeout", None))
             except ToolOutputLimitExceeded:
                 return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_tool_output_bytes)
+            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
             if result.exit_code != 0 or not output.is_file():
                 return ToolContribution(
                     run=_failed_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
                 document = _load_json_file(output, limits.max_tool_output_bytes)
-                functions, instructions, imports = _parse_structured_output(
-                    document, metadata, limits
-                )
+                (
+                    functions,
+                    instructions,
+                    basic_blocks,
+                    xrefs,
+                    pseudocode,
+                    symbolic_facts,
+                    imports,
+                ) = _parse_structured_output(document, metadata, limits)
             except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
                 return ToolContribution(
                     run=_failed_run(self.name, "invalid_export", raw, result.exit_code)
@@ -546,6 +590,10 @@ class AngrAdapter:
                 ),
                 functions=functions,
                 instructions=instructions,
+                basic_blocks=basic_blocks,
+                xrefs=xrefs,
+                pseudocode=pseudocode,
+                symbolic_facts=symbolic_facts,
                 imports=imports,
             )
 
@@ -600,6 +648,137 @@ def parse_objdump_disassembly(
             )
         )
     return tuple(functions), tuple(instructions)
+
+
+def derive_objdump_control_flow(
+    instructions: tuple[BinaryInstruction, ...],
+    limits: BinaryAnalysisLimits,
+) -> tuple[tuple[BinaryBasicBlock, ...], tuple[BinaryXref, ...]]:
+    by_function: dict[str | None, list[BinaryInstruction]] = {}
+    xrefs: list[BinaryXref] = []
+    xref_keys: set[tuple[int, int, BinaryXrefType]] = set()
+    for instruction in instructions:
+        by_function.setdefault(instruction["function_name"], []).append(instruction)
+        mnemonic = instruction["mnemonic"].lower()
+        reference_type: BinaryXrefType | None = None
+        if mnemonic.startswith("call"):
+            reference_type = BinaryXrefType.CALL
+        elif mnemonic.startswith("j"):
+            reference_type = BinaryXrefType.JUMP
+        if reference_type is not None:
+            target = _reference(_DIRECT_TARGET, instruction["operands"])
+            if target is not None:
+                _append_xref(xrefs, xref_keys, instruction, target, reference_type, limits)
+        data_target = _reference(_COMMENT_TARGET, instruction["operands"])
+        if data_target is not None:
+            _append_xref(
+                xrefs,
+                xref_keys,
+                instruction,
+                data_target,
+                BinaryXrefType.DATA,
+                limits,
+            )
+
+    blocks: list[BinaryBasicBlock] = []
+    for function_name, function_instructions in by_function.items():
+        ordered = sorted(function_instructions, key=lambda item: item["address"])
+        if not ordered:
+            continue
+        address_indexes = {item["address"]: index for index, item in enumerate(ordered)}
+        leaders = {ordered[0]["address"]}
+        for index, instruction in enumerate(ordered):
+            mnemonic = instruction["mnemonic"].lower()
+            if mnemonic.startswith("j"):
+                target = _reference(_DIRECT_TARGET, instruction["operands"])
+                if target is not None and target[0] in address_indexes:
+                    leaders.add(target[0])
+            if (mnemonic.startswith("j") or mnemonic.startswith("ret")) and index + 1 < len(
+                ordered
+            ):
+                leaders.add(ordered[index + 1]["address"])
+        leader_indexes = sorted(address_indexes[address] for address in leaders)
+        for position, start_index in enumerate(leader_indexes):
+            if len(blocks) >= limits.max_basic_blocks:
+                break
+            stop_index = (
+                leader_indexes[position + 1] if position + 1 < len(leader_indexes) else len(ordered)
+            )
+            block_instructions = ordered[start_index:stop_index]
+            if not block_instructions:
+                continue
+            last = block_instructions[-1]
+            successors = _block_successors(
+                last,
+                ordered,
+                stop_index,
+            )
+            blocks.append(
+                BinaryBasicBlock(
+                    function_name=function_name,
+                    start_address=block_instructions[0]["address"],
+                    end_address=_instruction_end(last),
+                    successor_addresses=successors,
+                )
+            )
+    return tuple(blocks), tuple(xrefs)
+
+
+def _block_successors(
+    last: BinaryInstruction,
+    ordered: list[BinaryInstruction],
+    next_index: int,
+) -> list[int]:
+    mnemonic = last["mnemonic"].lower()
+    fallthrough = ordered[next_index]["address"] if next_index < len(ordered) else None
+    target = _reference(_DIRECT_TARGET, last["operands"])
+    if mnemonic.startswith("ret"):
+        return []
+    if mnemonic in {"jmp", "jmpq", "ljmp"}:
+        return [target[0]] if target is not None else []
+    if mnemonic.startswith("j"):
+        values: set[int] = set()
+        if target is not None:
+            values.add(target[0])
+        if fallthrough is not None:
+            values.add(fallthrough)
+        return sorted(values)
+    return [fallthrough] if fallthrough is not None else []
+
+
+def _append_xref(
+    output: list[BinaryXref],
+    keys: set[tuple[int, int, BinaryXrefType]],
+    instruction: BinaryInstruction,
+    target: tuple[int, str | None],
+    reference_type: BinaryXrefType,
+    limits: BinaryAnalysisLimits,
+) -> None:
+    key = (instruction["address"], target[0], reference_type)
+    if key in keys or len(output) >= limits.max_xrefs:
+        return
+    output.append(
+        BinaryXref(
+            source_address=instruction["address"],
+            target_address=target[0],
+            type=reference_type,
+            source_function=instruction["function_name"],
+            target_symbol=target[1],
+        )
+    )
+    keys.add(key)
+
+
+def _reference(pattern: re.Pattern[str], operands: str) -> tuple[int, str | None] | None:
+    matched = pattern.search(operands)
+    if matched is None:
+        return None
+    return int(matched.group(1), 16), matched.group(2)[:4096] if matched.group(2) else None
+
+
+def _instruction_end(instruction: BinaryInstruction) -> int:
+    size = max(1, len(instruction["bytes"]) // 2)
+    return instruction["address"] + size
 
 
 def parse_objdump_symbols(
@@ -659,7 +838,15 @@ def _parse_structured_output(
     document: object,
     metadata: BinaryMetadata,
     limits: BinaryAnalysisLimits,
-) -> tuple[tuple[BinaryFunction, ...], tuple[BinaryInstruction, ...], tuple[BinaryImport, ...]]:
+) -> tuple[
+    tuple[BinaryFunction, ...],
+    tuple[BinaryInstruction, ...],
+    tuple[BinaryBasicBlock, ...],
+    tuple[BinaryXref, ...],
+    tuple[BinaryPseudocode, ...],
+    tuple[BinarySymbolicFact, ...],
+    tuple[BinaryImport, ...],
+]:
     if not isinstance(document, Mapping):
         raise ValueError("tool export must be an object")
     mapping = cast(Mapping[str, object], document)
@@ -698,6 +885,64 @@ def _parse_structured_output(
                 ),
             )
         )
+    basic_blocks: list[BinaryBasicBlock] = []
+    for item in _object_list(mapping.get("basic_blocks"))[: limits.max_basic_blocks]:
+        basic_blocks.append(
+            BinaryBasicBlock(
+                function_name=(
+                    str(item["function_name"])[:4096] if item.get("function_name") else None
+                ),
+                start_address=_nonnegative_int(item.get("start_address")),
+                end_address=_nonnegative_int(item.get("end_address")),
+                successor_addresses=_nonnegative_int_list(item.get("successor_addresses")),
+            )
+        )
+    xrefs: list[BinaryXref] = []
+    for item in _object_list(mapping.get("xrefs"))[: limits.max_xrefs]:
+        xrefs.append(
+            BinaryXref(
+                source_address=_nonnegative_int(item.get("source_address")),
+                target_address=_nonnegative_int(item.get("target_address")),
+                type=BinaryXrefType(str(item.get("type"))),
+                source_function=(
+                    str(item["source_function"])[:4096] if item.get("source_function") else None
+                ),
+                target_symbol=(
+                    str(item["target_symbol"])[:4096] if item.get("target_symbol") else None
+                ),
+            )
+        )
+    derived_blocks, derived_xrefs = derive_objdump_control_flow(tuple(instructions), limits)
+    if not basic_blocks:
+        basic_blocks.extend(derived_blocks)
+    if not xrefs:
+        xrefs.extend(derived_xrefs)
+    pseudocode: list[BinaryPseudocode] = []
+    for item in _object_list(mapping.get("pseudocode"))[: limits.max_pseudocode_functions]:
+        body = str(item.get("text") or "")[: limits.max_pseudocode_chars]
+        if not body:
+            continue
+        pseudocode.append(
+            BinaryPseudocode(
+                function_name=str(item.get("function_name") or "unknown")[:4096],
+                address=_nonnegative_int(item.get("address")),
+                text=body,
+                tool_name=str(item.get("tool_name") or "unknown")[:128],
+            )
+        )
+    symbolic_facts: list[BinarySymbolicFact] = []
+    for item in _object_list(mapping.get("symbolic_facts"))[: limits.max_symbolic_functions]:
+        symbolic_facts.append(
+            BinarySymbolicFact(
+                function_address=_nonnegative_int(item.get("function_address")),
+                status=BinarySymbolicStatus(str(item.get("status"))),
+                steps=_nonnegative_int(item.get("steps")),
+                explored_states=_nonnegative_int(item.get("explored_states")),
+                reached_addresses=_nonnegative_int_list(item.get("reached_addresses")),
+                unconstrained_states=_nonnegative_int(item.get("unconstrained_states")),
+                reason=str(item["reason"])[:4096] if item.get("reason") else None,
+            )
+        )
     imports: list[BinaryImport] = []
     for item in _object_list(mapping.get("imports"))[: limits.max_functions]:
         imports.append(
@@ -708,7 +953,15 @@ def _parse_structured_output(
                 address=_optional_nonnegative_int(item.get("address")),
             )
         )
-    return tuple(functions), tuple(instructions), tuple(imports)
+    return (
+        tuple(functions),
+        tuple(instructions),
+        tuple(basic_blocks),
+        tuple(xrefs),
+        tuple(pseudocode),
+        tuple(symbolic_facts),
+        tuple(imports),
+    )
 
 
 def _object_list(value: object) -> list[Mapping[str, object]]:
@@ -724,6 +977,13 @@ def _nonnegative_int(value: object, *, default: int | None = None) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError("expected a non-negative integer")
     return value
+
+
+def _nonnegative_int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    items = cast(list[object], value)
+    return sorted({_nonnegative_int(item) for item in items})
 
 
 def _optional_nonnegative_int(value: object) -> int | None:

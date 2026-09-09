@@ -215,6 +215,42 @@ export interface BinaryInstruction {
   function_name: string | null;
 }
 
+export interface BinaryBasicBlock {
+  function_name: string | null;
+  start_address: number;
+  end_address: number;
+  successor_addresses: Array<number>;
+}
+
+export type BinaryXrefType = "call" | "jump" | "data";
+
+export interface BinaryXref {
+  source_address: number;
+  target_address: number;
+  type: BinaryXrefType;
+  source_function: string | null;
+  target_symbol: string | null;
+}
+
+export type BinarySymbolicStatus = "completed" | "partial" | "failed";
+
+export interface BinarySymbolicFact {
+  function_address: number;
+  status: BinarySymbolicStatus;
+  steps: number;
+  explored_states: number;
+  reached_addresses: Array<number>;
+  unconstrained_states: number;
+  reason: string | null;
+}
+
+export interface BinaryPseudocode {
+  function_name: string;
+  address: number;
+  text: string;
+  tool_name: Identifier;
+}
+
 export interface BinaryString {
   value: string;
   encoding: "ascii" | "utf-16le";
@@ -254,6 +290,10 @@ export interface BinaryAnalysisResult {
   sections: Array<BinarySection>;
   functions: Array<BinaryFunction>;
   instructions: Array<BinaryInstruction>;
+  basic_blocks: Array<BinaryBasicBlock>;
+  xrefs: Array<BinaryXref>;
+  pseudocode: Array<BinaryPseudocode>;
+  symbolic_facts: Array<BinarySymbolicFact>;
   strings: Array<BinaryString>;
   imports: Array<BinaryImport>;
   tool_runs: Array<BinaryToolRun>;

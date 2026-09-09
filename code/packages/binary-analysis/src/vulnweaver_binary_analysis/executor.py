@@ -53,6 +53,7 @@ from vulnweaver_binary_analysis.tools import (
 from vulnweaver_binary_analysis.types import (
     BinaryAnalysisAggregate,
     BinaryAnalysisLimits,
+    BinaryMetadata,
 )
 
 
@@ -207,6 +208,7 @@ class BinaryImportExecutor:
                 "binary_import.invalid_tool", "binary executor requires the binary-import tool"
             )
         parent_version_id = _required_argument(job, "artifact_version_id")
+        target_addresses = _target_addresses(job, self._limits)
         object_ref = _single_input(job)
         await self._validate_input(job, parent_version_id, object_ref)
         if cancellation.is_set():
@@ -233,6 +235,7 @@ class BinaryImportExecutor:
                 metadata = await asyncio.to_thread(
                     inspect_binary, upx_outcome.unpacked_path, self._limits
                 )
+                _validate_symbolic_targets(target_addresses, metadata)
                 unpacked_version_id = _derived_identifier(
                     "artifact-version", job["id"], "upx-unpacked"
                 )
@@ -258,15 +261,25 @@ class BinaryImportExecutor:
             elif original_metadata.packed:
                 aggregate.packed = True
 
+            _validate_symbolic_targets(target_addresses, metadata)
             aggregate.strings = list(
                 await asyncio.to_thread(extract_strings, analyzed_path, metadata, self._limits)
             )
             for adapter in self._adapters:
                 if cancellation.is_set():
                     return _cancelled_result(job["id"], produced)
-                contribution = await adapter.analyze(
-                    analyzed_path, metadata, self._limits, cancellation
-                )
+                if isinstance(adapter, AngrAdapter):
+                    contribution = await adapter.analyze_targets(
+                        analyzed_path,
+                        metadata,
+                        self._limits,
+                        cancellation,
+                        target_addresses,
+                    )
+                else:
+                    contribution = await adapter.analyze(
+                        analyzed_path, metadata, self._limits, cancellation
+                    )
                 aggregate.merge(contribution, self._limits)
 
             result = _build_result(
@@ -294,6 +307,7 @@ class BinaryImportExecutor:
                     "format": "binary-analysis-result",
                     "source_artifact_version_id": parent_version_id,
                     "analyzed_artifact_version_id": analyzed_version_id,
+                    "target_addresses": list(target_addresses),
                 },
             )
             produced.append(result_version_id)
@@ -442,6 +456,26 @@ def _build_result(
         sections=list(aggregate.metadata.sections),
         functions=sorted(aggregate.functions, key=lambda item: (item["address"], item["name"])),
         instructions=sorted(aggregate.instructions, key=lambda item: item["address"]),
+        basic_blocks=sorted(
+            aggregate.basic_blocks,
+            key=lambda item: (item["start_address"], item["end_address"]),
+        ),
+        xrefs=sorted(
+            aggregate.xrefs,
+            key=lambda item: (
+                item["source_address"],
+                item["target_address"],
+                str(item["type"]),
+            ),
+        ),
+        pseudocode=sorted(
+            aggregate.pseudocode,
+            key=lambda item: (item["address"], item["tool_name"]),
+        ),
+        symbolic_facts=sorted(
+            aggregate.symbolic_facts,
+            key=lambda item: item["function_address"],
+        ),
         strings=aggregate.strings,
         imports=aggregate.imports,
         tool_runs=aggregate.tool_runs,
@@ -490,6 +524,59 @@ def _required_argument(job: Job, name: str) -> str:
             details={"argument": name},
         )
     return value
+
+
+def _target_addresses(job: Job, limits: BinaryAnalysisLimits) -> tuple[int, ...]:
+    arguments = job.get("arguments")
+    value = arguments.get("target_addresses") if isinstance(arguments, Mapping) else None
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise BinaryAnalysisExecutionError(
+            "binary_import.invalid_target_addresses",
+            "target_addresses must be an array of non-negative integers",
+        )
+    items = cast(list[object], value)
+    if len(items) > limits.max_symbolic_functions:
+        raise BinaryAnalysisExecutionError(
+            "binary_import.too_many_target_addresses",
+            "target address count exceeds the configured symbolic-analysis limit",
+            details={
+                "target_count": len(items),
+                "max_targets": limits.max_symbolic_functions,
+            },
+        )
+    addresses: set[int] = set()
+    for item in items:
+        if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+            raise BinaryAnalysisExecutionError(
+                "binary_import.invalid_target_addresses",
+                "target_addresses must contain only non-negative integers",
+            )
+        addresses.add(item)
+    return tuple(sorted(addresses))
+
+
+def _validate_symbolic_targets(target_addresses: tuple[int, ...], metadata: BinaryMetadata) -> None:
+    executable_ranges = [
+        (
+            section["virtual_address"],
+            section["virtual_address"] + max(section["virtual_size"], section["file_size"]),
+        )
+        for section in metadata.sections
+        if section["executable"]
+    ]
+    invalid = [
+        address
+        for address in target_addresses
+        if not any(start <= address < end for start, end in executable_ranges)
+    ]
+    if invalid:
+        raise BinaryAnalysisExecutionError(
+            "binary_import.target_outside_executable_section",
+            "symbolic-analysis targets must be inside executable sections",
+            details={"invalid_addresses": invalid},
+        )
 
 
 def _single_input(job: Job) -> str:

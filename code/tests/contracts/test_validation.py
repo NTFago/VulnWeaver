@@ -286,6 +286,42 @@ def test_binary_analysis_contract_validates_normalized_addresses_and_tool_runs()
                     "function_name": "main",
                 }
             ],
+            "basic_blocks": [
+                {
+                    "function_name": "main",
+                    "start_address": 4198400,
+                    "end_address": 4198401,
+                    "successor_addresses": [],
+                }
+            ],
+            "xrefs": [
+                {
+                    "source_address": 4198400,
+                    "target_address": 4198416,
+                    "type": "call",
+                    "source_function": "main",
+                    "target_symbol": "helper",
+                }
+            ],
+            "pseudocode": [
+                {
+                    "function_name": "main",
+                    "address": 4198400,
+                    "text": "int main(void) { return 0; }",
+                    "tool_name": "ghidra",
+                }
+            ],
+            "symbolic_facts": [
+                {
+                    "function_address": 4198400,
+                    "status": "completed",
+                    "steps": 3,
+                    "explored_states": 4,
+                    "reached_addresses": [4198400, 4198401],
+                    "unconstrained_states": 0,
+                    "reason": None,
+                }
+            ],
             "strings": [],
             "imports": [],
             "tool_runs": [

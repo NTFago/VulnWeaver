@@ -363,6 +363,62 @@
         "function_name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
       }
     },
+    "BinaryBasicBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_name", "start_address", "end_address", "successor_addresses"],
+      "properties": {
+        "function_name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "start_address": {"type": "integer", "minimum": 0},
+        "end_address": {"type": "integer", "minimum": 0},
+        "successor_addresses": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "BinaryXrefType": {
+      "type": "string",
+      "enum": ["call", "jump", "data"]
+    },
+    "BinaryXref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_address", "target_address", "type", "source_function", "target_symbol"],
+      "properties": {
+        "source_address": {"type": "integer", "minimum": 0},
+        "target_address": {"type": "integer", "minimum": 0},
+        "type": {"$ref": "#/$defs/BinaryXrefType"},
+        "source_function": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "target_symbol": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinarySymbolicStatus": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"]
+    },
+    "BinarySymbolicFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_address", "status", "steps", "explored_states", "reached_addresses", "unconstrained_states", "reason"],
+      "properties": {
+        "function_address": {"type": "integer", "minimum": 0},
+        "status": {"$ref": "#/$defs/BinarySymbolicStatus"},
+        "steps": {"type": "integer", "minimum": 0},
+        "explored_states": {"type": "integer", "minimum": 0},
+        "reached_addresses": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "unconstrained_states": {"type": "integer", "minimum": 0},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinaryPseudocode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_name", "address", "text", "tool_name"],
+      "properties": {
+        "function_name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "tool_name": {"$ref": "#/$defs/Identifier"}
+      }
+    },
     "BinaryString": {
       "type": "object",
       "additionalProperties": false,
@@ -401,7 +457,7 @@
     "BinaryAnalysisResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "artifact_version_id", "analyzed_artifact_version_id", "format", "architecture", "bits", "endianness", "image_base", "entry_point", "compiler", "packer", "packed", "sections", "functions", "instructions", "strings", "imports", "tool_runs", "status", "created_at"],
+      "required": ["schema_version", "artifact_version_id", "analyzed_artifact_version_id", "format", "architecture", "bits", "endianness", "image_base", "entry_point", "compiler", "packer", "packed", "sections", "functions", "instructions", "basic_blocks", "xrefs", "pseudocode", "symbolic_facts", "strings", "imports", "tool_runs", "status", "created_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "artifact_version_id": {"$ref": "#/$defs/Identifier"},
@@ -418,6 +474,10 @@
         "sections": {"type": "array", "items": {"$ref": "#/$defs/BinarySection"}},
         "functions": {"type": "array", "items": {"$ref": "#/$defs/BinaryFunction"}},
         "instructions": {"type": "array", "items": {"$ref": "#/$defs/BinaryInstruction"}},
+        "basic_blocks": {"type": "array", "items": {"$ref": "#/$defs/BinaryBasicBlock"}},
+        "xrefs": {"type": "array", "items": {"$ref": "#/$defs/BinaryXref"}},
+        "pseudocode": {"type": "array", "items": {"$ref": "#/$defs/BinaryPseudocode"}},
+        "symbolic_facts": {"type": "array", "items": {"$ref": "#/$defs/BinarySymbolicFact"}},
         "strings": {"type": "array", "items": {"$ref": "#/$defs/BinaryString"}},
         "imports": {"type": "array", "items": {"$ref": "#/$defs/BinaryImport"}},
         "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/BinaryToolRun"}},

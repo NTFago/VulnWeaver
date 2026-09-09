@@ -172,6 +172,16 @@ class BinaryAnalysisStatus(StrEnum):
     COMPLETE = 'complete'
     PARTIAL = 'partial'
 
+class BinaryXrefType(StrEnum):
+    CALL = 'call'
+    JUMP = 'jump'
+    DATA = 'data'
+
+class BinarySymbolicStatus(StrEnum):
+    COMPLETED = 'completed'
+    PARTIAL = 'partial'
+    FAILED = 'failed'
+
 class PairNodeKind(StrEnum):
     FUNCTION = 'function'
     BASIC_BLOCK = 'basic_block'
@@ -330,6 +340,34 @@ class BinaryInstruction(TypedDict):
     operands: str
     function_name: str | None
 
+class BinaryBasicBlock(TypedDict):
+    function_name: str | None
+    start_address: int
+    end_address: int
+    successor_addresses: list[int]
+
+class BinaryXref(TypedDict):
+    source_address: int
+    target_address: int
+    type: BinaryXrefType
+    source_function: str | None
+    target_symbol: str | None
+
+class BinarySymbolicFact(TypedDict):
+    function_address: int
+    status: BinarySymbolicStatus
+    steps: int
+    explored_states: int
+    reached_addresses: list[int]
+    unconstrained_states: int
+    reason: str | None
+
+class BinaryPseudocode(TypedDict):
+    function_name: str
+    address: int
+    text: str
+    tool_name: Identifier
+
 class BinaryString(TypedDict):
     value: str
     encoding: Literal['ascii', 'utf-16le']
@@ -366,6 +404,10 @@ class BinaryAnalysisResult(TypedDict):
     sections: list[BinarySection]
     functions: list[BinaryFunction]
     instructions: list[BinaryInstruction]
+    basic_blocks: list[BinaryBasicBlock]
+    xrefs: list[BinaryXref]
+    pseudocode: list[BinaryPseudocode]
+    symbolic_facts: list[BinarySymbolicFact]
     strings: list[BinaryString]
     imports: list[BinaryImport]
     tool_runs: list[BinaryToolRun]

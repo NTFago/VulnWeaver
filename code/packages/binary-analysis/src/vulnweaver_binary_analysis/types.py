@@ -8,13 +8,17 @@ from typing import Literal
 
 from vulnweaver_contracts import (
     BinaryArchitecture,
+    BinaryBasicBlock,
     BinaryFormat,
     BinaryFunction,
     BinaryImport,
     BinaryInstruction,
+    BinaryPseudocode,
     BinarySection,
     BinaryString,
+    BinarySymbolicFact,
     BinaryToolRun,
+    BinaryXref,
 )
 
 
@@ -24,6 +28,13 @@ class BinaryAnalysisLimits:
     max_sections: int = 4096
     max_functions: int = 20_000
     max_instructions: int = 200_000
+    max_basic_blocks: int = 100_000
+    max_xrefs: int = 200_000
+    max_pseudocode_functions: int = 20_000
+    max_pseudocode_chars: int = 262_144
+    max_symbolic_functions: int = 8
+    max_symbolic_steps: int = 32
+    max_symbolic_states: int = 32
     max_strings: int = 50_000
     max_string_chars: int = 4096
     min_string_chars: int = 4
@@ -37,6 +48,13 @@ class BinaryAnalysisLimits:
             "max_sections": self.max_sections,
             "max_functions": self.max_functions,
             "max_instructions": self.max_instructions,
+            "max_basic_blocks": self.max_basic_blocks,
+            "max_xrefs": self.max_xrefs,
+            "max_pseudocode_functions": self.max_pseudocode_functions,
+            "max_pseudocode_chars": self.max_pseudocode_chars,
+            "max_symbolic_functions": self.max_symbolic_functions,
+            "max_symbolic_steps": self.max_symbolic_steps,
+            "max_symbolic_states": self.max_symbolic_states,
             "max_strings": self.max_strings,
             "max_string_chars": self.max_string_chars,
             "min_string_chars": self.min_string_chars,
@@ -88,6 +106,10 @@ class ToolContribution:
     run: BinaryToolRun
     functions: tuple[BinaryFunction, ...] = ()
     instructions: tuple[BinaryInstruction, ...] = ()
+    basic_blocks: tuple[BinaryBasicBlock, ...] = ()
+    xrefs: tuple[BinaryXref, ...] = ()
+    pseudocode: tuple[BinaryPseudocode, ...] = ()
+    symbolic_facts: tuple[BinarySymbolicFact, ...] = ()
     imports: tuple[BinaryImport, ...] = ()
     compiler: str | None = None
     packer: str | None = None
@@ -106,6 +128,12 @@ class BinaryAnalysisAggregate:
     metadata: BinaryMetadata
     functions: list[BinaryFunction] = field(default_factory=lambda: _empty_functions())
     instructions: list[BinaryInstruction] = field(default_factory=lambda: _empty_instructions())
+    basic_blocks: list[BinaryBasicBlock] = field(default_factory=lambda: _empty_basic_blocks())
+    xrefs: list[BinaryXref] = field(default_factory=lambda: _empty_xrefs())
+    pseudocode: list[BinaryPseudocode] = field(default_factory=lambda: _empty_pseudocode())
+    symbolic_facts: list[BinarySymbolicFact] = field(
+        default_factory=lambda: _empty_symbolic_facts()
+    )
     strings: list[BinaryString] = field(default_factory=lambda: _empty_strings())
     imports: list[BinaryImport] = field(default_factory=lambda: _empty_imports())
     tool_runs: list[BinaryToolRun] = field(default_factory=lambda: _empty_tool_runs())
@@ -136,6 +164,44 @@ class BinaryAnalysisAggregate:
                 self.instructions.append(item)
                 instruction_addresses.add(item["address"])
 
+        block_keys = {
+            (item["start_address"], item["end_address"], item["function_name"])
+            for item in self.basic_blocks
+        }
+        for item in contribution.basic_blocks:
+            key = (item["start_address"], item["end_address"], item["function_name"])
+            if key not in block_keys and len(self.basic_blocks) < limits.max_basic_blocks:
+                self.basic_blocks.append(item)
+                block_keys.add(key)
+
+        xref_keys = {
+            (item["source_address"], item["target_address"], item["type"]) for item in self.xrefs
+        }
+        for item in contribution.xrefs:
+            key = (item["source_address"], item["target_address"], item["type"])
+            if key not in xref_keys and len(self.xrefs) < limits.max_xrefs:
+                self.xrefs.append(item)
+                xref_keys.add(key)
+
+        pseudocode_keys = {(item["address"], item["tool_name"]) for item in self.pseudocode}
+        for item in contribution.pseudocode:
+            key = (item["address"], item["tool_name"])
+            if (
+                key not in pseudocode_keys
+                and len(self.pseudocode) < limits.max_pseudocode_functions
+            ):
+                self.pseudocode.append(item)
+                pseudocode_keys.add(key)
+
+        symbolic_addresses = {item["function_address"] for item in self.symbolic_facts}
+        for item in contribution.symbolic_facts:
+            if (
+                item["function_address"] not in symbolic_addresses
+                and len(self.symbolic_facts) < limits.max_symbolic_functions
+            ):
+                self.symbolic_facts.append(item)
+                symbolic_addresses.add(item["function_address"])
+
         import_keys = {
             (item["library"], item["name"], item["ordinal"], item["address"])
             for item in self.imports
@@ -159,6 +225,22 @@ def _empty_functions() -> list[BinaryFunction]:
 
 
 def _empty_instructions() -> list[BinaryInstruction]:
+    return []
+
+
+def _empty_basic_blocks() -> list[BinaryBasicBlock]:
+    return []
+
+
+def _empty_xrefs() -> list[BinaryXref]:
+    return []
+
+
+def _empty_pseudocode() -> list[BinaryPseudocode]:
+    return []
+
+
+def _empty_symbolic_facts() -> list[BinarySymbolicFact]:
     return []
 
 

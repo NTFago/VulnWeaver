@@ -19,9 +19,15 @@ from vulnweaver_contracts import (
     Artifact,
     ArtifactKind,
     ArtifactVersion,
+    BinaryBasicBlock,
     BinaryFunction,
     BinaryInstruction,
+    BinaryPseudocode,
+    BinarySymbolicFact,
+    BinarySymbolicStatus,
     BinaryToolRun,
+    BinaryXref,
+    BinaryXrefType,
     Job,
     JobKind,
     JobStatus,
@@ -122,6 +128,42 @@ class _NormalizedAdapter:
                     mnemonic="push",
                     operands="%rbp",
                     function_name="main",
+                ),
+            ),
+            basic_blocks=(
+                BinaryBasicBlock(
+                    function_name="main",
+                    start_address=metadata.entry_point,
+                    end_address=metadata.entry_point + 1,
+                    successor_addresses=[],
+                ),
+            ),
+            xrefs=(
+                BinaryXref(
+                    source_address=metadata.entry_point,
+                    target_address=metadata.entry_point + 16,
+                    type=BinaryXrefType.CALL,
+                    source_function="main",
+                    target_symbol="helper",
+                ),
+            ),
+            pseudocode=(
+                BinaryPseudocode(
+                    function_name="main",
+                    address=metadata.entry_point,
+                    text="int main(void) { return 0; }",
+                    tool_name="ghidra",
+                ),
+            ),
+            symbolic_facts=(
+                BinarySymbolicFact(
+                    function_address=metadata.entry_point,
+                    status=BinarySymbolicStatus.COMPLETED,
+                    steps=2,
+                    explored_states=2,
+                    reached_addresses=[metadata.entry_point],
+                    unconstrained_states=0,
+                    reason=None,
                 ),
             ),
         )
@@ -239,12 +281,33 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             assert document["analyzed_artifact_version_id"] == unpacked_version_id
             assert document["functions"][0]["name"] == "main"
             assert document["instructions"][0]["file_offset"] == 0x200
+            assert document["basic_blocks"][0]["function_name"] == "main"
+            assert document["xrefs"][0]["target_symbol"] == "helper"
+            assert document["pseudocode"][0]["tool_name"] == "ghidra"
+            assert document["symbolic_facts"][0]["status"] == "completed"
 
             replay = await executor.execute(job, asyncio.Event())
             assert replay["produced_artifact_version_ids"] == [
                 unpacked_version_id,
                 result_version_id,
             ]
+            invalid_job = cast(
+                Job,
+                {
+                    **job,
+                    "id": f"job:binary-invalid-target-{suffix}",
+                    "idempotency_key": f"job-binary-invalid-target-{suffix}",
+                    "arguments": {
+                        "artifact_version_id": version_id,
+                        "target_addresses": [0xDEADBEEF],
+                    },
+                },
+            )
+            invalid = await executor.execute(invalid_job, asyncio.Event())
+            assert invalid["status"] is JobStatus.FAILED
+            assert invalid["failure"] is not None
+            assert invalid["failure"]["code"] == "binary_import.target_outside_executable_section"
+            assert invalid["produced_artifact_version_ids"] == []
         finally:
             await database.dispose()
 
