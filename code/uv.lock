@@ -1572,6 +1572,7 @@ name = "vulnweaver-sandbox-runner"
 version = "0.1.0"
 source = { editable = "packages/sandbox-runner" }
 dependencies = [
+    { name = "fastapi" },
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-tool-runtime" },
@@ -1579,6 +1580,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
