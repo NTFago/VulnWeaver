@@ -47,7 +47,7 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
-from vulnweaver_persistence import Database, DatabaseSettings, IdempotencyConflict
+from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, IdempotencyConflict
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_reporting import ReportJobScheduler
 
@@ -607,12 +607,38 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             tool=ToolIdentity(name="vulnweaver-report", version="1.0.0", image_digest=None)
         )
         async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id, for_update=True)
+            source_version = await repositories.artifacts.get_version(body.version_id)
+            source_artifact = await repositories.artifacts.get(body.artifact_id)
+            if (
+                source_version["artifact_id"] != source_artifact["id"]
+                or source_artifact["project_id"] != task["project_id"]
+            ):
+                raise ApiInputError(
+                    "report.source_mismatch",
+                    "report source does not belong to the task project",
+                    "artifact_id",
+                )
+            report_artifact_id = f"artifact:report:{task_id}:{body.format}"
+            report_version_id = f"artifact-version:report:{task_id}:{body.format}"
+            report_artifact = Artifact(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=report_artifact_id,
+                project_id=task["project_id"],
+                kind=ArtifactKind.DERIVED,
+                current_version_id=report_version_id,
+                created_at=task["updated_at"],
+            )
+            try:
+                await repositories.artifacts.get(report_artifact_id)
+            except EntityNotFound:
+                await repositories.artifacts.add(report_artifact)
             return await scheduler.schedule(
                 repositories,
                 task_id,
-                artifact_id=body.artifact_id,
-                version_id=body.version_id,
-                parent_version_id=body.parent_version_id,
+                artifact_id=report_artifact_id,
+                version_id=report_version_id,
+                parent_version_id=source_version["id"],
                 report_format=body.format,
             )
 

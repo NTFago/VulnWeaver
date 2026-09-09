@@ -186,6 +186,17 @@
 - 阻碍点：无。
 - 下一步：执行端到端任务回放，继续收口真实工具镜像和可观测性目标。
 
+### 2026-09-09 22:58：修复报告任务的派生工件创建链路
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/apps/api/src/vulnweaver_api/app.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：报告 API 现在校验源版本属于任务项目，并为 Markdown/SARIF 分别创建确定性派生工件占位；调度器使用源版本作为父版本，报告 Worker 可通过派生工件策略完成注册，重复请求复用同一目标。
+- 测试与结果：Dev Container 内 API Ruff、Pyright 通过；报告测试 `8 passed`。
+- 问题：尚未在数据库中执行真实 Finding 报告 Job 回放。
+- 阻碍点：无。
+- 下一步：用真实数据库任务和无害 Finding 完成报告 Job 结算与下载回放。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex
