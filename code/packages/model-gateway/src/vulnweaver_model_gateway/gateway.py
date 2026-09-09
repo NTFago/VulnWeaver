@@ -708,7 +708,7 @@ def _decode_and_validate(content: str, definition: str) -> JsonObject:
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     try:
-        decoded: object = json.loads(cleaned)
+        decoded = _decode_json_object(cleaned)
     except json.JSONDecodeError as error:
         raise ModelOutputError(
             "model output was not valid JSON",
@@ -728,6 +728,21 @@ def _decode_and_validate(content: str, definition: str) -> JsonObject:
             details={"contract": definition, "errors": list(error.errors)[:8]},
         ) from error
     return candidate
+
+
+def _decode_json_object(content: str) -> object:
+    """Decode a JSON object while tolerating bounded prose around it."""
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as first_error:
+        start = content.find("{")
+        if start < 0:
+            raise first_error
+        decoder = json.JSONDecoder()
+        decoded, end = decoder.raw_decode(content[start:])
+        if not isinstance(decoded, dict) or len(content) - (start + end) > 2048:
+            raise first_error
+        return cast(JsonObject, decoded)
 
 
 def _repair_messages(
