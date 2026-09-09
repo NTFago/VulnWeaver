@@ -12,6 +12,7 @@ import type {
   Job,
   Project,
   QueueEvent,
+  ResourceBudget,
   Task,
   WorkerResult,
 } from "@vulnweaver/contracts";
@@ -141,6 +142,13 @@ export const api = {
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
   findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
   findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
+  createProof: (findingId: string, payload: {
+    script_ref: string; image_digest: string; permission_mode: "request_permission" | "full_access";
+    resource_budget: ResourceBudget; kind: "proof_of_concept" | "exploit";
+  }) => request<Job>(`/api/findings/${encodeURIComponent(findingId)}/proof`, {
+    method: "POST", headers: writeHeaders(true),
+    body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
+  }),
   createReport: (taskId: string, payload: {
     artifact_id: string;
     version_id: string;
