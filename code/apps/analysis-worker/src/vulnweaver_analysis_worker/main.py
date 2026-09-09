@@ -189,6 +189,7 @@ def _review_executor(
     gateway = ModelGateway(
         ModelGatewaySettings(
             routes={ModelTier.REVIEW: ModelRoute(primary=endpoint)},
+            proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
             max_repair_attempts=_environment_int("REVIEW_MODEL_REPAIR_ATTEMPTS", 1),
             min_request_interval_seconds=float(
                 os.environ.get("REVIEW_MODEL_MIN_INTERVAL_SECONDS", "0")

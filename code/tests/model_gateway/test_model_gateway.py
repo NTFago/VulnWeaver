@@ -8,6 +8,7 @@ import pytest
 from vulnweaver_contracts import AgentRun, JsonObject, RunStatus
 from vulnweaver_model_gateway import (
     AgentRunConflict,
+    HttpxChatTransport,
     InMemoryAgentRunRecorder,
     ModelEndpoint,
     ModelGateway,
@@ -70,6 +71,12 @@ def response(content: str, *, status: int = 200, input_tokens: int = 4) -> Trans
             "usage": {"prompt_tokens": input_tokens, "completion_tokens": 3},
         },
     )
+
+
+def test_model_proxy_rejects_credentials_and_accepts_plain_http_url() -> None:
+    HttpxChatTransport(proxy_url="http://egress-proxy:8080")
+    with pytest.raises(ValueError, match="proxy URL"):
+        HttpxChatTransport(proxy_url="http://user:secret@egress-proxy:8080")
 
 
 def gateway(
