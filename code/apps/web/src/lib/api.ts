@@ -142,6 +142,7 @@ export const api = {
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
   findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
   findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
+  observability: (taskId: string) => request<Record<string, unknown>>(`/api/tasks/${taskId}/observability`),
   createProof: (findingId: string, payload: {
     script_ref: string; image_digest: string; permission_mode: "request_permission" | "full_access";
     resource_budget: ResourceBudget; kind: "proof_of_concept" | "exploit";
