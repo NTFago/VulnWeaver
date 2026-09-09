@@ -1,0 +1,43 @@
+#!/usr/local/bin/python3
+"""Execute one explicitly supplied Python proof recipe inside the sandbox."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import runpy
+import traceback
+from pathlib import Path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--script", type=Path, required=True)
+    parser.add_argument("--finding-id", required=True)
+    parser.add_argument("--kind", choices=("proof_of_concept", "exploit"), required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    result: dict[str, object] = {
+        "finding_id": args.finding_id,
+        "kind": args.kind,
+        "script": str(args.script),
+        "status": "succeeded",
+    }
+    try:
+        namespace = runpy.run_path(str(args.script), run_name="__main__")
+        exported = namespace.get("PROOF_RESULT")
+        if isinstance(exported, dict):
+            result["details"] = exported
+    except Exception as error:  # The structured result is the tool contract.
+        result["status"] = "failed"
+        result["error"] = str(error)
+        result["traceback"] = traceback.format_exc(limit=8)
+    (args.output_dir / "result.json").write_text(
+        json.dumps(result, ensure_ascii=True, sort_keys=True), encoding="utf-8"
+    )
+    return 0 if result["status"] == "succeeded" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

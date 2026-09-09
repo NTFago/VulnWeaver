@@ -208,6 +208,17 @@
 - 阻碍点：无。
 - 下一步：完成真实报告 Job 回放后再进入最终集成验收。
 
+### 2026-09-10：完成 T20 工具镜像与 T22 Finding 详情功能
+
+- 负责人：Codex
+- 状态：待验证
+- 修改文件：`code/apps/proof-tool/`、`code/compose.yaml`、`code/apps/web/src/App.svelte`、`code/apps/web/src/app.css`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增固定 Python 3.12 基础镜像的 `vulnweaver-proof-entrypoint`，支持固定参数执行 Proof/Exploit recipe 并输出结构化 `result.json`；Compose 增加 `tools` profile 构建目标。Web 任务页支持 Finding 详情展开，展示修复建议、位置、证据和 POC 数量。
+- 测试与结果：Dev Container 内成功构建 `vulnweaver-proof:fixed`；入口帮助可用；Web `svelte-check` 0 错误、0 警告。
+- 问题：真实 PoC recipe、Sandbox Runner Docker 回放和 T22 浏览器全链路尚未执行。
+- 阻碍点：无。
+- 下一步：使用无害 recipe 在独立 Sandbox Runner 中完成 Proof 与 Exploit 两种回放，并执行 Web 浏览器链路。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex

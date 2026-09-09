@@ -1,6 +1,13 @@
 name: vulnweaver
 
 services:
+  proof-tool:
+    image: vulnweaver-proof:fixed
+    build:
+      context: .
+      dockerfile: apps/proof-tool/Dockerfile
+    profiles: [tools]
+
   postgres:
     image: postgres:16-alpine
     environment:
