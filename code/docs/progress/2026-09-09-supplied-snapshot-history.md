@@ -1,5 +1,17 @@
 # 当前交付快照的历史记录归档
 
+### 2026-09-08 20:46：完成 T01.2 CI 触发去重
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`.github/workflows/quality-gate.yml`、`code/docs/adr/014-ci-quality-gate.md`、`DEVELOPMENT_STATUS.md`
+- 已完成：移除质量门禁的 `push: main` 触发，保留 Pull Request 与手动触发；合并 PR 后不再对同一变更重复启动。
+- 测试与结果：使用 PyYAML BaseLoader 成功解析 Workflow，断言触发器精确为 `pull_request` 和 `workflow_dispatch`，并确认 `push` 不存在；`git diff --check` 通过。
+- 问题：若仓库允许直接推送 `main`，该推送不再自动运行 CI；应将 `Python quality gate` 保持为必需检查并禁止直接推送。
+- 阻碍点：无。
+- 决策：更新 ADR-014。
+- 下一步：认领 T13，实现 Semgrep/cppcheck 适配、结构化能力缺失结果及源码静态工具 Job 编排。
+
 本文件仅归档本次用户指定目录内原有台账的较早记录；未经本轮重新验证，不作为当前运行状态。未使用旧工作区的交接内容。
 
 ### 2026-09-08 20:31：完成 T12 Review 正确性修复

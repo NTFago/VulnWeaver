@@ -11,7 +11,8 @@
 `IndependentModelReviewer(database, gateway, store).review(finding_id, attempt_key=...)` 是显式调用的复核应用服务，尚未接入常驻消费者。调用方注入已配置 `ModelTier.REVIEW` 的模型网关和服务自有工件库。
 
 - 复用 v1 `Review` Schema，只接受模型的 outcome/rationale；Finding/Review 身份、模型来源、时间与历史关联由服务确定。
-- 输入来自 `ReviewFactContext`，排除静态审计自由推理、模型解释及历史复核结论。当前仅提供可验证事实元数据，不读取引用工件全文；证据不足必须保留不可验证/争议状态，不能假称已阅读源码。
+- 输入来自 `ReviewFactContext`，排除静态审计自由推理、模型解释及历史复核结论。`SourceReviewFactLoader` 只读取任务输入列表中且属于同一项目的源码归档，校验摘要后按位置裁剪源码，经过网关脱敏送入模型。缺失或截断的源码不能支持确认或判误报，服务将此类提议降为不可验证。
+- 默认读取上限：归档 16 MiB、解压总量 32 MiB、单文件 1 MiB、2000 个文件、80 行及 16 KiB 文本，位置前后各保留最多 10 行。复用安全解压器，不执行样本；临时目录自动清理。结论工件保存片段、文件/归档摘要和行范围；不假称已分析片段之外的调用关系。
 - 模型网络调用与工件写入不持有数据库行锁。落库时重新锁定 Finding、比较事实与复核历史，并锁定 Task 校验取消/终态，过期结论只保留审计，不改变 Finding。
 - 确认必须经过已有领域门禁；缺少强可复现证据时保存 `unverifiable`，原始确认建议留在不可变结论工件中。复核结论自身只有 contextual 强度、零权重，不作为下一轮确认依据。
 - AgentRun、Review、Evidence 及关联在同一事务提交。结论工件内保存事实快照、提议和 run ID；Evidence 保存输入证据 ID、摘要与来源。工件先发布而数据库事务失败时保留未引用对象，不删除未知工件。
@@ -30,4 +31,4 @@ uv run --no-sync ruff check .
 
 Windows 宿主运行 psycopg 异步测试时需在 pytest 启动前设置 `asyncio.WindowsSelectorEventLoopPolicy()`；Linux/Dev Container 不需要此设置。集成测试使用独立临时数据库和模拟模型，不运行不可信样本，也不调用付费模型。
 
-后续工作：按静态 Job 完成事件调度复核、增加有界且校验摘要的代码事实读取、Task 聚合、人工 Annotation、工作台查询。当前不能视为 T15 或 P2 整体验收完成。
+后续工作：按静态 Job 完成事件调度复核、扩展函数调用邻域、Task 聚合、人工 Annotation、工作台查询。当前不能视为 T15 或 P2 整体验收完成。

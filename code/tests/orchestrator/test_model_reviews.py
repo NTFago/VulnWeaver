@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import zipfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
@@ -23,6 +25,7 @@ from vulnweaver_model_gateway import (
     ModelGatewaySettings,
     ModelRoute,
     ModelTier,
+    RedactionPolicy,
     TransportResponse,
 )
 from vulnweaver_orchestrator import FindingReviewGate, IndependentModelReviewer
@@ -33,9 +36,16 @@ from tests.orchestrator.test_finding_reviews import _evidence, _finding, _relati
 from tests.persistence.factories import artifact, artifact_version, project, task
 
 
-async def seed(database: Database, *, strong: bool = False) -> str:
+async def seed(
+    database: Database, *, store: LocalContentAddressedStore, strong: bool = False
+) -> str:
     suffix = uuid4().hex
     finding_id = f"finding:{suffix}"
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("src/app.py", "def greet(name):\n    return 'Hello ' + name\n")
+    payload.seek(0)
+    stored = store.put_stream(payload, max_bytes=4096)
     async with database.transaction() as repositories:
         await repositories.projects.add(project(f"project:{suffix}"))
         await repositories.artifacts.add(
@@ -45,11 +55,12 @@ async def seed(database: Database, *, strong: bool = False) -> str:
                 current_version_id=f"artifact-version:{suffix}",
             )
         )
-        await repositories.artifacts.add_version(
-            artifact_version(
-                f"artifact-version:{suffix}", artifact_id=f"artifact:{suffix}", digest_character="a"
-            )
+        version = artifact_version(
+            f"artifact-version:{suffix}", artifact_id=f"artifact:{suffix}", digest_character="a"
         )
+        version["digest"] = stored.digest
+        version["object_ref"] = stored.object_ref
+        await repositories.artifacts.add_version(version)
         await repositories.tasks.create(
             task(
                 f"task:{suffix}",
@@ -80,7 +91,7 @@ async def seed(database: Database, *, strong: bool = False) -> str:
     return finding_id
 
 
-def model(transport: FakeTransport) -> ModelGateway:
+def model(transport: FakeTransport, *, redaction: RedactionPolicy | None = None) -> ModelGateway:
     endpoint = ModelEndpoint(
         name="test",
         base_url="https://models.example/v1",
@@ -92,6 +103,7 @@ def model(transport: FakeTransport) -> ModelGateway:
             routes={ModelTier.REVIEW: ModelRoute(endpoint)}, max_repair_attempts=0
         ),
         transport=transport,
+        redaction=redaction,
     )
 
 
@@ -114,7 +126,9 @@ def test_model_review_settlement_and_replay(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=strong)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=strong
+            )
             proposal = _review("finding:other-project")
             proposal["outcome"] = outcome
             transport = FakeTransport([response(json.dumps(proposal))])
@@ -173,7 +187,7 @@ def test_invalid_review_is_audited_without_finding_mutation(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database)
+            finding_id = await seed(database, store=LocalContentAddressedStore(tmp_path))
             transport = FakeTransport([response(content)])
             reviewer = IndependentModelReviewer(
                 database, model(transport), LocalContentAddressedStore(tmp_path)
@@ -210,7 +224,9 @@ def test_changed_facts_cannot_be_confirmed(persistence_database_url: str, tmp_pa
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
 
             async def change() -> None:
                 review = _review(finding_id)
@@ -239,7 +255,7 @@ def test_timeout_is_persisted(persistence_database_url: str, tmp_path: Path) -> 
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database)
+            finding_id = await seed(database, store=LocalContentAddressedStore(tmp_path))
             reviewer = IndependentModelReviewer(
                 database,
                 model(FakeTransport([TimeoutError()])),
@@ -271,7 +287,9 @@ def test_atomic_rollback_can_retry_same_service(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
             transport = FakeTransport([response(json.dumps(_review(finding_id))) for _ in range(2)])
             reviewer = IndependentModelReviewer(
                 database, model(transport), LocalContentAddressedStore(tmp_path)
@@ -308,7 +326,9 @@ def test_artifact_failure_does_not_publish_review(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
             store = LocalContentAddressedStore(tmp_path)
             monkeypatch.setattr(store, "put_stream", fail)
             reviewer = IndependentModelReviewer(
@@ -331,7 +351,9 @@ def test_concurrent_attempt_settles_once(persistence_database_url: str, tmp_path
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
             ready = asyncio.Event()
             count = 0
 
@@ -369,7 +391,9 @@ def test_cancel_during_model_call_preserves_finding(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
 
             async def cancel() -> None:
                 async with database.transaction() as repositories:
@@ -400,7 +424,9 @@ def test_model_cannot_overturn_confirmed_finding(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         try:
-            finding_id = await seed(database, strong=True)
+            finding_id = await seed(
+                database, store=LocalContentAddressedStore(tmp_path), strong=True
+            )
             first = _review(finding_id)
             first["id"] = f"review:{uuid4().hex}"
             await FindingReviewGate(database).submit(first)

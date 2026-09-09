@@ -11,6 +11,7 @@ dependencies = [
     "vulnweaver-model-gateway",
     "vulnweaver-persistence",
     "vulnweaver-queue",
+    "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
 ]
 
@@ -25,6 +26,7 @@ vulnweaver-domain = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-queue = { workspace = true }
+vulnweaver-source-analysis = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 
 [tool.uv.build-backend]

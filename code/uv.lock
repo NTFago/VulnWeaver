@@ -1259,6 +1259,7 @@ dependencies = [
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
+    { name = "vulnweaver-source-analysis" },
     { name = "vulnweaver-tool-runtime" },
 ]
 
@@ -1271,6 +1272,7 @@ requires-dist = [
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
+    { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
 ]
 
