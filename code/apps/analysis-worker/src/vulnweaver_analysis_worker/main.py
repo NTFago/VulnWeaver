@@ -27,6 +27,7 @@ from vulnweaver_orchestrator import (
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_proof import ProofExecutionService, ProofJobExecutor, SandboxRunnerClient
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
 from vulnweaver_reporting import ReportJobExecutor
 from vulnweaver_source_analysis import (
@@ -80,6 +81,7 @@ async def _run() -> None:
             image_digest=None,
         ),
     )
+    proof_executor = _proof_executor(database)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -109,6 +111,7 @@ async def _run() -> None:
         ),
         review_executor,
         binary_executor,
+        proof=proof_executor,
         report=report_executor,
     )
     worker = ReliableWorker(
@@ -198,6 +201,22 @@ def _review_executor(
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
     return ReviewJobExecutor(reviewer), gateway
+
+
+def _proof_executor(database: Database) -> ProofJobExecutor | None:
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    client = SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")),
+    )
+    service = ProofExecutionService(
+        client,
+        tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
+        tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+    )
+    return ProofJobExecutor(database, service)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
