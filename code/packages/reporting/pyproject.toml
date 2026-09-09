@@ -3,7 +3,7 @@ name = "vulnweaver-reporting"
 version = "0.1.0"
 description = "SARIF and audit report generation for VulnWeaver"
 requires-python = ">=3.12,<3.13"
-dependencies = ["vulnweaver-contracts"]
+dependencies = ["vulnweaver-contracts", "weasyprint>=68,<69"]
 
 [build-system]
 requires = ["uv_build>=0.10.0,<0.11.0"]
