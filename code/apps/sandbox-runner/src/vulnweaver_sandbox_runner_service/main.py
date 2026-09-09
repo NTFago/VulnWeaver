@@ -29,7 +29,10 @@ def build_app():
         store,
         registry,
         [profile],
-        runtime=DockerCliRuntime(root=sandbox_root),
+        runtime=DockerCliRuntime(
+            root=sandbox_root,
+            docker_host_root=os.environ.get("DOCKER_HOST_SANDBOX_ROOT") or None,
+        ),
         root=sandbox_root,
     )
     return create_sandbox_app(runner, bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN"))

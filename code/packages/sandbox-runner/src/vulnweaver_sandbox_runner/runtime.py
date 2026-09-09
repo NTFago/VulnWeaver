@@ -65,6 +65,7 @@ class DockerCliRuntime:
         *,
         docker_executable: str = "docker",
         root: str | Path = "/var/lib/vulnweaver/sandbox",
+        docker_host_root: str | Path | None = None,
         command_timeout_seconds: float = 15.0,
     ) -> None:
         if not 1 <= command_timeout_seconds <= 60:
@@ -72,6 +73,11 @@ class DockerCliRuntime:
         self._docker = docker_executable
         self._command_timeout_seconds = command_timeout_seconds
         self._root = Path(root).expanduser().resolve()
+        self._docker_host_root = (
+            Path(docker_host_root).expanduser().resolve() if docker_host_root is not None else None
+        )
+        if self._docker_host_root is not None:
+            self._docker_host_root.mkdir(parents=True, exist_ok=True)
         self._root.mkdir(parents=True, exist_ok=True)
 
     async def run(self, request: RuntimeRequest, cancellation: asyncio.Event) -> RuntimeExecution:
@@ -225,7 +231,7 @@ class DockerCliRuntime:
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,size={request.resource_budget['disk_bytes']}",
             "--mount",
-            f"type=bind,src={request.input_dir},dst=/input,readonly",
+            f"type=bind,src={self._docker_visible_path(request.input_dir)},dst=/input,readonly",
             "--mount",
             f"type=volume,src={_output_volume_name(request.container_name)},"
             "dst=/output,volume-nocopy",
@@ -310,6 +316,12 @@ class DockerCliRuntime:
             (f"o=size={request.resource_budget['disk_bytes']},uid=10001,gid=10001,mode=0700"),
             _output_volume_name(request.container_name),
         )
+
+    def _docker_visible_path(self, path: Path) -> Path:
+        if self._docker_host_root is None:
+            return path
+        relative = path.relative_to(self._root)
+        return self._docker_host_root / relative
 
     async def _start_output_keeper(self, request: RuntimeRequest) -> None:
         process = await asyncio.create_subprocess_exec(
