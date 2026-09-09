@@ -1,5 +1,17 @@
 # 当前交付快照的历史记录归档
 
+### 2026-09-08 21:10：认领 T13 并清理本地开发分支
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`DEVELOPMENT_STATUS.md`；后续实现预计位于 `code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/packages/orchestrator/`、`code/deploy/tool-specs/` 及对应测试
+- 已完成：刷新远端引用，确认 T09-T12 四条本地功能分支均已进入 `origin/main`；本地 `main` 快进至 `b7d687d` 后删除旧分支，并创建 `feat/t13-static-tools`；完成 T13 架构、模块边界和现有实现核查
+- 测试与结果：Git 合并关系检查通过；工作树在开始实现前无未提交改动
+- 问题：无
+- 阻碍点：无
+- 决策：沿用既有 ToolSpec、Policy Engine、Worker 可靠结算和原始工件不可变约束，不新增重大架构决策
+- 下一步：先添加失败优先的 Semgrep/cppcheck 适配器测试，再实现结构化结果、能力缺失和静态分析 Job 执行入口
+
 ### 2026-09-08 20:46：完成 T01.2 CI 触发去重
 
 - 负责人：Codex

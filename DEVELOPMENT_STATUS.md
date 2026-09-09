@@ -10,12 +10,12 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 进行中；T13/T14 已完成，T15 Finding、Evidence 与独立复核正在实现
-- **总体状态**：结构化独立复核已接入校验归属与摘要的有界源码片段，缺失/截断时禁止确认或判为误报；尚未接入自动复核消费、Task 聚合与人工 Annotation，系统整体仍未完成。按用户要求保存检查点并推送开发分支。
-- **最后更新**：2026-09-09 03:25（Asia/Shanghai）
+- **总体状态**：结构化独立复核已接入校验归属与摘要的有界源码片段，缺失/截断时禁止确认或判为误报；R2/R3 已移植到正常 `main` 历史并通过合并门禁。尚未接入自动复核消费、Task 聚合与人工 Annotation，系统整体仍未完成。
+- **最后更新**：2026-09-09 10:02（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：只使用本次指定快照，原始快照基线为 `fe91646`，R2 提交为 `417f6a7`。用户已确认远程 `https://github.com/NTFago/VulnWeaver.git`；保存并推送 `feat/t15-review-model`，不覆盖 main 或原有功能分支。此本地仓库从快照独立初始化，未恢复原仓库祖先历史，后续集成应先核对差异，不能直接假定与 main 有共同祖先。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`。已确认独立快照根提交 `fe91646` 与 `origin/main@e9f7914` 的文件树完全一致；R2/R3 已经由 `feat/t15-review-model-main` 无冲突移植并快进到本地 `main`，原始 `feat/t15-review-model` 保留作为可回退检查点，远端 `main` 尚未推送。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：Codex；R2/R3 检查点完成，T15 保持进行中；本轮按用户要求停止扩展功能并保存交接，下一包为复核自动调度与 Task 聚合
+- **当前负责人**：未分配；T15 R2/R3 Git 历史整合已完成，下一包为复核自动调度与 Task 聚合
 
 ## 3. 开发进度
 
@@ -44,6 +44,7 @@
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
+| T15 R2/R3 Git 历史整合 | 已完成 | Codex | 核对快照基线与 `origin/main` 文件树一致，从 `origin/main@e9f7914` 创建正常历史分支并无冲突移植 3 个提交；Docker 全量门禁、锁文件、Compose 配置及受影响镜像构建均通过，本地 `main` 快进到整合结果 | 无；远端 `main` 尚未推送 | 2026-09-09 |
 
 状态只允许使用：`未开始`、`进行中`、`受阻`、`待验证`、`已完成`、`已取消`。
 
@@ -101,6 +102,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 10:02：完成 T15 R2/R3 Git 历史整合
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：Git 历史、`DEVELOPMENT_STATUS.md`、`code/docs/progress/2026-09-09-supplied-snapshot-history.md`
+- 已完成：确认无祖先分支的根快照 `fe91646` 与 `origin/main@e9f7914` 文件树完全一致；保留原始 `feat/t15-review-model`，从 `origin/main` 创建 `feat/t15-review-model-main` 并无冲突移植 R2/R3 的 3 个提交；修正快照专属交接描述并将本地 `main` 快进到整合结果。
+- 测试与结果：Docker Dev Container 内使用服务网络地址运行 `pnpm run check`，246 tests passed、总覆盖率 86.68%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check` 与 Compose 配置检查通过；`orchestrator`、`analysis-worker` 镜像构建成功。首次容器测试沿用宿主机端口导致 106 个集成测试跳过及覆盖率不足，修正测试连接变量后已全量重跑通过。
+- 问题：仅有既有 Starlette/AnyIO 弃用警告和 analysis-worker 覆盖率未导入警告，不影响门禁。
+- 阻碍点：无。
+- 决策：采用从 `origin/main` 移植提交的方式恢复正常祖先历史，不使用 `--allow-unrelated-histories` 制造 add/add 冲突；无新增 ADR。
+- 下一步：接入复核 Job 的租约、预算与 Outbox，再实现 Task 聚合及 Annotation/API。
 
 ### 2026-09-09 03:25：保存 T15-R3 源码复核事实检查点
 
@@ -207,25 +220,13 @@
 - 决策：无新增重大架构决策；沿用 ADR-012/013/015/016/019 的不可变工件、Outbox、租约、Worker 结算和可恢复编排语义。
 - 下一步：认领 T14，实现 PAIR 源码导入与按函数/调用邻域查询，并为 T15 Finding/Evidence 消费静态工具结果预留稳定输入。
 
-### 2026-09-08 21:10：认领 T13 并清理本地开发分支
-
-- 负责人：Codex
-- 状态：进行中
-- 修改文件：`DEVELOPMENT_STATUS.md`；后续实现预计位于 `code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/packages/orchestrator/`、`code/deploy/tool-specs/` 及对应测试
-- 已完成：刷新远端引用，确认 T09-T12 四条本地功能分支均已进入 `origin/main`；本地 `main` 快进至 `b7d687d` 后删除旧分支，并创建 `feat/t13-static-tools`；完成 T13 架构、模块边界和现有实现核查
-- 测试与结果：Git 合并关系检查通过；工作树在开始实现前无未提交改动
-- 问题：无
-- 阻碍点：无
-- 决策：沿用既有 ToolSpec、Policy Engine、Worker 可靠结算和原始工件不可变约束，不新增重大架构决策
-- 下一步：先添加失败优先的 Semgrep/cppcheck 适配器测试，再实现结构化结果、能力缺失和静态分析 Job 执行入口
-
-
 较早记录见 `code/docs/progress/2026-09-09-supplied-snapshot-history.md`，仅来自本次指定快照。
 
 ## 9. 验证记录
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
+| 2026-09-09 | T15 R2/R3 Git 历史整合 | Dev Container 内设置 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 为 Compose 服务地址后运行 `pnpm run check`；`uv lock --check`；Compose `config --quiet`；构建 `orchestrator`、`analysis-worker` | 246 passed，覆盖率 86.68%；Ruff/Pyright/TypeScript/Svelte 无错误；锁文件、Compose 配置及两个受影响镜像构建通过 | 未运行完整浏览器 E2E 或真实模型调用；远端 CI 尚未运行 |
 | 2026-09-09 | T15-R3 全量回归 | Windows Selector 启动 pytest，参数 `-q -p no:cacheprovider --tb=short --cov --cov-report=term --cov-fail-under=80`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright` | 246 passed，86.64%；Ruff/Pyright 无错误；真实临时 PostgreSQL/Redis 与契约测试通过 | 未验证服务镜像、完整 E2E 和真实模型；analysis-worker 入口未被覆盖率导入 |
 | 2026-09-09 | T15-R2 当前快照验收 | `.venv/Scripts/python.exe -c "import asyncio, pytest; asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()); raise SystemExit(pytest.main(['tests/contracts','tests/domain','tests/evidence','tests/finding','tests/model_gateway','tests/orchestrator','tests/persistence/test_repositories.py','tests/persistence/test_migrations.py','-q','-p','no:cacheprovider','--tb=short']))"`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright`；`pnpm run check:typescript`；`uv lock --check` | 91 passed；Ruff 无问题，Pyright 0 错误，Svelte 0 错误/警告，契约与锁文件一致 | 未执行全量覆盖率、镜像、E2E 或真实模型调用；先 Finding 后 Evidence 的非标准顺序触发原有 Q-004 |
 | 2026-09-07 | 稳定交接规则 | 核对 `AGENTS.md` 与架构文档、模块拆分及动态台账的职责边界 | 通过 | 尚无业务代码可测试 |
