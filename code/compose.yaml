@@ -217,6 +217,7 @@ services:
         condition: service_healthy
     networks:
       - analysis-plane
+      - model-egress
     read_only: true
     tmpfs:
       - /tmp
@@ -253,6 +254,8 @@ networks:
   analysis-plane:
     driver: bridge
     internal: true
+  model-egress:
+    driver: bridge
 
 volumes:
   postgres-data:
