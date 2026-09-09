@@ -231,6 +231,34 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
 
+  sandbox-runner:
+    image: vulnweaver-sandbox-runner:dev
+    build:
+      context: .
+      dockerfile: apps/sandbox-runner/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    environment:
+      ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
+      SANDBOX_ROOT: /var/lib/vulnweaver/sandbox
+      SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
+      AFL_CASR_IMAGE_REF: ${AFL_CASR_IMAGE_REF:-vulnweaver-afl-casr:fixed}
+      AFL_CASR_IMAGE_DIGEST: ${AFL_CASR_IMAGE_DIGEST:-}
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+      - sandbox-runtime:/var/lib/vulnweaver/sandbox
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - analysis-plane
+    restart: unless-stopped
+
   web:
     image: vulnweaver-web:dev
     build:
@@ -265,6 +293,7 @@ volumes:
   postgres-data:
   redis-data:
   artifact-data:
+  sandbox-runtime:
 
 secrets:
   vulnweaver_personal_password:

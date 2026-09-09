@@ -21,6 +21,7 @@ members = [
     "vulnweaver-queue",
     "vulnweaver-reporting",
     "vulnweaver-sandbox-runner",
+    "vulnweaver-sandbox-runner-service",
     "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
@@ -1587,6 +1588,29 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-sandbox-runner-service"
+version = "0.1.0"
+source = { editable = "apps/sandbox-runner" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+    { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-fuzzing" },
+    { name = "vulnweaver-sandbox-runner" },
+    { name = "vulnweaver-tool-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "uvicorn", specifier = ">=0.34,<1" },
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
+]
+
+[[package]]
 name = "vulnweaver-source-analysis"
 version = "0.1.0"
 source = { editable = "packages/source-analysis" }
@@ -1671,6 +1695,7 @@ dependencies = [
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-reporting" },
     { name = "vulnweaver-sandbox-runner" },
+    { name = "vulnweaver-sandbox-runner-service" },
     { name = "vulnweaver-source-analysis" },
     { name = "vulnweaver-tool-runtime" },
     { name = "vulnweaver-worker" },
@@ -1704,6 +1729,7 @@ requires-dist = [
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-reporting", editable = "packages/reporting" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
+    { name = "vulnweaver-sandbox-runner-service", editable = "apps/sandbox-runner" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
     { name = "vulnweaver-worker", editable = "packages/worker" },

@@ -23,6 +23,7 @@ dependencies = [
     "vulnweaver-fuzzing",
     "vulnweaver-proof",
     "vulnweaver-reporting",
+    "vulnweaver-sandbox-runner-service",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
@@ -45,6 +46,7 @@ members = [
     "apps/analysis-worker",
     "apps/dispatcher",
     "apps/orchestrator",
+    "apps/sandbox-runner",
     "packages/artifact-store",
     "packages/binary-analysis",
     "packages/contracts",
@@ -79,6 +81,7 @@ vulnweaver-dispatcher = { workspace = true }
 vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
+vulnweaver-sandbox-runner-service = { workspace = true }
 vulnweaver-fuzzing = { workspace = true }
 vulnweaver-proof = { workspace = true }
 vulnweaver-reporting = { workspace = true }
@@ -100,6 +103,7 @@ extraPaths = [
     "apps/analysis-worker/src",
     "apps/dispatcher/src",
     "apps/orchestrator/src",
+    "apps/sandbox-runner/src",
     "packages/artifact-store/src",
     "packages/binary-analysis/src",
     "packages/contracts/src",
