@@ -22,16 +22,18 @@ def build_sarif(findings: Sequence[Finding]) -> dict[str, Any]:
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
         "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "VulnWeaver",
-                    "informationUri": "https://github.com/NTFago/VulnWeaver",
-                    "rules": list(rules.values()),
-                }
-            },
-            "results": results,
-        }],
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "VulnWeaver",
+                        "informationUri": "https://github.com/NTFago/VulnWeaver",
+                        "rules": list(rules.values()),
+                    }
+                },
+                "results": results,
+            }
+        ],
     }
 
 
