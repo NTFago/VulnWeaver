@@ -33,6 +33,7 @@ from vulnweaver_contracts import (
     Finding,
     Job,
     PairFunction,
+    Poc,
     Project,
     QueueEvent,
     ResourceBudget,
@@ -584,6 +585,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
                 for relation in relations
             ]
+
+    @app.get("/api/findings/{finding_id}/pocs")
+    async def finding_pocs(
+        finding_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> list[Poc]:
+        async with database.transaction() as repositories:
+            await repositories.findings.get(finding_id)
+            return await repositories.pocs.list_for_finding(finding_id)
 
     @app.get("/api/tasks/{task_id}/annotations")
     async def task_annotations(
