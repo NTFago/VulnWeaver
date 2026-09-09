@@ -230,6 +230,8 @@ class DockerCliRuntime:
             f"{cpus:g}",
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,size={request.resource_budget['disk_bytes']}",
+            "--tmpfs",
+            f"/work:rw,exec,nosuid,size={request.resource_budget['disk_bytes']}",
             "--mount",
             f"type=bind,src={self._docker_visible_path(request.input_dir)},dst=/input,readonly",
             "--mount",
