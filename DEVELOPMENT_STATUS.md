@@ -197,6 +197,17 @@
 - 阻碍点：无。
 - 下一步：用真实数据库任务和无害 Finding 完成报告 Job 结算与下载回放。
 
+### 2026-09-09 23:24：强化报告派生版本一致性校验
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/reporting/src/vulnweaver_reporting/executor.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：报告 Worker 结算前同时校验派生工件类型、项目归属、报告版本归属及父版本绑定，避免错误版本被写入报告链路。
+- 测试与结果：Dev Container 内 Ruff、Pyright 通过；报告测试命令已执行，未出现新增错误输出。
+- 问题：仍未执行真实数据库 Finding 报告回放。
+- 阻碍点：无。
+- 下一步：完成真实报告 Job 回放后再进入最终集成验收。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex
