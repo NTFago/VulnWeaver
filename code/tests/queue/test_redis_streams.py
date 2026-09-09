@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import sys
 from typing import cast
 
 import pytest
@@ -19,9 +18,6 @@ from vulnweaver_queue import (
 )
 
 from tests.persistence.factories import job, job_event, task_event
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def test_publish_is_idempotent_and_consumer_group_requires_ack(

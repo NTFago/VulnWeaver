@@ -1,0 +1,24 @@
+[project]
+name = "vulnweaver-binary-analysis"
+version = "0.1.0"
+description = "Safe ELF/PE inspection and bounded reverse-engineering adapters for VulnWeaver"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "vulnweaver-artifact-store",
+    "vulnweaver-contracts",
+    "vulnweaver-pair",
+    "vulnweaver-persistence",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+vulnweaver-artifact-store = { workspace = true }
+vulnweaver-contracts = { workspace = true }
+vulnweaver-pair = { workspace = true }
+vulnweaver-persistence = { workspace = true }
+
+[tool.uv.build-backend]
+module-name = "vulnweaver_binary_analysis"

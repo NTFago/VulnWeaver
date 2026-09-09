@@ -198,6 +198,26 @@ def test_unknown_contract_version_is_rejected() -> None:
         ensure_supported_version("2.0.0")
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_contracts_reject_non_finite_json_numbers(value: float) -> None:
+    with pytest.raises(ContractValidationError, match="non-finite numbers"):
+        validate_contract(
+            "PairEdge",
+            {
+                "schema_version": "1.0.0",
+                "id": "pair-edge:non-finite",
+                "artifact_version_id": "artifact-version:pair",
+                "source_node_id": "pair-node:main",
+                "target_node_id": "pair-node:helper",
+                "type": "call",
+                "scope": "source",
+                "confidence": value,
+                "evidence_id": None,
+                "attributes": {},
+            },
+        )
+
+
 def test_pair_source_contracts_validate() -> None:
     location = {
         "artifact_version_id": "artifact-version:pair",
@@ -235,5 +255,157 @@ def test_pair_source_contracts_validate() -> None:
             "confidence": 1.0,
             "evidence_id": None,
             "attributes": {},
+        },
+    )
+
+
+def test_binary_analysis_contract_validates_normalized_addresses_and_tool_runs() -> None:
+    validate_contract(
+        "BinaryAnalysisResult",
+        {
+            "schema_version": "1.0.0",
+            "artifact_version_id": "artifact-version:binary-source",
+            "analyzed_artifact_version_id": "artifact-version:binary-source",
+            "format": "elf",
+            "architecture": "x86_64",
+            "bits": 64,
+            "endianness": "little",
+            "image_base": 4194304,
+            "entry_point": 4198400,
+            "compiler": "GCC",
+            "packer": None,
+            "packed": False,
+            "sections": [
+                {
+                    "name": ".text",
+                    "virtual_address": 4198400,
+                    "virtual_size": 7,
+                    "file_offset": 512,
+                    "file_size": 7,
+                    "readable": True,
+                    "writable": False,
+                    "executable": True,
+                }
+            ],
+            "functions": [
+                {
+                    "name": "main",
+                    "address": 4198400,
+                    "size": 7,
+                    "file_offset": 512,
+                    "attributes": {"source": "objdump"},
+                }
+            ],
+            "instructions": [
+                {
+                    "address": 4198400,
+                    "file_offset": 512,
+                    "bytes": "55",
+                    "mnemonic": "push",
+                    "operands": "%rbp",
+                    "function_name": "main",
+                }
+            ],
+            "basic_blocks": [
+                {
+                    "function_name": "main",
+                    "start_address": 4198400,
+                    "end_address": 4198401,
+                    "successor_addresses": [],
+                }
+            ],
+            "xrefs": [
+                {
+                    "source_address": 4198400,
+                    "target_address": 4198416,
+                    "type": "call",
+                    "source_function": "main",
+                    "target_symbol": "helper",
+                }
+            ],
+            "pseudocode": [
+                {
+                    "function_name": "main",
+                    "address": 4198400,
+                    "text": "int main(void) { return 0; }",
+                    "tool_name": "ghidra",
+                }
+            ],
+            "symbolic_facts": [
+                {
+                    "function_address": 4198400,
+                    "status": "completed",
+                    "steps": 3,
+                    "explored_states": 4,
+                    "reached_addresses": [4198400, 4198401],
+                    "unconstrained_states": 0,
+                    "reason": None,
+                }
+            ],
+            "strings": [],
+            "imports": [],
+            "tool_runs": [
+                {
+                    "tool_name": "objdump",
+                    "tool_version": "2.42",
+                    "status": "succeeded",
+                    "exit_code": 0,
+                    "reason": None,
+                    "raw_output": "bounded",
+                }
+            ],
+            "status": "complete",
+            "created_at": "2026-09-09T12:00:00Z",
+        },
+    )
+
+
+def test_sandbox_request_and_result_contracts_validate_isolated_execution_facts() -> None:
+    request = {
+        "schema_version": "1.0.0",
+        "id": "sandbox-request:contract",
+        "tool_name": "safe-test-tool",
+        "tool_version": "1.0.0",
+        "image_digest": "sha256:" + "a" * 64,
+        "artifact_kind": "source_archive",
+        "input_ref": "cas://sha256/" + "b" * 64,
+        "arguments": {"profile": "safe"},
+        "output_file_names": ["report.txt"],
+        "resource_budget": {
+            "max_model_tokens": 0,
+            "cpu_millis": 1000,
+            "memory_bytes": 16 * 1024 * 1024,
+            "disk_bytes": 1024 * 1024,
+            "max_tool_concurrency": 1,
+            "max_dynamic_runs": 0,
+            "timeout_seconds": 30,
+        },
+        "timeout_seconds": 10,
+    }
+    validate_contract("SandboxRequest", request)
+    validate_contract(
+        "SandboxResult",
+        {
+            "schema_version": "1.0.0",
+            "request_id": request["id"],
+            "status": "succeeded",
+            "exit_code": 0,
+            "stdout_ref": "cas://sha256/" + "c" * 64,
+            "stderr_ref": None,
+            "outputs": [
+                {
+                    "path": "report.txt",
+                    "object_ref": "cas://sha256/" + "d" * 64,
+                    "digest": "sha256:" + "d" * 64,
+                    "size_bytes": 12,
+                }
+            ],
+            "resource_usage": {
+                "duration_millis": 12,
+                "cpu_millis": 3,
+                "memory_bytes": 4096,
+                "output_bytes": 18,
+            },
+            "failure": None,
         },
     )

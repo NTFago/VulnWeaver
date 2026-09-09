@@ -3,7 +3,8 @@
 
 import asyncio
 import hashlib
-from contextlib import asynccontextmanager
+import logging
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, cast
@@ -73,6 +74,7 @@ from vulnweaver_api.schemas import (
 from vulnweaver_api.settings import ApiSettings
 from vulnweaver_api.uploads import remove_stale_uploads, stage_upload
 
+LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
 
@@ -539,6 +541,27 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 functions.extend(await repositories.pair.list_functions(version_id))
             return functions
 
+    @app.get("/api/tasks/{task_id}/pair/address/{address}")
+    async def task_pair_at_address(
+        task_id: str,
+        address: int,
+        _: Annotated[str, Depends(require_account)],
+    ) -> list[PairFunction]:
+        if address < 0:
+            raise ApiInputError(
+                "invalid_binary_address",
+                "binary address must be non-negative",
+                "address",
+            )
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            functions: list[PairFunction] = []
+            for version_id in task["artifact_version_ids"]:
+                functions.extend(
+                    await repositories.pair.functions_at_address(version_id, address)
+                )
+            return functions
+
     @app.get("/api/tasks/{task_id}/findings")
     async def task_findings(
         task_id: str, _: Annotated[str, Depends(require_account)]
@@ -702,23 +725,43 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             return
         await websocket.accept()
         cursor = after
+        disconnected = asyncio.create_task(_wait_for_websocket_disconnect(websocket))
         try:
-            while True:
+            while not disconnected.done():
                 async with database.transaction() as repositories:
                     await repositories.tasks.get(task_id)
                     events = await repositories.task_events.list_after(
                         task_id, after_sequence=cursor
                     )
                 for event in events:
+                    if disconnected.done():
+                        return
                     await websocket.send_json(event)
                     cursor = max(cursor, event["sequence"])
-                await asyncio.sleep(0.5)
+                done, _ = await asyncio.wait({disconnected}, timeout=0.5)
+                if done:
+                    await disconnected
+                    return
         except WebSocketDisconnect:
             return
         except Exception:
-            await websocket.close(code=1011)
+            if disconnected.done():
+                return
+            LOGGER.exception("task event WebSocket failed", extra={"task_id": task_id})
+            with suppress(RuntimeError):
+                await websocket.close(code=1011)
+        finally:
+            disconnected.cancel()
+            await asyncio.gather(disconnected, return_exceptions=True)
 
     return app
+
+
+async def _wait_for_websocket_disconnect(websocket: WebSocket) -> None:
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
 
 
 async def _artifact_detail(repositories: Any, project_id: str, artifact_id: str) -> ArtifactDetail:

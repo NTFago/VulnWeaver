@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0.0",
+  "name": "binary-import",
+  "version": "1.0.0",
+  "image_digest": "sha256:0041518fd3398da354721fd5b0557ba6e01e553e460724399283dbb29a021897",
+  "risk_level": "medium",
+  "accepted_artifacts": ["elf", "pe"],
+  "command_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["artifact_version_id"],
+    "properties": {
+      "artifact_version_id": {"type": "string", "minLength": 1, "maxLength": 128},
+      "target_addresses": {
+        "type": "array",
+        "maxItems": 8,
+        "uniqueItems": true,
+        "items": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "output_schema": {"type": "object"},
+  "network_policy": {"access": "none", "allowed_hosts": []},
+  "filesystem_policy": {"input_read_only": true, "isolated_output": true, "allow_host_paths": false},
+  "resource_limits": {"max_model_tokens": 0, "cpu_millis": 8000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "max_tool_concurrency": 1, "max_dynamic_runs": 0, "timeout_seconds": 600},
+  "approval_required": false,
+  "timeout_seconds": 600,
+  "retry_policy": {"max_attempts": 2, "backoff_seconds": 5.0, "retryable_failure_kinds": ["timeout", "environment", "dependency"]}
+}

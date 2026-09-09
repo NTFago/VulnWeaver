@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import sys
 import uuid
 from collections.abc import Iterator
 
@@ -12,6 +14,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from vulnweaver_persistence import downgrade_database, upgrade_database
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 _SAFE_TEST_DATABASE = re.compile(r"^vulnweaver_test_[0-9a-f]{12}$")
 

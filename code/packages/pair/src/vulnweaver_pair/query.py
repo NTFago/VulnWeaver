@@ -30,6 +30,12 @@ class PairQueryService:
         async with self._database.transaction() as repositories:
             return await repositories.pair.functions_at_location(artifact_version_id, path, line)
 
+    async def functions_at_address(
+        self, artifact_version_id: str, address: int
+    ) -> list[PairFunction]:
+        async with self._database.transaction() as repositories:
+            return await repositories.pair.functions_at_address(artifact_version_id, address)
+
     async def neighborhood(
         self, artifact_version_id: str, function_id: str, *, depth: int = 1
     ) -> PairNeighborhood:

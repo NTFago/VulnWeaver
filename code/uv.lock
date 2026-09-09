@@ -7,15 +7,18 @@ members = [
     "vulnweaver-analysis-worker",
     "vulnweaver-api",
     "vulnweaver-artifact-store",
+    "vulnweaver-binary-analysis",
     "vulnweaver-contracts",
     "vulnweaver-dispatcher",
     "vulnweaver-domain",
+    "vulnweaver-fuzzing",
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
     "vulnweaver-orchestrator-service",
     "vulnweaver-pair",
     "vulnweaver-persistence",
     "vulnweaver-queue",
+    "vulnweaver-sandbox-runner",
     "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
     "vulnweaver-worker",
@@ -1138,6 +1141,7 @@ version = "0.1.0"
 source = { editable = "apps/analysis-worker" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-binary-analysis" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
@@ -1150,6 +1154,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
@@ -1202,6 +1207,25 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-binary-analysis"
+version = "0.1.0"
+source = { editable = "packages/binary-analysis" }
+dependencies = [
+    { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-pair" },
+    { name = "vulnweaver-persistence" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-pair", editable = "packages/pair" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
+]
+
+[[package]]
 name = "vulnweaver-contracts"
 version = "0.1.0"
 source = { editable = "packages/contracts" }
@@ -1237,6 +1261,25 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "vulnweaver-contracts", editable = "packages/contracts" }]
+
+[[package]]
+name = "vulnweaver-fuzzing"
+version = "0.1.0"
+source = { editable = "packages/fuzzing" }
+dependencies = [
+    { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-sandbox-runner" },
+    { name = "vulnweaver-tool-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
+]
 
 [[package]]
 name = "vulnweaver-model-gateway"
@@ -1351,6 +1394,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "vulnweaver-sandbox-runner"
+version = "0.1.0"
+source = { editable = "packages/sandbox-runner" }
+dependencies = [
+    { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-tool-runtime" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
+]
+
+[[package]]
 name = "vulnweaver-source-analysis"
 version = "0.1.0"
 source = { editable = "packages/source-analysis" }
@@ -1421,15 +1481,18 @@ dependencies = [
     { name = "vulnweaver-analysis-worker" },
     { name = "vulnweaver-api" },
     { name = "vulnweaver-artifact-store" },
+    { name = "vulnweaver-binary-analysis" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-dispatcher" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-orchestrator-service" },
     { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
+    { name = "vulnweaver-sandbox-runner" },
     { name = "vulnweaver-source-analysis" },
     { name = "vulnweaver-tool-runtime" },
     { name = "vulnweaver-worker" },
@@ -1449,15 +1512,18 @@ requires-dist = [
     { name = "vulnweaver-analysis-worker", editable = "apps/analysis-worker" },
     { name = "vulnweaver-api", editable = "apps/api" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
+    { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-dispatcher", editable = "apps/dispatcher" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-orchestrator-service", editable = "apps/orchestrator" },
     { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
     { name = "vulnweaver-worker", editable = "packages/worker" },

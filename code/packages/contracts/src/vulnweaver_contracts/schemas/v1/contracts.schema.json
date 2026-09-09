@@ -80,6 +80,167 @@
       "type": "string",
       "enum": ["low", "medium", "high", "critical"]
     },
+    "SandboxStatus": {
+      "type": "string",
+      "enum": ["succeeded", "failed", "timed_out", "cancelled", "orphaned", "policy_denied"]
+    },
+    "FuzzStatus": {
+      "type": "string",
+      "enum": ["succeeded", "partial", "failed", "timed_out", "cancelled"]
+    },
+    "CrashRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "artifact_version_id", "input_ref", "input_digest", "signal", "exit_code", "stack_frames", "stack_hash", "stderr_ref", "fuzz_tool", "tool", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "input_ref": {"$ref": "#/$defs/ObjectReference"},
+        "input_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "signal": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "exit_code": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
+        "stack_frames": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
+        "stack_hash": {"$ref": "#/$defs/Sha256Digest"},
+        "stderr_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "fuzz_tool": {"$ref": "#/$defs/ToolIdentity"},
+        "tool": {"$ref": "#/$defs/ToolIdentity"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "FuzzRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "job_id", "sandbox_request", "artifact_version_id", "seed_refs", "max_executions", "max_duration_seconds", "max_crashes", "collect_coverage"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "sandbox_request": {"$ref": "#/$defs/SandboxRequest"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "seed_refs": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/ObjectReference"}},
+        "max_executions": {"type": "integer", "minimum": 1, "maximum": 1000000000},
+        "max_duration_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "max_crashes": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "collect_coverage": {"type": "boolean"}
+      }
+    },
+    "FuzzResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "job_id", "status", "executions", "coverage_percent", "crash_ids", "created_at", "failure"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/FuzzStatus"},
+        "executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "coverage_percent": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 100}, {"type": "null"}]},
+        "crash_ids": {"type": "array", "maxItems": 10000, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "succeeded"}}, "required": ["status"]},
+          "then": {"properties": {"failure": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["partial", "failed", "timed_out", "cancelled"]}}, "required": ["status"]},
+          "then": {"properties": {"failure": {"$ref": "#/$defs/StructuredFailure"}}}
+        }
+      ]
+    },
+    "FuzzToolSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "executions", "coverage_percent"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "coverage_percent": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 100}, {"type": "null"}]}
+      }
+    },
+    "CrashManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_path", "input_digest", "signal", "exit_code", "stack_frames"],
+      "properties": {
+        "input_path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+        "input_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "signal": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "exit_code": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
+        "stack_frames": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
+      }
+    },
+    "CrashManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "crashes"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "crashes": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/CrashManifestEntry"}}
+      }
+    },
+    "SandboxOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "object_ref", "digest", "size_bytes"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+        "object_ref": {"$ref": "#/$defs/ObjectReference"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "size_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "SandboxResourceUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_millis", "cpu_millis", "memory_bytes", "output_bytes"],
+      "properties": {
+        "duration_millis": {"type": "integer", "minimum": 0},
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Accumulated CPU time consumed by the sandbox, in milliseconds."
+        },
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "output_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "SandboxRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "tool_name", "tool_version", "image_digest", "artifact_kind", "input_ref", "arguments", "output_file_names", "resource_budget", "timeout_seconds"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "artifact_kind": {"$ref": "#/$defs/ArtifactKind"},
+        "input_ref": {"$ref": "#/$defs/ObjectReference"},
+        "arguments": {"$ref": "#/$defs/JsonObject"},
+        "output_file_names": {"type": "array", "uniqueItems": true, "maxItems": 128, "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"}},
+        "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
+    "SandboxResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "status", "exit_code", "stdout_ref", "stderr_ref", "outputs", "resource_usage", "failure"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "request_id": {"$ref": "#/$defs/Identifier"},
+        "status": {"$ref": "#/$defs/SandboxStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "stdout_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "stderr_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "outputs": {"type": "array", "items": {"$ref": "#/$defs/SandboxOutput"}},
+        "resource_usage": {"$ref": "#/$defs/SandboxResourceUsage"},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
+      }
+    },
     "NetworkAccess": {
       "type": "string",
       "enum": ["none", "allowlist"]
@@ -127,7 +288,11 @@
       "required": ["max_model_tokens", "cpu_millis", "memory_bytes", "disk_bytes", "max_tool_concurrency", "max_dynamic_runs", "timeout_seconds"],
       "properties": {
         "max_model_tokens": {"type": "integer", "minimum": 0},
-        "cpu_millis": {"type": "integer", "minimum": 1},
+        "cpu_millis": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "CPU capacity in millicores; 1000 permits one logical CPU."
+        },
         "memory_bytes": {"type": "integer", "minimum": 1048576},
         "disk_bytes": {"type": "integer", "minimum": 1048576},
         "max_tool_concurrency": {"type": "integer", "minimum": 1},
@@ -311,6 +476,180 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "BinaryFormat": {
+      "type": "string",
+      "enum": ["elf", "pe"]
+    },
+    "BinaryArchitecture": {
+      "type": "string",
+      "enum": ["x86", "x86_64"]
+    },
+    "BinaryAnalysisStatus": {
+      "type": "string",
+      "enum": ["complete", "partial"]
+    },
+    "BinarySection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "virtual_address", "virtual_size", "file_offset", "file_size", "readable", "writable", "executable"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "virtual_address": {"type": "integer", "minimum": 0},
+        "virtual_size": {"type": "integer", "minimum": 0},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "file_size": {"type": "integer", "minimum": 0},
+        "readable": {"type": "boolean"},
+        "writable": {"type": "boolean"},
+        "executable": {"type": "boolean"}
+      }
+    },
+    "BinaryFunction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "address", "size", "file_offset", "attributes"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "size": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "attributes": {"$ref": "#/$defs/JsonObject"}
+      }
+    },
+    "BinaryInstruction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "file_offset", "bytes", "mnemonic", "operands", "function_name"],
+      "properties": {
+        "address": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "bytes": {"type": "string", "pattern": "^[0-9a-f]*$", "maxLength": 128},
+        "mnemonic": {"type": "string", "minLength": 1, "maxLength": 128},
+        "operands": {"type": "string", "maxLength": 4096},
+        "function_name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinaryBasicBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_name", "start_address", "end_address", "successor_addresses"],
+      "properties": {
+        "function_name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "start_address": {"type": "integer", "minimum": 0},
+        "end_address": {"type": "integer", "minimum": 0},
+        "successor_addresses": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "BinaryXrefType": {
+      "type": "string",
+      "enum": ["call", "jump", "data"]
+    },
+    "BinaryXref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_address", "target_address", "type", "source_function", "target_symbol"],
+      "properties": {
+        "source_address": {"type": "integer", "minimum": 0},
+        "target_address": {"type": "integer", "minimum": 0},
+        "type": {"$ref": "#/$defs/BinaryXrefType"},
+        "source_function": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "target_symbol": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinarySymbolicStatus": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"]
+    },
+    "BinarySymbolicFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_address", "status", "steps", "explored_states", "reached_addresses", "unconstrained_states", "reason"],
+      "properties": {
+        "function_address": {"type": "integer", "minimum": 0},
+        "status": {"$ref": "#/$defs/BinarySymbolicStatus"},
+        "steps": {"type": "integer", "minimum": 0},
+        "explored_states": {"type": "integer", "minimum": 0},
+        "reached_addresses": {"type": "array", "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "unconstrained_states": {"type": "integer", "minimum": 0},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
+      }
+    },
+    "BinaryPseudocode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function_name", "address", "text", "tool_name"],
+      "properties": {
+        "function_name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 262144},
+        "tool_name": {"$ref": "#/$defs/Identifier"}
+      }
+    },
+    "BinaryString": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "encoding", "file_offset", "virtual_address"],
+      "properties": {
+        "value": {"type": "string", "minLength": 1, "maxLength": 16384},
+        "encoding": {"type": "string", "enum": ["ascii", "utf-16le"]},
+        "file_offset": {"type": "integer", "minimum": 0},
+        "virtual_address": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "BinaryImport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["library", "name", "ordinal", "address"],
+      "properties": {
+        "library": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "name": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "ordinal": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "address": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
+    "BinaryToolRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_name", "tool_version", "status", "exit_code", "reason", "raw_output"],
+      "properties": {
+        "tool_name": {"$ref": "#/$defs/Identifier"},
+        "tool_version": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/StaticToolStatus"},
+        "exit_code": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "raw_output": {"anyOf": [{"type": "string", "maxLength": 1048576}, {"type": "null"}]}
+      }
+    },
+    "BinaryAnalysisResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "artifact_version_id", "analyzed_artifact_version_id", "format", "architecture", "bits", "endianness", "image_base", "entry_point", "compiler", "packer", "packed", "sections", "functions", "instructions", "basic_blocks", "xrefs", "pseudocode", "symbolic_facts", "strings", "imports", "tool_runs", "status", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "analyzed_artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "format": {"$ref": "#/$defs/BinaryFormat"},
+        "architecture": {"$ref": "#/$defs/BinaryArchitecture"},
+        "bits": {"type": "integer", "enum": [32, 64]},
+        "endianness": {"type": "string", "enum": ["little", "big"]},
+        "image_base": {"type": "integer", "minimum": 0},
+        "entry_point": {"type": "integer", "minimum": 0},
+        "compiler": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "packer": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "packed": {"type": "boolean"},
+        "sections": {"type": "array", "items": {"$ref": "#/$defs/BinarySection"}},
+        "functions": {"type": "array", "items": {"$ref": "#/$defs/BinaryFunction"}},
+        "instructions": {"type": "array", "items": {"$ref": "#/$defs/BinaryInstruction"}},
+        "basic_blocks": {"type": "array", "items": {"$ref": "#/$defs/BinaryBasicBlock"}},
+        "xrefs": {"type": "array", "items": {"$ref": "#/$defs/BinaryXref"}},
+        "pseudocode": {"type": "array", "items": {"$ref": "#/$defs/BinaryPseudocode"}},
+        "symbolic_facts": {"type": "array", "items": {"$ref": "#/$defs/BinarySymbolicFact"}},
+        "strings": {"type": "array", "items": {"$ref": "#/$defs/BinaryString"}},
+        "imports": {"type": "array", "items": {"$ref": "#/$defs/BinaryImport"}},
+        "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/BinaryToolRun"}},
+        "status": {"$ref": "#/$defs/BinaryAnalysisStatus"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "PairNodeKind": {
       "type": "string",
       "enum": ["function", "basic_block", "instruction", "parameter", "variable", "memory_object", "source_location"]
@@ -389,7 +728,7 @@
         "artifact_version_id": {"$ref": "#/$defs/Identifier"},
         "image_base": {"type": "integer", "minimum": 0},
         "virtual_address": {"type": "integer", "minimum": 0},
-        "file_offset": {"type": "integer", "minimum": 0},
+        "file_offset": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
         "instruction_end": {"type": "integer", "minimum": 0}
       }
     },
@@ -1007,6 +1346,7 @@
     {"$ref": "#/$defs/ToolSpec"},
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/SourceImportResult"},
+    {"$ref": "#/$defs/BinaryAnalysisResult"},
     {"$ref": "#/$defs/PairFunction"},
     {"$ref": "#/$defs/PairNode"},
     {"$ref": "#/$defs/PairEdge"},
@@ -1022,6 +1362,13 @@
     {"$ref": "#/$defs/ArtifactDetail"},
     {"$ref": "#/$defs/HealthResponse"},
     {"$ref": "#/$defs/WorkerRequest"},
-    {"$ref": "#/$defs/WorkerResult"}
+    {"$ref": "#/$defs/WorkerResult"},
+    {"$ref": "#/$defs/SandboxRequest"},
+    {"$ref": "#/$defs/SandboxResult"},
+    {"$ref": "#/$defs/CrashRecord"},
+    {"$ref": "#/$defs/FuzzRequest"},
+    {"$ref": "#/$defs/FuzzResult"},
+    {"$ref": "#/$defs/FuzzToolSummary"},
+    {"$ref": "#/$defs/CrashManifest"}
   ]
 }

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -26,9 +25,6 @@ from tests.persistence.factories import (
     project,
     task,
 )
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def test_dispatcher_publishes_and_crash_window_retry_does_not_duplicate_stream_entry(

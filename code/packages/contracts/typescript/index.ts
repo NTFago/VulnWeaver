@@ -41,6 +41,109 @@ export type FailureKind = "validation" | "policy" | "timeout" | "tool" | "enviro
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
+export type SandboxStatus = "succeeded" | "failed" | "timed_out" | "cancelled" | "orphaned" | "policy_denied";
+
+export type FuzzStatus = "succeeded" | "partial" | "failed" | "timed_out" | "cancelled";
+
+export interface CrashRecord {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  artifact_version_id: Identifier;
+  input_ref: ObjectReference;
+  input_digest: Sha256Digest;
+  signal: string | null;
+  exit_code: number | null;
+  stack_frames: Array<string>;
+  stack_hash: Sha256Digest;
+  stderr_ref: ObjectReference | null;
+  fuzz_tool: ToolIdentity;
+  tool: ToolIdentity;
+  created_at: string;
+}
+
+export interface FuzzRequest {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  job_id: Identifier;
+  sandbox_request: SandboxRequest;
+  artifact_version_id: Identifier;
+  seed_refs: Array<ObjectReference>;
+  max_executions: number;
+  max_duration_seconds: number;
+  max_crashes: number;
+  collect_coverage: boolean;
+}
+
+export interface FuzzResult {
+  schema_version: SchemaVersion;
+  job_id: Identifier;
+  status: FuzzStatus;
+  executions: number;
+  coverage_percent: number | null;
+  crash_ids: Array<Identifier>;
+  created_at: string;
+  failure: StructuredFailure | null;
+}
+
+export interface FuzzToolSummary {
+  schema_version: SchemaVersion;
+  executions: number;
+  coverage_percent: number | null;
+}
+
+export interface CrashManifestEntry {
+  input_path: string;
+  input_digest: Sha256Digest;
+  signal: string | null;
+  exit_code: number | null;
+  stack_frames: Array<string>;
+}
+
+export interface CrashManifest {
+  schema_version: SchemaVersion;
+  crashes: Array<CrashManifestEntry>;
+}
+
+export interface SandboxOutput {
+  path: string;
+  object_ref: ObjectReference;
+  digest: Sha256Digest;
+  size_bytes: number;
+}
+
+export interface SandboxResourceUsage {
+  duration_millis: number;
+  cpu_millis: number;
+  memory_bytes: number;
+  output_bytes: number;
+}
+
+export interface SandboxRequest {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  tool_name: Identifier;
+  tool_version: string;
+  image_digest: Sha256Digest;
+  artifact_kind: ArtifactKind;
+  input_ref: ObjectReference;
+  arguments: JsonObject;
+  output_file_names: Array<string>;
+  resource_budget: ResourceBudget;
+  timeout_seconds: number;
+}
+
+export interface SandboxResult {
+  schema_version: SchemaVersion;
+  request_id: Identifier;
+  status: SandboxStatus;
+  exit_code: number | null;
+  stdout_ref: ObjectReference | null;
+  stderr_ref: ObjectReference | null;
+  outputs: Array<SandboxOutput>;
+  resource_usage: SandboxResourceUsage;
+  failure: StructuredFailure | null;
+}
+
 export type NetworkAccess = "none" | "allowlist";
 
 export type CapabilityStatus = "available" | "unavailable";
@@ -181,6 +284,126 @@ export interface StaticAnalysisResult {
   created_at: string;
 }
 
+export type BinaryFormat = "elf" | "pe";
+
+export type BinaryArchitecture = "x86" | "x86_64";
+
+export type BinaryAnalysisStatus = "complete" | "partial";
+
+export interface BinarySection {
+  name: string;
+  virtual_address: number;
+  virtual_size: number;
+  file_offset: number;
+  file_size: number;
+  readable: boolean;
+  writable: boolean;
+  executable: boolean;
+}
+
+export interface BinaryFunction {
+  name: string;
+  address: number;
+  size: number;
+  file_offset: number | null;
+  attributes: JsonObject;
+}
+
+export interface BinaryInstruction {
+  address: number;
+  file_offset: number | null;
+  bytes: string;
+  mnemonic: string;
+  operands: string;
+  function_name: string | null;
+}
+
+export interface BinaryBasicBlock {
+  function_name: string | null;
+  start_address: number;
+  end_address: number;
+  successor_addresses: Array<number>;
+}
+
+export type BinaryXrefType = "call" | "jump" | "data";
+
+export interface BinaryXref {
+  source_address: number;
+  target_address: number;
+  type: BinaryXrefType;
+  source_function: string | null;
+  target_symbol: string | null;
+}
+
+export type BinarySymbolicStatus = "completed" | "partial" | "failed";
+
+export interface BinarySymbolicFact {
+  function_address: number;
+  status: BinarySymbolicStatus;
+  steps: number;
+  explored_states: number;
+  reached_addresses: Array<number>;
+  unconstrained_states: number;
+  reason: string | null;
+}
+
+export interface BinaryPseudocode {
+  function_name: string;
+  address: number;
+  text: string;
+  tool_name: Identifier;
+}
+
+export interface BinaryString {
+  value: string;
+  encoding: "ascii" | "utf-16le";
+  file_offset: number;
+  virtual_address: number | null;
+}
+
+export interface BinaryImport {
+  library: string | null;
+  name: string | null;
+  ordinal: number | null;
+  address: number | null;
+}
+
+export interface BinaryToolRun {
+  tool_name: Identifier;
+  tool_version: string | null;
+  status: StaticToolStatus;
+  exit_code: number | null;
+  reason: string | null;
+  raw_output: string | null;
+}
+
+export interface BinaryAnalysisResult {
+  schema_version: SchemaVersion;
+  artifact_version_id: Identifier;
+  analyzed_artifact_version_id: Identifier;
+  format: BinaryFormat;
+  architecture: BinaryArchitecture;
+  bits: 32 | 64;
+  endianness: "little" | "big";
+  image_base: number;
+  entry_point: number;
+  compiler: string | null;
+  packer: string | null;
+  packed: boolean;
+  sections: Array<BinarySection>;
+  functions: Array<BinaryFunction>;
+  instructions: Array<BinaryInstruction>;
+  basic_blocks: Array<BinaryBasicBlock>;
+  xrefs: Array<BinaryXref>;
+  pseudocode: Array<BinaryPseudocode>;
+  symbolic_facts: Array<BinarySymbolicFact>;
+  strings: Array<BinaryString>;
+  imports: Array<BinaryImport>;
+  tool_runs: Array<BinaryToolRun>;
+  status: BinaryAnalysisStatus;
+  created_at: string;
+}
+
 export type PairNodeKind = "function" | "basic_block" | "instruction" | "parameter" | "variable" | "memory_object" | "source_location";
 
 export type PairEdgeType = "call" | "control_flow" | "def_use" | "data_flow" | "taint" | "xref";
@@ -235,7 +458,7 @@ export interface BinaryLocation {
   artifact_version_id: Identifier;
   image_base?: number;
   virtual_address: number;
-  file_offset: number;
+  file_offset: number | null;
   instruction_end?: number;
 }
 

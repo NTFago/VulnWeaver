@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from io import BytesIO
 from pathlib import Path
 from typing import cast
@@ -24,9 +23,6 @@ from vulnweaver_contracts import (
 from vulnweaver_persistence import Database, DatabaseSettings, PersistenceInvariantError
 
 from tests.persistence.factories import TIMESTAMP, budget
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 def test_artifact_bytes_and_metadata_are_registered_with_lineage(

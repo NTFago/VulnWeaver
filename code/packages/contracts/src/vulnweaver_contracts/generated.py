@@ -143,6 +143,21 @@ class RiskLevel(StrEnum):
     HIGH = 'high'
     CRITICAL = 'critical'
 
+class SandboxStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    FAILED = 'failed'
+    TIMED_OUT = 'timed_out'
+    CANCELLED = 'cancelled'
+    ORPHANED = 'orphaned'
+    POLICY_DENIED = 'policy_denied'
+
+class FuzzStatus(StrEnum):
+    SUCCEEDED = 'succeeded'
+    PARTIAL = 'partial'
+    FAILED = 'failed'
+    TIMED_OUT = 'timed_out'
+    CANCELLED = 'cancelled'
+
 class NetworkAccess(StrEnum):
     NONE = 'none'
     ALLOWLIST = 'allowlist'
@@ -160,6 +175,28 @@ class AnnotationTargetKind(StrEnum):
     FUNCTION = 'function'
     FINDING = 'finding'
 
+class BinaryFormat(StrEnum):
+    ELF = 'elf'
+    PE = 'pe'
+
+class BinaryArchitecture(StrEnum):
+    X86 = 'x86'
+    X86_64 = 'x86_64'
+
+class BinaryAnalysisStatus(StrEnum):
+    COMPLETE = 'complete'
+    PARTIAL = 'partial'
+
+class BinaryXrefType(StrEnum):
+    CALL = 'call'
+    JUMP = 'jump'
+    DATA = 'data'
+
+class BinarySymbolicStatus(StrEnum):
+    COMPLETED = 'completed'
+    PARTIAL = 'partial'
+    FAILED = 'failed'
+
 class PairNodeKind(StrEnum):
     FUNCTION = 'function'
     BASIC_BLOCK = 'basic_block'
@@ -176,6 +213,95 @@ class PairEdgeType(StrEnum):
     DATA_FLOW = 'data_flow'
     TAINT = 'taint'
     XREF = 'xref'
+
+class CrashRecord(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    artifact_version_id: Identifier
+    input_ref: ObjectReference
+    input_digest: Sha256Digest
+    signal: str | None
+    exit_code: int | None
+    stack_frames: list[str]
+    stack_hash: Sha256Digest
+    stderr_ref: ObjectReference | None
+    fuzz_tool: ToolIdentity
+    tool: ToolIdentity
+    created_at: str
+
+class FuzzRequest(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    job_id: Identifier
+    sandbox_request: SandboxRequest
+    artifact_version_id: Identifier
+    seed_refs: list[ObjectReference]
+    max_executions: int
+    max_duration_seconds: int
+    max_crashes: int
+    collect_coverage: bool
+
+class FuzzResult(TypedDict):
+    schema_version: SchemaVersion
+    job_id: Identifier
+    status: FuzzStatus
+    executions: int
+    coverage_percent: float | None
+    crash_ids: list[Identifier]
+    created_at: str
+    failure: StructuredFailure | None
+
+class FuzzToolSummary(TypedDict):
+    schema_version: SchemaVersion
+    executions: int
+    coverage_percent: float | None
+
+class CrashManifestEntry(TypedDict):
+    input_path: str
+    input_digest: Sha256Digest
+    signal: str | None
+    exit_code: int | None
+    stack_frames: list[str]
+
+class CrashManifest(TypedDict):
+    schema_version: SchemaVersion
+    crashes: list[CrashManifestEntry]
+
+class SandboxOutput(TypedDict):
+    path: str
+    object_ref: ObjectReference
+    digest: Sha256Digest
+    size_bytes: int
+
+class SandboxResourceUsage(TypedDict):
+    duration_millis: int
+    cpu_millis: int
+    memory_bytes: int
+    output_bytes: int
+
+class SandboxRequest(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    tool_name: Identifier
+    tool_version: str
+    image_digest: Sha256Digest
+    artifact_kind: ArtifactKind
+    input_ref: ObjectReference
+    arguments: JsonObject
+    output_file_names: list[str]
+    resource_budget: ResourceBudget
+    timeout_seconds: int
+
+class SandboxResult(TypedDict):
+    schema_version: SchemaVersion
+    request_id: Identifier
+    status: SandboxStatus
+    exit_code: int | None
+    stdout_ref: ObjectReference | None
+    stderr_ref: ObjectReference | None
+    outputs: list[SandboxOutput]
+    resource_usage: SandboxResourceUsage
+    failure: StructuredFailure | None
 
 type Identifier = str
 
@@ -293,6 +419,105 @@ class StaticAnalysisResult(TypedDict):
     tool_runs: list[StaticToolRun]
     created_at: str
 
+class BinarySection(TypedDict):
+    name: str
+    virtual_address: int
+    virtual_size: int
+    file_offset: int
+    file_size: int
+    readable: bool
+    writable: bool
+    executable: bool
+
+class BinaryFunction(TypedDict):
+    name: str
+    address: int
+    size: int
+    file_offset: int | None
+    attributes: JsonObject
+
+class BinaryInstruction(TypedDict):
+    address: int
+    file_offset: int | None
+    bytes: str
+    mnemonic: str
+    operands: str
+    function_name: str | None
+
+class BinaryBasicBlock(TypedDict):
+    function_name: str | None
+    start_address: int
+    end_address: int
+    successor_addresses: list[int]
+
+class BinaryXref(TypedDict):
+    source_address: int
+    target_address: int
+    type: BinaryXrefType
+    source_function: str | None
+    target_symbol: str | None
+
+class BinarySymbolicFact(TypedDict):
+    function_address: int
+    status: BinarySymbolicStatus
+    steps: int
+    explored_states: int
+    reached_addresses: list[int]
+    unconstrained_states: int
+    reason: str | None
+
+class BinaryPseudocode(TypedDict):
+    function_name: str
+    address: int
+    text: str
+    tool_name: Identifier
+
+class BinaryString(TypedDict):
+    value: str
+    encoding: Literal['ascii', 'utf-16le']
+    file_offset: int
+    virtual_address: int | None
+
+class BinaryImport(TypedDict):
+    library: str | None
+    name: str | None
+    ordinal: int | None
+    address: int | None
+
+class BinaryToolRun(TypedDict):
+    tool_name: Identifier
+    tool_version: str | None
+    status: StaticToolStatus
+    exit_code: int | None
+    reason: str | None
+    raw_output: str | None
+
+class BinaryAnalysisResult(TypedDict):
+    schema_version: SchemaVersion
+    artifact_version_id: Identifier
+    analyzed_artifact_version_id: Identifier
+    format: BinaryFormat
+    architecture: BinaryArchitecture
+    bits: Literal[32, 64]
+    endianness: Literal['little', 'big']
+    image_base: int
+    entry_point: int
+    compiler: str | None
+    packer: str | None
+    packed: bool
+    sections: list[BinarySection]
+    functions: list[BinaryFunction]
+    instructions: list[BinaryInstruction]
+    basic_blocks: list[BinaryBasicBlock]
+    xrefs: list[BinaryXref]
+    pseudocode: list[BinaryPseudocode]
+    symbolic_facts: list[BinarySymbolicFact]
+    strings: list[BinaryString]
+    imports: list[BinaryImport]
+    tool_runs: list[BinaryToolRun]
+    status: BinaryAnalysisStatus
+    created_at: str
+
 class PairFunction(TypedDict):
     schema_version: SchemaVersion
     id: Identifier
@@ -339,7 +564,7 @@ class BinaryLocation(TypedDict):
     artifact_version_id: Identifier
     image_base: NotRequired[int]
     virtual_address: int
-    file_offset: int
+    file_offset: int | None
     instruction_end: NotRequired[int]
 
 type FindingLocation = SourceLocation | BinaryLocation

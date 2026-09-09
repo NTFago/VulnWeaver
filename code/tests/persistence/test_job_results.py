@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import sys
 from datetime import UTC, datetime
 
 import pytest
@@ -32,9 +31,6 @@ from tests.persistence.factories import (
     project,
     task,
 )
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @pytest.fixture(scope="module")

@@ -1793,6 +1793,33 @@ class PairRepository:
             <= value["source_location"]["end_line"]
         ]
 
+    async def functions_at_address(
+        self, artifact_version_id: str, address: int
+    ) -> list[PairFunction]:
+        if address < 0:
+            raise ValueError("PAIR binary address must be non-negative")
+        rows = (
+            await self._connection.execute(
+                select(pair_functions)
+                .where(
+                    pair_functions.c.artifact_version_id == artifact_version_id,
+                    pair_functions.c.binary_location.is_not(None),
+                )
+                .order_by(pair_functions.c.id)
+            )
+        ).mappings()
+        values = [_pair_function_from_row(row) for row in rows]
+        matched: list[PairFunction] = []
+        for value in values:
+            location = value["binary_location"]
+            if location is None:
+                continue
+            start = location["virtual_address"]
+            end = location.get("instruction_end", start + 1)
+            if start <= address < max(start + 1, end):
+                matched.append(value)
+        return matched
+
     async def neighborhood(
         self, artifact_version_id: str, function_id: str, *, depth: int = 1
     ) -> dict[str, object]:

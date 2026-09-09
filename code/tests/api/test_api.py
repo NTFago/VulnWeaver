@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from vulnweaver_api import ApiSettings, create_app
+from vulnweaver_api.app import _wait_for_websocket_disconnect
 from vulnweaver_api.auth import SESSION_COOKIE, token_digest
 from vulnweaver_contracts import (
     Evidence,
@@ -25,9 +25,6 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_persistence import Database
 from vulnweaver_persistence.models import personal_sessions
-
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @pytest.fixture
@@ -111,6 +108,28 @@ def _budget() -> dict[str, int]:
         "max_dynamic_runs": 0,
         "timeout_seconds": 60,
     }
+
+
+def test_websocket_disconnect_listener_consumes_until_disconnect() -> None:
+    class FakeWebSocket:
+        def __init__(self) -> None:
+            self.messages = iter(
+                (
+                    {"type": "websocket.receive", "text": "ignored"},
+                    {"type": "websocket.disconnect", "code": 1000},
+                )
+            )
+            self.receive_count = 0
+
+        async def receive(self) -> dict[str, object]:
+            self.receive_count += 1
+            return next(self.messages)
+
+    websocket = FakeWebSocket()
+
+    asyncio.run(_wait_for_websocket_disconnect(websocket))  # type: ignore[arg-type]
+
+    assert websocket.receive_count == 2
 
 
 def _create_project(
@@ -286,6 +305,7 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     finding_id = "finding:t15-api"
     evidence_id = "evidence:t15-api"
     function_id = "pair-function:t15-api"
+    binary_function_id = "pair-function:t17-api"
 
     async def seed() -> None:
         database = client.app.state.database
@@ -364,7 +384,25 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
                         binary_location=None,
                         signature="main()",
                         attributes={},
-                    )
+                    ),
+                    PairFunction(
+                        schema_version="1.0.0",
+                        id=binary_function_id,
+                        artifact_version_id=version_id,
+                        name="z_binary_main",
+                        symbol="z_binary_main",
+                        language="x86_64",
+                        source_location=None,
+                        binary_location={
+                            "artifact_version_id": version_id,
+                            "image_base": 0x400000,
+                            "virtual_address": 0x401000,
+                            "file_offset": None,
+                            "instruction_end": 0x401010,
+                        },
+                        signature=None,
+                        attributes={},
+                    ),
                 ],
                 [],
                 [],
@@ -378,6 +416,12 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     assert evidence[0]["relation"]["relation"] == "supports"
     assert client.get(f"/api/tasks/{task_id}/agent-runs").json() == []
     assert client.get(f"/api/tasks/{task_id}/pair").json()[0]["id"] == function_id
+    located = client.get(f"/api/tasks/{task_id}/pair/address/{0x401004}")
+    assert located.status_code == 200
+    assert [item["id"] for item in located.json()] == [binary_function_id]
+    invalid_address = client.get(f"/api/tasks/{task_id}/pair/address/-1")
+    assert invalid_address.status_code == 422
+    assert invalid_address.json()["error_code"] == "invalid_binary_address"
 
     annotation_headers = {
         "X-CSRF-Token": csrf,
@@ -662,9 +706,7 @@ def test_repeated_login_failures_lock_personal_account(client: TestClient) -> No
     assert locked.json()["message"] == "invalid username or password"
 
 
-def test_active_sessions_are_bounded(
-    client: TestClient, persistence_database_url: str
-) -> None:
+def test_active_sessions_are_bounded(client: TestClient, persistence_database_url: str) -> None:
     _login_and_change_password(client)
     oldest_token = client.cookies[SESSION_COOKIE]
     for _ in range(2):

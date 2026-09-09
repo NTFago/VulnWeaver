@@ -9,13 +9,13 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收；T13/T14/T15（含 R5）已完成
-- **总体状态**：真实源码扫描暴露的 Semgrep 只读文件系统失败、失败 Job 被错误结算为成功及 Task 结果/阶段事件失真已修复。静态工具失败现在保留不可变结果工件并以结构化失败结算 Job；Task 依据实际 Job 聚合为 `partial` 或 `no_findings`，而不是将失败伪装为无发现。
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待镜像验收、T17 已完成、T18 待验证、T19 进行中；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
+- **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
 - **最后更新**：2026-09-09（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
-- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；本地 `fix/static-analysis-result-integrity` 从已同步的 `main`（`1306460`）创建，工作区开始时无未提交改动。
+- **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；当前分支为 PR #12 源分支 `feat/t19-fuzz-triage`，已纳入 `origin/main@a88dfd0`；唯一冲突为动态台账，已按双方事实完成语义合并并通过全量验证，等待 PR 远端检查与评审合并。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
-- **当前负责人**：无；T15-R5 已完成，下一任务包待认领
+- **当前负责人**：Codex；R-003 PR #12 与 `origin/main` 同步已完成；T16/T18/T19-R2 待真实工具镜像或剩余动态场景验证
 
 ## 3. 开发进度
 
@@ -41,6 +41,14 @@
 | T13 Semgrep/cppcheck 适配 | 已完成 | Codex | 实现固定参数、无 Shell 的 Semgrep/cppcheck 适配；新增 `StaticAnalysisResult`/诊断/工具运行契约；源码导入成功后按 CapabilityProfile 创建幂等静态分析 Job；静态结果作为不可变派生工件保存并保留父工件与 ToolSpec 镜像摘要 | 无；T14 负责 PAIR 源码导入与查询 | 2026-09-08 |
 | T14 PAIR 源码导入与查询 | 已完成 | Codex | 新增 PAIR Function/Node/Edge/Raw v1 契约；新增 `vulnweaver-pair` 包、0009 关系表迁移、幂等仓储、函数/位置/调用邻域查询；源码导入 Worker 成功后自动写入 PAIR，并将原始结果、工具身份和 `pair_raw_id` 保留在图元素属性中 | 无；T15 接入 Finding、Evidence 与独立复核 | 2026-09-08 |
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
+| T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | R1/R2 已交付 `BinaryAnalysisResult`、安全 ELF/PE 解析、字符串/函数/指令/导入/基本块/Xref/Ghidra 伪代码/angr 定点符号事实、固定参数无 Shell 工具适配、输出/状态预算、UPX 父子工件、部分失败语义及 Worker/ToolSpec 接入 | 仅剩真实 DIE/UPX/Ghidra/angr 最终镜像与 Compose E2E；Docker Hub 基础镜像解析仍受 Q-006 影响，恢复后更新精确镜像摘要并按 M10 验收 | 2026-09-09 |
+| T17 PAIR 二进制导入与查询 | 已完成 | Codex | `BinaryPairImporter` 将 T16 Function/BasicBlock/Instruction/Xref 导入现有 PostgreSQL PAIR，保留二进制位置、分析版本、伪代码/符号事实、原始结果引用和工具身份；地址查询、Worker 自动接入和控制面地址 API 已交付 | 无；最终 Docker 二进制 E2E 随 T16 镜像验收 | 2026-09-09 |
+| T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收 | 需要真实 Docker runtime 运行无害固定命令，验证容器清理、禁网、只读根文件系统、非 root、输出限制和运行时统计；依赖 T04/T09，按 M12/P4 验收 | 2026-09-09 |
+| T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
+| T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
+| R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
+| R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
+| R-003 `origin/main` 同步与冲突解决 | 已完成 | Codex | PR #12 源分支已合并 `origin/main@a88dfd0`；代码自动合并，动态台账按双方事实处理唯一冲突并消除重复问题编号；全量回归及静态、契约、锁文件检查通过 | 等待 PR #12 远端检查与评审流程合并 `main` | 2026-09-09 |
 | T15-R1 静态分析与 PAIR 审计修正 | 已完成 | Codex | PAIR 调用边按关系身份聚合调用点并消除名称碰撞误连；Review 串行锁定并按不可变历史重建状态；规范化事实时间戳；导入/静态持久化异常返回终态；修正静态谱系、输出上限、严重度和 Worker 外网隔离 | 无 | 2026-09-09 |
 | T15-R2 结构化模型独立复核 | 已完成 | Codex | review 档位结构化调用；AgentRun/Review/ReviewConclusion Evidence 原子登记；固定身份与来源、弱证据降为 unverifiable、事实过期/取消/非法迁移拦截；并发单次结算、失败回放、数据库回滚后重试；91 个定向测试及静态/契约检查通过 | 无（本包仅为显式复核应用服务）；自动调度、有界源码事实读取、Task 聚合及 Annotation 仍归 T15 后续 | 2026-09-09 |
 | T15-R3 有界源码复核事实 | 已完成 | Codex | 复用安全导入器；校验任务输入/项目归属、归档与文件摘要；限制归档/解压/文件/文本大小和行数；源码片段经网关脱敏并进入不可变复核快照；缺失或截断时禁止确认/判误报；全量 246 测试通过 | 本包无剩余；自动调度、完整调用邻域、Task 聚合和 Annotation 仍属后续任务；未进行镜像或真实模型验收 | 2026-09-09 |
@@ -56,9 +64,10 @@
 |---|---|---|---|---|---|
 | Q-002 | 首版开发环境是否必须同时支持 Windows Worker 未明确 | 影响 P4 的本机验收范围 | 先冻结跨平台消息协议，Windows 执行节点在 Linux MVP 后实现 | 待处理 | 未分配 |
 | Q-003 | Windows Python 3.12 在含中文的工作区路径中以 GBK 读取 uv editable `.pth`，会导致启动失败 | 影响 Windows 宿主直接使用默认 editable workspace；Dev Container/Linux 不受影响 | Windows 本机使用 `uv sync --no-editable`，验证命令使用 `uv run --no-sync`；等待 Python/uv 上游兼容或迁移到纯 ASCII 路径 | 待处理 | 未分配 |
-| Q-004 | 现有 Evidence 仓储测试与 Finding 测试共用固定 input_ref，先运行 Finding 再运行 Evidence 时出现顺序依赖 | 非标准目录顺序下 1 个原有断言失败，不是本轮复核行为回归 | 按正常目录顺序 91 个测试全通过；后续将原有测试数据改为独立命名空间，不放宽断言 | 待处理 | 未分配 |
+| Q-004 | Evidence 仓储测试与 Finding 测试曾共用固定 input_ref，导致顺序依赖 | 已将 Evidence 测试数据改为独立摘要，全量套件按当前收集顺序稳定通过 | 保留精确断言，不再共享测试命名空间 | 已解决 | Codex |
 | Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
-| Q-006 | Semgrep 在 analysis-worker 只读根文件系统中默认写入 `~/.semgrep`，静态执行器曾将失败 `tool_run` 结算为成功，Task 因而错误显示 `completed/no_findings` 并出现未执行阶段事件 | 已修复；新任务会将这类故障结算为结构化 Job 失败和 Task `partial`，UI 可见工具/原因/退出码 | 历史 Task 不自动回写，需重新投递或新建任务；报告生成不在本次范围 | 已解决 | Codex |
+| Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | 保留既有国内 Python/Debian 镜像配置；已确认失败发生在基础镜像元数据解析，未切换未经项目确认的镜像源 | 待处理 | Codex |
+| Q-007 | Semgrep 在 analysis-worker 只读根文件系统中默认写入 `~/.semgrep`，静态执行器曾将失败 `tool_run` 结算为成功，Task 因而错误显示 `completed/no_findings` 并出现未执行阶段事件 | 已修复；新任务会将这类故障结算为结构化 Job 失败和 Task `partial`，UI 可见工具/原因/退出码 | 历史 Task 不自动回写，需重新投递或新建任务；报告生成不在本次范围 | 已解决 | Codex |
 
 ## 5. 当前阻碍点
 
@@ -107,7 +116,43 @@
 
 ## 8. 最近完成记录
 
-### 2026-09-09：完成 T15-R5 静态分析失败与结果完整性修复
+### 2026-09-09 19:14：完成 R-003 PR #12 主线同步与冲突解决
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：合并 `origin/main@a88dfd0` 引入的 T15-R5 实现、测试、ADR-020，以及双方共同维护的 `DEVELOPMENT_STATUS.md`。
+- 已完成：将 PR #12 源分支与最新 `origin/main` 合并；代码文件全部自动合并，唯一冲突为动态台账；保留 T15-R5 与 T16-T19/R-001/R-002 两侧事实，并将重复的 Semgrep 问题编号调整为 Q-007。
+- 测试与结果：全量 Python 304 passed、1 skipped、总分支覆盖率 81.78%；全仓库 Ruff、受影响模块 Pyright、TypeScript/Svelte、契约生成和 `uv lock --offline --check` 均通过。
+- 问题：Windows editable `.pth` 的 Q-003 仍存在，本轮继续使用临时 no-editable 环境；Linux 专用静态工具断言在 Windows 跳过；Starlette 测试客户端有一条上游弃用警告。
+- 阻碍点：无。
+- 决策：无新增 ADR；冲突按双方意图最小化解决，未整文件覆盖任一侧修改。
+- 下一步：将合并提交推送到 PR #12，确认 GitHub 可合并状态和远端检查后按评审流程合入 `main`。
+
+### 2026-09-09 19:00：完成 R-002 审查缺陷修复
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/sandbox-runner/`、`code/packages/fuzzing/`、`code/apps/api/src/vulnweaver_api/app.py`、对应测试、`code/uv.lock`。
+- 已完成：Docker 输出从无配额宿主绑定改为受 `disk_bytes` 强制限制的 tmpfs 命名卷，并由同一固定摘要镜像的只读 `/bin/sleep` 容器保活至安全复制；CPU 百分比在执行期采样并积分为 CPU 毫秒，内存记录峰值；fuzz 最小输入只接受无压缩 tar，在任何 CAS 发布前校验成员、摘要、单项/累计/归档预算，只发布 `max_crashes` 内输入；ArtifactStore 瞬时错误保留 `dependency/retryable`；空闲 WebSocket 主动接收断连；fuzzing 声明实际直接依赖。
+- 测试与结果：定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；全仓库 Ruff、受影响包 Pyright、TypeScript/Svelte、契约生成及 `uv lock --check` 通过。本机固定摘要 `alpine:3.20` 实测 2 MiB 写入被 1 MiB 配额以 ENOSPC 截断，1 MiB 文件成功回收，容器与卷全部清理。
+- 问题：Windows editable `.pth` 的 Q-003 仍存在，测试继续使用临时 no-editable 环境；Starlette 测试客户端仍有一条上游弃用警告。
+- 阻碍点：无。
+- 决策：无新增 ADR；动态执行仍只经过 Sandbox Runner，保活容器沿用请求中已由 Tool Registry 固定摘要的工具镜像且不接受调用方命令。
+- 下一步：在 T19 真实 AFL++/CASR 镜像验收中确认 `/bin/sleep` 可用，并完成预算终止、覆盖率和 crash cluster E2E。
+
+### 2026-09-09 18:01：完成 T19-R2 AFL++/CASR Sandbox 编排检查点
+
+- 负责人：Codex
+- 状态：待验证（编排与契约实现完成，真实 AFL++/CASR 镜像验收未执行）
+- 修改文件：`code/packages/contracts/src/vulnweaver_contracts/schemas/v1/contracts.schema.json`、生成的 Python/TypeScript 契约、`code/packages/fuzzing/src/vulnweaver_fuzzing/{triage.py,profiles.py,executor.py}`、`code/tests/fuzzing/{test_triage.py,test_executor.py}`
+- 已完成：固定 `afl-casr` ToolSpec 与 POSIX 容器 argv profile；将目标与种子打包为确定性 USTAR CAS 工件；经 Sandbox Runner 单次调用；有界解析 summary、crash manifest 和 minimized-inputs tar；校验输出 CAS 元数据及最小输入摘要；输出结构化 `FuzzResult`，并保留 crash input 引用、覆盖率、栈聚类和工具身份。
+- 测试与结果：全量 Python 测试 297 passed、分支覆盖率 82.46%；全仓库 Ruff 通过；fuzzing 包 Pyright strict 通过；契约生成 `--check`、`uv lock --check`、TypeScript/Svelte 检查通过。
+- 问题：全仓库独立 Pyright 直接运行时因本地 Node 环境缺少 `langgraph`、tree-sitter 等可选依赖产生既有缺失导入/类型错误；本阶段变更的 fuzzing 包 Pyright 已通过，未修改无关模块。
+- 阻碍点：无。真实工具镜像、Sandbox 网络/资源压力和最终 E2E 仍属于 T19/T18/T16 的待验证范围。
+- 决策：无新增 ADR；继续遵循 ADR-006 的 Sandbox Runner 唯一动态执行边界。
+- 下一步：准备固定版本 AFL++/CASR 镜像及无害公开样本，在 Sandbox Runner 中完成真实预算终止、覆盖率、crash cluster 和容器隔离验收。
+
+### 2026-09-09 17:50：完成 T15-R5 静态分析失败与结果完整性修复
 
 - 负责人：Codex
 - 状态：已完成
@@ -119,6 +164,78 @@
 - 决策：ADR-020。
 - 下一步：为 P2 端到端验收配置 REVIEW 模型并用无害多语言样本复验完整链路。
 
+### 2026-09-09 15:35：完成全量代码审计修复与 T19 安全分诊基础检查点
+
+- 负责人：Codex
+- 状态：R-001 已完成；T19 进行中
+- 修改文件：公共契约及生成视图、`vulnweaver-fuzzing`、Sandbox Runner、二进制命令执行器、API WebSocket 日志和对应回归测试
+- 已完成：阻断 `NaN`/`Infinity` 进入任意公共契约；限制 fuzz 请求、崩溃记录和清单规模并修正十六进制符号误聚类；容器命令路径固定为 POSIX；文件/stdout/stderr 在 CAS 发布前合并计费；Docker 管理命令加入硬超时；Sandbox/二进制执行器在父取消后终止并等待子进程；修复 Q-004 测试顺序污染。
+- 测试与结果：全量 292 passed、总覆盖率 83%；Ruff 全仓库通过，Pyright strict 0 错误；TypeScript/Svelte 0 错误/警告；Web 生产构建通过；契约生成、`uv lock --check`、pnpm 离线冻结安装和 Compose 配置通过。
+- 问题：本机默认 `.venv` 仍受 Q-003 影响，本轮使用系统临时目录的 no-editable uv 环境并强制重装工作区 wheel；Starlette 测试客户端有一条上游弃用警告，不影响验收。
+- 阻碍点：无。
+- 决策：未改变服务或信任边界，无新增 ADR；动态执行仍只能经过 Sandbox Runner。
+- 提交：`bc084e4 feat(fuzzing): add bounded crash triage contracts`；`32c1265 fix(audit): harden trust and process boundaries`。
+- 下一步：为 T19 接入固定 AFL++/CASR ToolSpec/profile 和 Sandbox Runner 调用，使用无害公开样本完成真实 fuzz、最小化输入和 crash Evidence 验收。
+
+### 2026-09-09 15:10：暂停 T19 模糊测试与崩溃分诊草稿
+
+- 负责人：Codex
+- 状态：进行中（用户要求暂停；未形成提交）
+- 修改文件：`code/packages/contracts/src/vulnweaver_contracts/schemas/v1/contracts.schema.json`、生成的 `code/packages/contracts/src/vulnweaver_contracts/generated.py` 与 `code/packages/contracts/typescript/index.ts`、新建 `code/packages/fuzzing/`
+- 已完成：草拟 `FuzzStatus`、`CrashRecord`、`FuzzRequest`、`FuzzResult` 契约；新建 `vulnweaver-fuzzing` 包和 `CrashTriageService`/`FuzzBudgetGate`，目标是规范化 AFL++/CASR 清单、归一化栈帧、生成稳定 stack hash/crash ID、执行数/时长/崩溃数预算门禁。当前草稿已通过宿主 Python `py_compile` 语法检查。
+- 测试与结果：本暂停点未运行 T19 pytest、Ruff、Pyright 或全量 `pnpm run check`；此前 T18 最后一次全量门禁为 278 passed、82.56% 覆盖率，T18 定向 19 passed。
+- 问题：T19 草稿尚未加入 `code/pyproject.toml` workspace、`uv.lock` 或测试目录；契约生成后尚未做生成一致性和运行时 Schema 验证；`CrashTriageService.build_result` 的执行计数接口和 AFL++/CASR 实际适配仍需继续设计/实现。
+- 阻碍点：无；当前仅按用户请求暂停。
+- 决策：无新增 ADR。
+- 下一步：恢复后先检查并完善 T19 草稿，加入 workspace/锁文件和定向测试，再运行 Ruff/Pyright/契约检查；不要直接将当前未提交草稿标记为已完成。
+
+### 2026-09-09 14:24：完成 T18 Sandbox Runner 结构化请求与 Docker 隔离检查点
+
+- 负责人：Codex
+- 状态：待验证（实现完成，真实 Docker runtime 验收未执行）
+- 修改文件：`code/packages/contracts/`、`code/packages/sandbox-runner/`、`code/pyproject.toml`、`code/uv.lock`、`code/tests/contracts/test_validation.py`、`code/tests/sandbox_runner/`
+- 已完成：新增 `SandboxRequest`、`SandboxResult`、输出和资源用量契约；新增独立 `sandbox-runner` 包；请求必须精确匹配 ToolSpec 和受信任命令 profile，镜像摘要、工件类型、参数 Schema、资源预算、禁网/只读输入/隔离输出和无审批运行边界均由 Runner 再次校验；CAS 工件只通过服务自有 scratch 目录挂载，外部命令采用固定 argv、无 Shell，Docker runtime 固定 `--network none`、`--read-only`、`--cap-drop ALL`、`no-new-privileges`、非 root、固定 pids=128/memory/cpu/tmpfs 约束；stdout/stderr/输出文件受大小限制并登记 CAS，执行后清理容器和 scratch，无法确认清理时结果变为 `orphaned`，支持按 ownership label 回收孤儿容器。
+- 测试与结果：Sandbox Runner/契约定向测试 19 passed（包含 pids 参数修正后的 6 个 Sandbox Runner 测试）；全量 `pnpm run check` 通过，278 passed、总分支覆盖率 82.56%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check` 和 Compose 配置通过；负向测试覆盖未注册工具、镜像摘要不匹配、工件类型拒绝、命令参数越界、ToolSpec 网络/文件系统策略不安全、未授权输出、清理失败和非法孤儿容器名。使用本机已有 `alpine@sha256:d9e853...` 镜像执行固定 `/bin/cat /input/input.bin` 成功，`/bin/touch /blocked` 受只读根文件系统阻断，`/usr/bin/yes` 输出洪泛被终止，`/bin/sleep 30` 在 1 秒预算后超时，均确认容器回收；`docker inspect` 确认 `NetworkMode=none`、只读根、`CapDrop=ALL`、`no-new-privileges=true`、`User=10001:10001`、`PidsLimit=128`、内存限制 64 MiB。
+- 问题：Docker 镜像构建仍受 Q-006 的 Docker Hub 元数据网络问题影响；真实 runtime 已用本机 Alpine 验证，但尚未执行网络流量和内存/进程压力的独立固定样本。
+- 阻碍点：无；可以继续实现 T19/T20 的调用适配，真实 runtime 验收在可用镜像和 Docker 配置下补跑。
+- 决策：无新增 ADR；Sandbox Runner 是唯一允许创建容器的组件，当前只提供库和 Docker CLI runtime，调用方不得传入 Docker 参数、宿主路径或任意 shell 字符串。
+- 下一步：补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证，并将 RuntimeExecution 的资源采样语义固定后认领 T19。
+
+### 2026-09-09 13:24：完成 T17 二进制 PAIR 导入、地址查询与 Worker/API 接入
+
+- 负责人：Codex
+- 状态：已完成
+- 修改文件：`code/packages/pair/`、`code/packages/persistence/`、`code/packages/binary-analysis/`、`code/apps/analysis-worker/`、`code/apps/api/`、`code/packages/contracts/`、`code/tests/pair/`、`code/tests/binary_analysis/`、`code/tests/api/` 及 `code/uv.lock`
+- 已完成：新增 `BinaryPairImporter` 与 `BinaryPairImportSummary`；按分析版本和地址生成确定性 PAIR Function；把函数、基本块、指令和外部地址节点导入 PAIR；将控制流和 call/jump/data Xref 映射为 PAIR 边；函数属性保存伪代码、符号事实、原始工具和脱壳分析版本；二进制位置支持虚拟地址/文件偏移回填；新增 `functions_at_address` 查询与 `/api/tasks/{task_id}/pair/address/{address}` 控制面接口；analysis-worker 在二进制结果成功发布后自动导入 PAIR，失败保持已发布派生工件并返回结构化状态。
+- 测试与结果：T17/二进制/API/契约定向测试 45 passed；全量 `pnpm run check` 通过，271 passed、总分支覆盖率 83.86%，Ruff/Pyright/TypeScript/Svelte 全通过；`uv lock --check`、契约生成和 Compose 配置通过；真实 PostgreSQL 验证二进制 PAIR 幂等重放、函数地址查询、调用/控制流边及 Worker 自动导入。
+- 问题：Docker Hub 基础镜像元数据仍无法解析，未进行含最终 T16/T17 代码的 analysis-worker 镜像 E2E；该问题不影响 T17 代码验收。
+- 阻碍点：无；Q-006 只影响最终镜像验收，不影响 PAIR 代码和真实 PostgreSQL 定向验证。
+- 决策：无新增 ADR；继续使用 PostgreSQL PAIR 关系表和 CAS 原始结果引用，不新建图数据库。
+- 下一步：提交 T17 独立逻辑变更；随后继续处理 T16 最终镜像验收或推进 T18 Sandbox Runner。
+
+### 2026-09-09 12:56：完成 T16-R2 CFG、Xref、伪代码与定点符号事实
+
+- 负责人：Codex
+- 状态：待验证（实现完成，最终工具镜像与 Compose E2E 未完成）
+- 修改文件：`code/packages/contracts/`、`code/packages/binary-analysis/`、`code/deploy/ghidra/ExportVulnWeaver.java`、`code/deploy/tool-specs/binary-import.json` 及 `code/tests/binary_analysis/`
+- 已完成：扩展 `BinaryAnalysisResult` 保存基本块、后继地址、调用/跳转/数据 Xref、Ghidra 原始伪代码和 angr 定点符号事实；objdump/Ghidra 指令可归一为有界 CFG 与引用；Ghidra Headless 导出器限制函数、指令、伪代码数量和单函数文本；angr helper 限制目标数、步数和活跃状态数，并逐目标记录完成、截断或失败事实；`target_addresses` 由 ToolSpec 和 Worker 双重校验，只允许落在可执行节区，且在产生派生工件前拒绝非法目标。
+- 测试与结果：Dev Container 全量 `pnpm run check` 通过，270 passed、总覆盖率 83.79%，Ruff/Pyright/TypeScript/Svelte 全通过；T16/契约定向 29 passed；真实 `/bin/ls` 得到 117 个函数、21915 条指令、5214 个基本块、6067 条 Xref 和 2 个依赖；`uv lock --check`、契约生成和 Compose 配置通过。
+- 问题：Q-006 未变化，无法重建含最终脚本和依赖的 analysis-worker 镜像；真实 Ghidra/angr/UPX 执行仍属于必要验收而非已通过项。
+- 阻碍点：T16 最终镜像验收受 Q-006 影响，但不阻止在依赖其契约的 T17 上继续开发。
+- 决策：无新增 ADR；定点符号分析默认不启用目标，只有结构化且位于可执行节区的 `target_addresses` 才进入 angr helper。
+- 下一步：从当前 T16 契约检查点创建 T17 分支，实现二进制 Function/BasicBlock/Instruction/Xref 向 PAIR 的幂等导入和地址查询。
+
+### 2026-09-09 12:26：完成 T16-R1 ELF/PE 安全导入与规范化逆向检查点
+
+- 负责人：Codex
+- 状态：进行中（T16-R1 检查点完成，T16 仍需真实 Ghidra/angr 与镜像验收）
+- 修改文件：`code/packages/binary-analysis/`、`code/packages/contracts/`、`code/packages/source-analysis/`、`code/apps/analysis-worker/`、`code/deploy/tool-specs/binary-import.json`、`code/deploy/ghidra/ExportVulnWeaver.java`、`code/compose.yaml`、工作区依赖/锁文件及 `code/tests/binary_analysis/`
+- 已完成：新增 `BinaryAnalysisResult` 及 ELF/PE、节区、函数、指令、字符串、导入、工具运行契约；纯解析器仅接受 x86/x64 ELF/PE 并校验表/节区边界和输入大小；外部工具统一使用固定参数、无 Shell、取消/超时/合并输出上限；实现 DIE、UPX、objdump、Ghidra Headless、angr CFGFast 适配及有界导出脚本；二进制 Job 校验 Task/Project/Artifact 归属，结果和 UPX 脱壳件以确定性 ID 登记为不可变派生工件，重放保持幂等；Ghidra 等已配置工具失败时保留基础结果并将分析标记为 `partial`。
+- 测试与结果：Dev Container 全量 `pnpm run check` 通过，266 passed、总分支覆盖率 83.25%，Ruff/Pyright/TypeScript/Svelte 均通过；T16 定向 15 passed，包含真实 PostgreSQL 派生谱系/幂等、恶意边界、输出洪泛终止、取消、固定参数及部分失败；`uv lock --check` 与 Compose 配置通过；真实 `/bin/ls` ELF 由 objdump 取得 117 个函数、21915 条指令和 2 个依赖，构造 PE 取得 1 个函数和 5 条指令。
+- 问题：`docker compose build analysis-worker` 在解析 Docker Hub `python:3.12-slim` 元数据时网络失败，故未生成新镜像摘要；DIE/UPX/Ghidra/angr 尚未在最终镜像中进行真实工具链运行。
+- 阻碍点：无；镜像网络问题记录为 Q-006，不阻止继续实现 Ghidra/angr 规范化和 T17 契约。
+- 决策：无新增 ADR；继续遵循 M10、ADR-012/015/016/019，二进制样本不在宿主机执行，外部分析器只处理服务自有 scratch 副本。
+- 下一步：扩展 T16 结果以保存 Ghidra 伪代码、Xref/CFG 和 angr 定点分析事实，并在基础镜像可解析后重建 analysis-worker、回填精确 ToolSpec 镜像摘要并跑 ELF/PE Compose E2E。
 ### 2026-09-09 11:05：完成 T15-R4 自动复核、Task 聚合与 Annotation/API
 
 - 负责人：Codex
@@ -230,7 +347,14 @@
 
 | 日期 | 任务 | 命令/方式 | 结果 | 未覆盖范围 |
 |---|---|---|---|---|
-| 2026-09-09 | T15-R5 静态分析失败与结果完整性 | 静态工具定向 pytest；现有只读、非 root Linux Worker 镜像中运行 Semgrep 无害 `eval("1+1")` 样本；真实 PostgreSQL 定向执行器/Task 聚合测试；Ruff、Pyright、Svelte、契约生成与锁文件检查 | 静态工具 7 passed、1 skipped；真实 Semgrep 成功并返回 1 个 Finding；失败 Job 保留结果工件且 Task 仅产生 validating/analyzing/completed 事件的集成验证通过；静态和前端检查无错误 | 未运行全量门禁、镜像重建或浏览器 E2E；Windows Proactor 不兼容 psycopg 异步测试；Docker Desktop 已停止，测试数据库清理由恢复后执行 |
+| 2026-09-09 | R-003 PR #12 主线同步与冲突解决 | 合并 `origin/main@a88dfd0`；临时 no-editable 环境执行全量 pytest 与覆盖率；全仓库 Ruff；受影响模块 Pyright；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --offline --check` | 唯一台账冲突按双方事实解决；304 passed、1 skipped、总分支覆盖率 81.78%；所有静态、前端、契约和锁文件检查通过 | Linux 专用断言在 Windows 跳过；未运行真实 AFL++/CASR 镜像 E2E；远端 CI 待推送后确认 |
+| 2026-09-09 | R-002 审查缺陷修复 | 临时 no-editable 环境执行定向及全量 pytest；全仓库 Ruff；受影响 Sandbox/fuzzing/API Pyright；`pnpm run check:typescript`；契约生成与锁文件检查；固定摘要 Alpine 真实 Docker 配额溢出/复制/清理探测 | 定向 29 passed；全量 302 passed、总分支覆盖率 81.86%；静态、前端、契约、锁文件检查通过；2 MiB 写入被 1 MiB 硬配额截断，输出回收且无容器/卷孤儿 | 未运行真实 AFL++/CASR 镜像完整流程；网络/内存/进程压力仍归 T18 验收；远端 CI 未运行 |
+| 2026-09-09 | T15-R5 静态分析失败与结果完整性 | 静态工具定向 pytest；现有只读、非 root Linux Worker 镜像中运行 Semgrep 无害 `eval("1+1")` 样本；真实 PostgreSQL 定向执行器/Task 聚合测试；Ruff、Pyright、Svelte、契约生成与锁文件检查 | 静态工具 7 passed、1 skipped；真实 Semgrep 成功并返回 1 个 Finding；失败 Job 保留结果工件且 Task 仅产生 validating/analyzing/completed 事件的集成验证通过；静态和前端检查无错误 | 未运行全量门禁、镜像重建或浏览器 E2E；Windows Proactor 不兼容 psycopg 异步测试；测试专用数据库待清理 |
+| 2026-09-09 | T19-R2 AFL++/CASR Sandbox 编排 | 临时 no-editable uv 环境执行全量 `pytest --cov --cov-fail-under=80`；全仓库 Ruff；fuzzing 包 Pyright strict；`pnpm run check:typescript`；契约生成 `--check`；`uv lock --check` | 297 passed、总分支覆盖率 82.46%；Ruff、fuzzing Pyright、TypeScript/Svelte、契约生成和锁文件检查通过 | 独立全仓库 Pyright 受本机缺少 langgraph/tree-sitter 类型依赖影响；未执行真实 AFL++/CASR、Sandbox 网络/内存/进程压力和最终工具镜像 E2E |
+| 2026-09-09 | T18 Sandbox Runner 结构化请求与 Docker 隔离检查点 | Sandbox Runner/契约定向测试；全量 `pnpm run check`；`uv lock --check`；Compose 配置；本机已有 Alpine 固定命令与 `docker inspect` | 278 passed、82.56% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；定向 19 passed；cat 成功、只读根阻断、输出洪泛终止、超时和容器回收通过；隔离参数实测确认 | 尚未执行独立网络流量、内存压力和进程数压力样本；analysis-worker 镜像构建受 Q-006 影响 |
+| 2026-09-09 | T17 二进制 PAIR 导入与地址查询全量验收 | `pnpm run check`（Compose 服务地址）；定向 PAIR/二进制/API/契约测试；`uv lock --check`；契约生成；Compose 配置 | 271 passed、83.86% 覆盖率；Ruff/Pyright/TypeScript/Svelte 通过；T17 定向 45 passed；真实 PostgreSQL 导入/重放/地址查询通过 | 最终 analysis-worker 镜像与 Compose 二进制 E2E 受 Q-006 影响，属于 T16 镜像验收 |
+| 2026-09-09 | T16-R2 CFG/Xref/伪代码/定点符号事实 | Dev Container `pnpm run check`；T16 与契约定向测试；真实 `/bin/ls` objdump CFG/Xref 探测；`uv lock --check`；Compose 配置 | 270 passed、83.79% 覆盖率；静态与前端检查全通过；定向 29 passed；真实 ELF 得到 5214 个基本块和 6067 条 Xref | 最终 analysis-worker 镜像、真实 DIE/UPX/Ghidra/angr 和 Compose E2E 仍因 Q-006 未验证 |
+| 2026-09-09 | T16-R1 ELF/PE 安全导入与规范化逆向 | Dev Container `pnpm run check`；T16 定向测试；契约生成与 `uv lock --check`；Compose 配置；真实 `/bin/ls` ELF 与构造 PE objdump 探测；analysis-worker 镜像构建尝试 | 266 passed、83.25% 覆盖率；静态和前端检查全通过；T16 15 passed；ELF/PE 均取得规范化函数/指令；UPX 父子谱系与重放幂等通过 | Docker Hub 基础镜像元数据解析失败，未重建 analysis-worker 或执行 Compose 二进制 Job；真实 DIE/UPX/Ghidra/angr 工具链待补 |
 | 2026-09-09 | T15-R4 自动复核、聚合与 Annotation/API | Dev Container 内以 Compose 服务地址运行 `pnpm run check`；定向复核/聚合/API/迁移/Worker 测试；`uv lock --check`；Compose 配置；构建 API/analysis-worker/migrate；实际迁移、ready 与容器安全属性检查 | 250 passed，覆盖率 85.79%；所有静态和前端检查通过；定向 52 passed；数据库 revision `0014_annotations`；API ready，服务镜像启动成功 | 未配置真实复核模型，未跑四语言完整 P2 E2E；首次无效全量运行因容器地址错误跳过 109 项，已纠正重跑 |
 | 2026-09-09 | T15 R2/R3 Git 历史整合 | Dev Container 内设置 `VULNWEAVER_TEST_ADMIN_DATABASE_URL`/`VULNWEAVER_TEST_REDIS_URL` 为 Compose 服务地址后运行 `pnpm run check`；`uv lock --check`；Compose `config --quiet`；构建 `orchestrator`、`analysis-worker` | 246 passed，覆盖率 86.68%；Ruff/Pyright/TypeScript/Svelte 无错误；锁文件、Compose 配置及两个受影响镜像构建通过 | 未运行完整浏览器 E2E 或真实模型调用；远端 CI 尚未运行 |
 | 2026-09-09 | T15-R3 全量回归 | Windows Selector 启动 pytest，参数 `-q -p no:cacheprovider --tb=short --cov --cov-report=term --cov-fail-under=80`；`.venv/Scripts/ruff.exe check .`；`pnpm exec pyright` | 246 passed，86.64%；Ruff/Pyright 无错误；真实临时 PostgreSQL/Redis 与契约测试通过 | 未验证服务镜像、完整 E2E 和真实模型；analysis-worker 入口未被覆盖率导入 |
@@ -272,9 +396,9 @@
 
 ## 10. 下一步
 
-1. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，用 C/C++/Python/Java 无害样本验证 Function 索引、候选 Finding、独立复核、Evidence 链和 Task 终态，完成 P2 端到端验收。
-2. 根据真实复核召回效果决定是否把 PAIR 调用关系扩展为跨函数源码邻域；继续保持摘要校验、大小限制和缺失/截断时 `unverifiable` 门禁。
-3. 认领 T16，按 M08/M09 实现 ELF/PE 安全导入、基础信息识别和反汇编规范化；T16 及 P3-P5 尚未交付，不将 T15 完成表述为系统整体完成。
+1. 构建并固定 T19 AFL++/CASR 镜像摘要，确认镜像提供 `/bin/sleep`，在 Sandbox Runner 中用无害公开样本验证预算终止、最小输入、覆盖率和 crash cluster。
+2. 补充 Sandbox Runner 的网络/进程/内存负向测试或受控模拟器验证；Docker 基础镜像可稳定解析后回到 T16/T18 做最终工具镜像 E2E。
+3. 为 analysis-worker 配置一个 `analysis-plane` 可达的 OpenAI 兼容 REVIEW 模型，补跑 C/C++/Python/Java P2 端到端验收；随后继续 T20 Proof/Exploit。
 
 ## 11. 每次工作结束时的更新模板
 
