@@ -69,6 +69,7 @@
 | Q-004 | Evidence 仓储测试与 Finding 测试曾共用固定 input_ref，导致顺序依赖 | 已将 Evidence 测试数据改为独立摘要，全量套件按当前收集顺序稳定通过 | 保留精确断言，不再共享测试命名空间 | 已解决 | Codex |
 | Q-005 | 复核源码事实使用位置附近有界片段和 PAIR 关系快照，尚未拼接跨函数调用点的完整源码邻域 | 复杂跨函数问题的模型召回率可能受影响，但缺失/截断门禁仍阻止弱事实被确认，不影响 T15 安全验收 | 自动复核的租约、预算、Outbox 和并发去重已完成；后续按真实 P2 样本评估是否扩展调用邻域 | 待处理 | 未分配 |
 | Q-006 | T16 analysis-worker 镜像重建时 Docker Desktop 无法访问 `registry-1.docker.io` 获取 `python:3.12-slim` 元数据 | 不影响 Dev Container 内代码、契约、真实 PostgreSQL 与本机 binutils 验证，但阻止本轮更新镜像摘要和执行 Compose 二进制任务 E2E | Docker Desktop 29.7.2 已恢复并启用代理（`http.docker.internal:3128`），`docker pull python:3.12-slim` 实测成功（digest `sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea`）；镜像重建与 E2E 解除阻塞，属 T16/T18/T19 验收范围 | 已解决 | Codex |
+| Q-007 | analysis-worker 真实 REVIEW 模型探针无法访问外部 endpoint | 不能完成真实模型四语言 E2E；analysis-worker 当前仅加入内部 `analysis-plane`，直接放通公网会突破执行面网络边界 | Dev Container 中使用已配置 endpoint/model 执行最小结构化请求，返回 `model_transport_error/ConnectError`；需部署受控模型出口或内部 OpenAI 兼容代理，并按域名白名单放行 | 待处理 | Codex |
 | Q-007 | Semgrep 在 analysis-worker 只读根文件系统中默认写入 `~/.semgrep`，静态执行器曾将失败 `tool_run` 结算为成功，Task 因而错误显示 `completed/no_findings` 并出现未执行阶段事件 | 已修复；新任务会将这类故障结算为结构化 Job 失败和 Task `partial`，UI 可见工具/原因/退出码 | 历史 Task 不自动回写，需重新投递或新建任务；报告生成不在本次范围 | 已解决 | Codex |
 
 ## 5. 当前阻碍点
@@ -436,6 +437,7 @@
 | 2026-09-09 | 当前冲刺质量门禁 | Dev Container `docker compose ... exec dev bash -lc 'cd code && pnpm run check'` | 通过；318 个测试、81.56% 分支覆盖率；Ruff/Pyright/TypeScript/Svelte 全部通过；PostgreSQL/Redis 集成测试通过 | T16/T18/T19 真实工具与动态验收、T20 独立 Sandbox 通道及 T21/T22 仍未完成 |
 | 2026-09-09 | T18 Docker 隔离负向验收 | Dev Container 宿主 Docker `docker run`，固定 `alpine:3.20@sha256:d9e853e8…`，`--network none --read-only --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges --pids-limit 8 --memory 16m` | 通过；容器内 UID 为 10001，网络路由为空，只读根写入被拒绝，进程正常退出且无残留容器 | 尚未由 `DockerCliRuntime` 入口完成同等真实验收 |
 | 2026-09-09 | T18 Runner 入口集成测试 | Dev Container `VULNWEAVER_DOCKER_RUNTIME_TEST=1 uv run pytest tests/sandbox_runner/test_runtime_integration.py -q` | 明确发现并记录：普通 Dev Container 无 Docker CLI；测试已改为缺少专用 runtime 时跳过，避免把控制面环境误当执行面 | 需要独立 Sandbox Runner 服务提供 Docker CLI/Socket，且仍须保持 Socket 不进入 API、编排或普通 Worker |
+| 2026-09-09 | REVIEW 模型连通性探针 | 已配置的 analysis-worker 容器内执行一次 `ModelGateway.complete_structured`，使用 `glm-5.3-flash`、32 输出 token、无害 JSON 请求 | 返回结构化 `model_transport_error`，底层 `ConnectError`；配置和模型 ID 已通过 endpoint `/models` 确认，失败原因为 analysis-plane 无受控外部模型出口 | 需要内部模型代理或域名白名单出口后重跑真实 REVIEW E2E |
 
 ## 10. 下一步
 
