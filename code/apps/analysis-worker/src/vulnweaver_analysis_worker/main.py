@@ -71,7 +71,7 @@ async def _run() -> None:
     }
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
-    review_executor, model_gateway = _review_executor(database, store)
+    review_executor, model_gateway = await _review_executor(database, store)
     report_executor = ReportJobExecutor(
         database,
         ArtifactRegistrationService(store, database),
@@ -170,37 +170,58 @@ def _environment_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
-def _review_executor(
+async def _review_executor(
     database: Database, store: LocalContentAddressedStore
 ) -> tuple[ReviewJobExecutor, ModelGateway | None]:
-    base_url = os.environ.get("REVIEW_MODEL_BASE_URL", "").strip()
-    model = os.environ.get("REVIEW_MODEL_NAME", "").strip()
+    async with database.transaction() as repositories:
+        product_settings = await repositories.product_settings.get()
+    base_url = str(product_settings.get("review_model_base_url", "")).strip()
+    model = str(product_settings.get("review_model_name", "")).strip()
     if not base_url and not model:
         return ReviewJobExecutor(None), None
     if not base_url or not model:
         raise RuntimeError(
             "REVIEW_MODEL_BASE_URL and REVIEW_MODEL_NAME must be configured together"
         )
+    stored_api_key = product_settings.get("review_model_api_key")
+    if stored_api_key is not None and not isinstance(stored_api_key, str):
+        raise RuntimeError("stored review model API key is invalid")
     endpoint = ModelEndpoint(
         name="review-model",
         base_url=base_url,
         models={ModelTier.REVIEW: model},
-        api_key=os.environ.get("REVIEW_MODEL_API_KEY") or None,
-        timeout_seconds=float(os.environ.get("REVIEW_MODEL_TIMEOUT_SECONDS", "60")),
-        max_attempts=_environment_int("REVIEW_MODEL_MAX_ATTEMPTS", 2),
+        api_key=stored_api_key,
+        timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
+        max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
     )
     gateway = ModelGateway(
         ModelGatewaySettings(
             routes={ModelTier.REVIEW: ModelRoute(primary=endpoint)},
             proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
-            max_repair_attempts=_environment_int("REVIEW_MODEL_REPAIR_ATTEMPTS", 1),
-            min_request_interval_seconds=float(
-                os.environ.get("REVIEW_MODEL_MIN_INTERVAL_SECONDS", "0")
+            max_repair_attempts=_setting_int(
+                product_settings, "review_model_repair_attempts", 1
+            ),
+            min_request_interval_seconds=_setting_float(
+                product_settings, "review_model_min_interval_seconds", 0
             ),
         )
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
     return ReviewJobExecutor(reviewer), gateway
+
+
+def _setting_int(settings: dict[str, object], name: str, default: int) -> int:
+    value = settings.get(name, default)
+    if not isinstance(value, (int, float, str)):
+        raise RuntimeError(f"stored {name} is not numeric")
+    return int(value)
+
+
+def _setting_float(settings: dict[str, object], name: str, default: float) -> float:
+    value = settings.get(name, default)
+    if not isinstance(value, (int, float, str)):
+        raise RuntimeError(f"stored {name} is not numeric")
+    return float(value)
 
 
 def _proof_executor(database: Database) -> ProofJobExecutor | None:

@@ -2,20 +2,16 @@
 
 T07 控制面 API。该服务面向个人使用，仅存在一个个人账号，不包含团队、成员、系统管理员、角色或 RBAC 模型。所有项目均由该个人账号创建并独占管理。
 
-## 初始化登录
+## 初始化与设置
 
-首次启动前创建一个只包含初始密码的 UTF-8 文件，并以只读 Secret 挂载到容器内：
+数据库尚无账号时，Web 通过一次性 `POST /api/auth/register` 创建唯一管理员并建立会话；唯一约束保证并发注册只有一个请求成功。账号存在后注册返回 409。`GET /api/auth/installation` 仅公开注册是否开放。
 
-- `PERSONAL_USERNAME`：登录名，默认 `owner`。
-- `PERSONAL_PASSWORD_FILE`：容器内密码文件路径。
-- `PERSONAL_PASSWORD_FILE_HOST`：Compose 读取的宿主密码文件路径。
-- `SECURE_COOKIE`：生产环境保持 `true`；仅本机纯 HTTP 测试时使用 `false`。
-
-服务只在数据库尚无个人账号时读取该密码。首次登录必须通过 `POST /api/auth/password` 修改密码，修改后全部已有会话立即失效。
+管理员通过认证及 CSRF 保护的 `/api/settings` 管理模型连接与 API Key。API Key 明文保存在 PostgreSQL，响应只给出是否已配置而不回显；传输安全依赖 HTTPS。数据库、内部地址和安全上限仍由部署配置注入。`SECURE_COOKIE` 在生产环境保持 `true`，仅本机纯 HTTP 测试时使用 `false`。
 
 ## 已实现接口
 
-- 个人登录、身份查询、改密和退出。
+- 首次注册、个人登录、身份查询、改密和退出。
+- 产品设置读取与更新。
 - Project 创建、列表与详情。
 - Artifact 流式上传、列表、版本详情和内容流。
 - Task 创建、查询、取消、Job 查询与事件恢复。

@@ -923,6 +923,22 @@ class LoginRequest(TypedDict):
     username: str
     password: str
 
+class RegistrationRequest(TypedDict):
+    schema_version: SchemaVersion
+    username: str
+    password: str
+
+class ProductSettings(TypedDict):
+    schema_version: SchemaVersion
+    review_model_base_url: str
+    review_model_name: str
+    review_model_timeout_seconds: float
+    review_model_max_attempts: int
+    review_model_repair_attempts: int
+    review_model_min_interval_seconds: float
+    review_model_api_key: NotRequired[str | None]
+    clear_review_model_api_key: NotRequired[bool]
+
 class PasswordChangeRequest(TypedDict):
     schema_version: SchemaVersion
     current_password: str

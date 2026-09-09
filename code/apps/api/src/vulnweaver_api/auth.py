@@ -30,6 +30,10 @@ class PasswordPolicyViolation(ValueError):
     pass
 
 
+class RegistrationClosed(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class LoginResult:
     account: PersonalAccount
@@ -74,21 +78,37 @@ class PersonalAuthService:
         async with self._database.transaction() as repositories:
             return await repositories.personal_auth.account() is not None
 
-    async def bootstrap(
-        self, username: str, password: str, *, must_change_password: bool = True
-    ) -> bool:
-        """Create the account once without re-hashing the Secret on later starts."""
+    async def register(self, username: str, password: str) -> LoginResult:
+        """Atomically create the installation owner and its first browser session."""
 
-        if await self.is_initialized():
-            return False
+        _validate_username(username)
         _validate_new_password(password)
         password_hash = await self._hash(password)
+        token = secrets.token_urlsafe(32)
+        csrf_token = secrets.token_urlsafe(32)
+        session = PersonalSession(
+            token_digest=_digest(token),
+            csrf_digest=_digest(csrf_token),
+            expires_at=datetime.now(UTC) + timedelta(seconds=self._ttl),
+            password_version=1,
+        )
         async with self._database.transaction() as repositories:
-            return await repositories.personal_auth.bootstrap(
+            created = await repositories.personal_auth.bootstrap(
                 username=username,
                 password_hash=password_hash,
-                must_change_password=must_change_password,
+                must_change_password=False,
             )
+            if not created:
+                raise RegistrationClosed("registration is closed for this installation")
+            established = await repositories.personal_auth.establish_session(
+                session,
+                expected_password_version=1,
+                max_active_sessions=self._max_active_sessions,
+            )
+            if not established:
+                raise RuntimeError("failed to establish initial session")
+        account = PersonalAccount(username, password_hash, False, 1, 0, None)
+        return LoginResult(account, token, csrf_token)
 
     async def login(self, username: str, password: str) -> LoginResult:
         async with self._database.transaction() as repositories:
@@ -258,3 +278,8 @@ def _digest(value: str) -> str:
 def _validate_new_password(password: str) -> None:
     if len(password) < 12 or len(password) > 1024:
         raise PasswordPolicyViolation("password must contain 12-1024 characters")
+
+
+def _validate_username(username: str) -> None:
+    if not username.strip() or username != username.strip() or len(username) > 128:
+        raise PasswordPolicyViolation("username must contain 1-128 non-padding characters")
