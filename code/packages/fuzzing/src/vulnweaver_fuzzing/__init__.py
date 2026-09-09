@@ -1,5 +1,16 @@
 """Bounded fuzzing budgets and deterministic crash triage."""
 
+from vulnweaver_fuzzing.executor import FuzzExecutionService, build_fuzz_input_bundle
+from vulnweaver_fuzzing.profiles import (
+    AFL_CASR_OUTPUT_NAMES,
+    AFL_CASR_PROFILE,
+    AFL_CASR_TOOL_NAME,
+    AFL_CASR_TOOL_VERSION,
+    CASR_TOOL_NAME,
+    CASR_TOOL_VERSION,
+    afl_casr_command_profile,
+    afl_casr_tool_spec,
+)
 from vulnweaver_fuzzing.triage import (
     CrashTriageError,
     CrashTriageService,
@@ -11,7 +22,17 @@ from vulnweaver_fuzzing.triage import (
 __all__ = [
     "CrashTriageError",
     "CrashTriageService",
+    "FuzzExecutionService",
     "FuzzBudgetGate",
     "FuzzBudgetLimits",
+    "AFL_CASR_OUTPUT_NAMES",
+    "AFL_CASR_PROFILE",
+    "AFL_CASR_TOOL_NAME",
+    "AFL_CASR_TOOL_VERSION",
+    "CASR_TOOL_NAME",
+    "CASR_TOOL_VERSION",
+    "afl_casr_command_profile",
+    "afl_casr_tool_spec",
+    "build_fuzz_input_bundle",
     "validate_fuzz_request",
 ]

@@ -218,18 +218,21 @@ class CrashRecord(TypedDict):
     schema_version: SchemaVersion
     id: Identifier
     artifact_version_id: Identifier
+    input_ref: ObjectReference
     input_digest: Sha256Digest
     signal: str | None
     exit_code: int | None
     stack_frames: list[str]
     stack_hash: Sha256Digest
     stderr_ref: ObjectReference | None
+    fuzz_tool: ToolIdentity
     tool: ToolIdentity
     created_at: str
 
 class FuzzRequest(TypedDict):
     schema_version: SchemaVersion
     id: Identifier
+    job_id: Identifier
     sandbox_request: SandboxRequest
     artifact_version_id: Identifier
     seed_refs: list[ObjectReference]
@@ -247,6 +250,22 @@ class FuzzResult(TypedDict):
     crash_ids: list[Identifier]
     created_at: str
     failure: StructuredFailure | None
+
+class FuzzToolSummary(TypedDict):
+    schema_version: SchemaVersion
+    executions: int
+    coverage_percent: float | None
+
+class CrashManifestEntry(TypedDict):
+    input_path: str
+    input_digest: Sha256Digest
+    signal: str | None
+    exit_code: int | None
+    stack_frames: list[str]
+
+class CrashManifest(TypedDict):
+    schema_version: SchemaVersion
+    crashes: list[CrashManifestEntry]
 
 class SandboxOutput(TypedDict):
     path: str

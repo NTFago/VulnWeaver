@@ -91,17 +91,19 @@
     "CrashRecord": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "id", "artifact_version_id", "input_digest", "signal", "exit_code", "stack_frames", "stack_hash", "stderr_ref", "tool", "created_at"],
+      "required": ["schema_version", "id", "artifact_version_id", "input_ref", "input_digest", "signal", "exit_code", "stack_frames", "stack_hash", "stderr_ref", "fuzz_tool", "tool", "created_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "id": {"$ref": "#/$defs/Identifier"},
         "artifact_version_id": {"$ref": "#/$defs/Identifier"},
+        "input_ref": {"$ref": "#/$defs/ObjectReference"},
         "input_digest": {"$ref": "#/$defs/Sha256Digest"},
         "signal": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
         "exit_code": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
         "stack_frames": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 2048}},
         "stack_hash": {"$ref": "#/$defs/Sha256Digest"},
         "stderr_ref": {"anyOf": [{"$ref": "#/$defs/ObjectReference"}, {"type": "null"}]},
+        "fuzz_tool": {"$ref": "#/$defs/ToolIdentity"},
         "tool": {"$ref": "#/$defs/ToolIdentity"},
         "created_at": {"type": "string", "format": "date-time"}
       }
@@ -109,10 +111,11 @@
     "FuzzRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "id", "sandbox_request", "artifact_version_id", "seed_refs", "max_executions", "max_duration_seconds", "max_crashes", "collect_coverage"],
+      "required": ["schema_version", "id", "job_id", "sandbox_request", "artifact_version_id", "seed_refs", "max_executions", "max_duration_seconds", "max_crashes", "collect_coverage"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "id": {"$ref": "#/$defs/Identifier"},
+        "job_id": {"$ref": "#/$defs/Identifier"},
         "sandbox_request": {"$ref": "#/$defs/SandboxRequest"},
         "artifact_version_id": {"$ref": "#/$defs/Identifier"},
         "seed_refs": {"type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/ObjectReference"}},
@@ -146,6 +149,37 @@
           "then": {"properties": {"failure": {"$ref": "#/$defs/StructuredFailure"}}}
         }
       ]
+    },
+    "FuzzToolSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "executions", "coverage_percent"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "coverage_percent": {"anyOf": [{"type": "number", "minimum": 0, "maximum": 100}, {"type": "null"}]}
+      }
+    },
+    "CrashManifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_path", "input_digest", "signal", "exit_code", "stack_frames"],
+      "properties": {
+        "input_path": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"},
+        "input_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "signal": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 128}, {"type": "null"}]},
+        "exit_code": {"anyOf": [{"type": "integer", "minimum": -2147483648, "maximum": 2147483647}, {"type": "null"}]},
+        "stack_frames": {"type": "array", "minItems": 1, "maxItems": 256, "items": {"type": "string", "minLength": 1, "maxLength": 2048}}
+      }
+    },
+    "CrashManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "crashes"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "crashes": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/CrashManifestEntry"}}
+      }
     },
     "SandboxOutput": {
       "type": "object",
@@ -1325,6 +1359,8 @@
     {"$ref": "#/$defs/SandboxResult"},
     {"$ref": "#/$defs/CrashRecord"},
     {"$ref": "#/$defs/FuzzRequest"},
-    {"$ref": "#/$defs/FuzzResult"}
+    {"$ref": "#/$defs/FuzzResult"},
+    {"$ref": "#/$defs/FuzzToolSummary"},
+    {"$ref": "#/$defs/CrashManifest"}
   ]
 }

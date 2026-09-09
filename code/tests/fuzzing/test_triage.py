@@ -26,10 +26,15 @@ TOOL = cast(
     ToolIdentity,
     {"name": "casr", "version": "2.12.0", "image_digest": "sha256:" + "a" * 64},
 )
+FUZZ_TOOL = cast(
+    ToolIdentity,
+    {"name": "afl-casr", "version": "1.0.0", "image_digest": "sha256:" + "a" * 64},
+)
 
 
 def entry(*, input_character: str = "b", address: str = "0x401000") -> dict[str, object]:
     return {
+        "input_ref": "cas://sha256/" + input_character * 64,
         "input_digest": "sha256:" + input_character * 64,
         "signal": "SIGSEGV",
         "exit_code": -11,
@@ -87,6 +92,7 @@ def test_fuzz_request_validator_checks_nested_sandbox_budget() -> None:
         {
             "schema_version": "1.0.0",
             "id": "fuzz-request:test",
+            "job_id": "job:fuzz",
             "sandbox_request": sandbox_request(),
             "artifact_version_id": "artifact-version:fuzz",
             "seed_refs": ["cas://sha256/" + "b" * 64],
@@ -120,12 +126,14 @@ def test_crash_triage_normalizes_frames_and_clusters_addresses() -> None:
     first = service.ingest(
         entry(address="0x401000"),
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:00Z",
     )
     second = service.ingest(
         entry(input_character="d", address="0x401100"),
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:01Z",
     )
@@ -140,6 +148,7 @@ def test_crash_triage_normalizes_frames_and_clusters_addresses() -> None:
     replay = service.ingest(
         entry(address="0x401000"),
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:01:00Z",
     )
@@ -153,6 +162,7 @@ def test_ingest_many_is_idempotent_and_keeps_first_seen_records() -> None:
     records = service.ingest_many(
         [entry(), entry(), entry(input_character="d")],
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:00Z",
     )
@@ -175,6 +185,7 @@ def test_ingest_many_rejects_oversized_manifests() -> None:
         service.ingest_many(
             [entry(), entry(), entry()],
             artifact_version_id="artifact-version:fuzz",
+            fuzz_tool=FUZZ_TOOL,
             tool=TOOL,
             created_at="2026-09-09T08:00:00Z",
         )
@@ -187,6 +198,7 @@ def test_stack_hash_does_not_treat_hexadecimal_symbol_names_as_addresses() -> No
     first = service.ingest(
         {**entry(), "stack_frames": ["#0 deadbeef in parser"]},
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:00Z",
     )
@@ -196,6 +208,7 @@ def test_stack_hash_does_not_treat_hexadecimal_symbol_names_as_addresses() -> No
             "stack_frames": ["#0 feedface in parser"],
         },
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:01Z",
     )
@@ -217,6 +230,7 @@ def test_crash_triage_enforces_limits_and_rejects_malformed_entries() -> None:
     service.ingest(
         entry(),
         artifact_version_id="artifact-version:fuzz",
+        fuzz_tool=FUZZ_TOOL,
         tool=TOOL,
         created_at="2026-09-09T08:00:00Z",
     )
@@ -224,6 +238,7 @@ def test_crash_triage_enforces_limits_and_rejects_malformed_entries() -> None:
         service.ingest(
             entry(input_character="d"),
             artifact_version_id="artifact-version:fuzz",
+            fuzz_tool=FUZZ_TOOL,
             tool=TOOL,
             created_at="2026-09-09T08:00:01Z",
         )
@@ -233,6 +248,7 @@ def test_crash_triage_enforces_limits_and_rejects_malformed_entries() -> None:
         service.ingest(
             {**entry(), "input_digest": "not-a-digest"},
             artifact_version_id="artifact-version:fuzz",
+            fuzz_tool=FUZZ_TOOL,
             tool=TOOL,
             created_at="2026-09-09T08:00:00Z",
         )
@@ -240,6 +256,7 @@ def test_crash_triage_enforces_limits_and_rejects_malformed_entries() -> None:
         service.ingest(
             {**entry(), "stack_frames": ["one", "two", "three"]},
             artifact_version_id="artifact-version:fuzz-2",
+            fuzz_tool=FUZZ_TOOL,
             tool=TOOL,
             created_at="2026-09-09T08:00:00Z",
         )
@@ -250,6 +267,7 @@ def test_crash_triage_enforces_limits_and_rejects_malformed_entries() -> None:
                 "stderr_ref": "cas://sha256/not-canonical",
             },
             artifact_version_id="artifact-version:fuzz-3",
+            fuzz_tool=FUZZ_TOOL,
             tool=TOOL,
             created_at="2026-09-09T08:00:00Z",
         )

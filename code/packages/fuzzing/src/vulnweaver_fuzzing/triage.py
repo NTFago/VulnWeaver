@@ -139,17 +139,20 @@ class CrashTriageService:
         entry: Mapping[str, object],
         *,
         artifact_version_id: str,
+        fuzz_tool: ToolIdentity,
         tool: ToolIdentity,
         created_at: str,
     ) -> CrashRecord | None:
         stack_frames = _normalize_frames(entry.get("stack_frames"), self._limits)
         if not stack_frames:
             raise CrashTriageError("crash entry must contain at least one stack frame")
+        input_ref = _object_ref(entry.get("input_ref"), "input_ref")
         input_digest = _digest(entry.get("input_digest"), "input_digest")
         try:
+            validate_contract("ToolIdentity", fuzz_tool)
             validate_contract("ToolIdentity", tool)
         except (TypeError, ValueError) as error:
-            raise CrashTriageError("crash tool identity is invalid") from error
+            raise CrashTriageError("crash tool identities are invalid") from error
         stack_hash = _stack_hash(stack_frames)
         signal = _optional_text(entry.get("signal"), 128)
         exit_code = _optional_int(entry.get("exit_code"))
@@ -157,6 +160,7 @@ class CrashTriageService:
         record_id = _stable_id(
             "crash",
             artifact_version_id,
+            input_ref,
             input_digest,
             stack_hash,
             tool["name"],
@@ -172,12 +176,14 @@ class CrashTriageService:
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=record_id,
             artifact_version_id=artifact_version_id,
+            input_ref=input_ref,
             input_digest=input_digest,
             signal=signal,
             exit_code=exit_code,
             stack_frames=stack_frames,
             stack_hash=stack_hash,
             stderr_ref=stderr_ref,
+            fuzz_tool=fuzz_tool,
             tool=tool,
             created_at=_timestamp(created_at),
         )
@@ -191,6 +197,7 @@ class CrashTriageService:
         entries: list[Mapping[str, object]],
         *,
         artifact_version_id: str,
+        fuzz_tool: ToolIdentity,
         tool: ToolIdentity,
         created_at: str,
     ) -> tuple[CrashRecord, ...]:
@@ -204,6 +211,7 @@ class CrashTriageService:
             record = self.ingest(
                 entry,
                 artifact_version_id=artifact_version_id,
+                fuzz_tool=fuzz_tool,
                 tool=tool,
                 created_at=created_at,
             )
@@ -311,6 +319,12 @@ def _optional_object_ref(value: object) -> str | None:
         return None
     if not isinstance(value, str) or not re.fullmatch(r"cas://sha256/[0-9a-f]{64}", value):
         raise CrashTriageError("stderr_ref must be a canonical CAS object reference")
+    return value
+
+
+def _object_ref(value: object, field: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"cas://sha256/[0-9a-f]{64}", value):
+        raise CrashTriageError(f"{field} must be a canonical CAS object reference")
     return value
 
 

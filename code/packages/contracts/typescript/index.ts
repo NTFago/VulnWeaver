@@ -49,12 +49,14 @@ export interface CrashRecord {
   schema_version: SchemaVersion;
   id: Identifier;
   artifact_version_id: Identifier;
+  input_ref: ObjectReference;
   input_digest: Sha256Digest;
   signal: string | null;
   exit_code: number | null;
   stack_frames: Array<string>;
   stack_hash: Sha256Digest;
   stderr_ref: ObjectReference | null;
+  fuzz_tool: ToolIdentity;
   tool: ToolIdentity;
   created_at: string;
 }
@@ -62,6 +64,7 @@ export interface CrashRecord {
 export interface FuzzRequest {
   schema_version: SchemaVersion;
   id: Identifier;
+  job_id: Identifier;
   sandbox_request: SandboxRequest;
   artifact_version_id: Identifier;
   seed_refs: Array<ObjectReference>;
@@ -80,6 +83,25 @@ export interface FuzzResult {
   crash_ids: Array<Identifier>;
   created_at: string;
   failure: StructuredFailure | null;
+}
+
+export interface FuzzToolSummary {
+  schema_version: SchemaVersion;
+  executions: number;
+  coverage_percent: number | null;
+}
+
+export interface CrashManifestEntry {
+  input_path: string;
+  input_digest: Sha256Digest;
+  signal: string | null;
+  exit_code: number | null;
+  stack_frames: Array<string>;
+}
+
+export interface CrashManifest {
+  schema_version: SchemaVersion;
+  crashes: Array<CrashManifestEntry>;
 }
 
 export interface SandboxOutput {
