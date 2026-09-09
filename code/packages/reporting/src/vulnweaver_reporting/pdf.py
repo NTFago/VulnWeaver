@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
-from vulnweaver_contracts import Finding
+from vulnweaver_contracts import Finding, Poc
 
 from vulnweaver_reporting.html import build_html
 
 
-def render_pdf(findings: list[Finding], output: str | Path) -> Path:
+def render_pdf(
+    findings: list[Finding], output: str | Path, *, pocs: Sequence[Poc] = ()
+) -> Path:
     """Render a bounded report to a caller-owned output path."""
     try:
         from weasyprint import HTML  # pyright: ignore[reportMissingTypeStubs]
@@ -19,7 +22,7 @@ def render_pdf(findings: list[Finding], output: str | Path) -> Path:
         ) from error
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=build_html(findings), base_url=str(destination.parent)).write_pdf(  # pyright: ignore[reportUnknownMemberType]
+    HTML(string=build_html(findings, pocs), base_url=str(destination.parent)).write_pdf(  # pyright: ignore[reportUnknownMemberType]
         destination
     )
     return destination
