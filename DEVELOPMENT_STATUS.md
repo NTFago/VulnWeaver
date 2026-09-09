@@ -9,7 +9,7 @@
 ## 2. 当前工程状态
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
-- **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待工具链验收、T17 已完成、T18 待验证、T19 进行中；P4 T20 Proof/Exploit 已开始；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
+- **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待工具链验收、T17 已完成、T18 待验证、T19 进行中；P4 T20 Proof/Exploit 进行中；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
 - **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
 - **最后更新**：2026-09-09 20:52（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
@@ -43,10 +43,10 @@
 | T15 Finding、Evidence 与复核 | 已完成 | Codex | 完成 Evidence/Finding/Review/Annotation 持久化、静态候选去重投影、强证据确认门禁、有界源码事实、结构化独立复核、不可变结论工件、自动复核 Job、Task 终态聚合及个人控制面查询/修正 API | 无；真实模型与四语言完整流程归 P2 环境验收 | 2026-09-09 |
 | T16 DIE/UPX/Ghidra/angr 适配 | 待验证 | Codex | R1/R2 已交付 `BinaryAnalysisResult`、安全 ELF/PE 解析、字符串/函数/指令/导入/基本块/Xref/Ghidra 伪代码/angr 定点符号事实、固定参数无 Shell 工具适配、输出/状态预算、UPX 父子工件、部分失败语义及 Worker/ToolSpec 接入；analysis-worker 镜像已重建并加入 `upx-ucl`，4 个 ToolSpec 摘要回填 `sha256:ca05166a…` | 仍缺真实 DIE/Ghidra/angr 与 Compose 二进制 E2E；DIE 需固定 GitHub 二进制+sha256，Ghidra 设计上外部挂载，angr 可选（`ANGR_ENABLED=false`）；objdump/UPX 链路可先行验收 | 2026-09-09 |
 | T17 PAIR 二进制导入与查询 | 已完成 | Codex | `BinaryPairImporter` 将 T16 Function/BasicBlock/Instruction/Xref 导入现有 PostgreSQL PAIR，保留二进制位置、分析版本、伪代码/符号事实、原始结果引用和工具身份；地址查询、Worker 自动接入和控制面地址 API 已交付 | 无；最终 Docker 二进制 E2E 随 T16 镜像验收 | 2026-09-09 |
-| T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收；宿主 Docker 已以固定 Alpine 摘要完成隔离负向探测；新增 opt-in `DockerCliRuntime` 集成测试、带 bearer token/断连取消的 FastAPI 服务边界、固定 AFL++/CASR profile 的独立服务镜像和 Compose 装配 | 仍需修正 Docker daemon 可见的输入/输出共享卷传递，配置实际 AFL++/CASR 镜像摘要并完成真实执行验收；普通 Dev Container 仍不挂 Socket | 2026-09-09 |
+| T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收；宿主 Docker 已以固定 Alpine 摘要完成隔离负向探测；新增 HTTP 服务边界、固定 AFL++/CASR 与 Proof/Exploit profile、独立服务镜像和 Compose 装配 | 仍需配置实际 AFL++/CASR/Proof 镜像摘要并完成真实执行验收；普通 Dev Container 仍不挂 Socket | 2026-09-09 |
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
-| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；新增 Finding POC 查询 API、Proof Job Scheduler、Worker 执行适配和统一 Job 路由；补齐 Proof 包依赖与负向执行测试；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit；新增结构化 `SandboxRunnerClient` 并由 `SANDBOX_RUNNER_URL` 配置接入 analysis-worker | 仍需部署独立 Sandbox Runner HTTP 服务，补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-09 |
+| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；新增 Finding POC 查询 API、Proof Job Scheduler、Worker 执行适配和统一 Job 路由；补齐 Proof 包依赖与负向执行测试；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit；新增结构化 `SandboxRunnerClient` 并由 `SANDBOX_RUNNER_URL` 配置接入 analysis-worker；独立 Runner 已可按配置登记 Proof/Exploit ToolSpec 和固定命令 profile | 仍需配置镜像摘要并完成真实无害 Proof Sandbox 回放，以及策略拒绝、重放和部分失败验收 | 2026-09-09 |
 | M16 报告与结果交换 | 进行中 | Codex | 新增 `vulnweaver-reporting` 包、有界 SARIF 2.1.0 生成器、Markdown 报告渲染器、转 PDF 用安全 HTML 源、WeasyPrint PDF 渲染、SARIF 2.1.0 信封及结果字段校验、`register_report` CAS 派生工件登记适配、`ReportJobScheduler`、报告 Worker 执行器及 analysis-worker 报告路由配置；调度器已向 Job 传递派生工件目标和格式；Dev Container 已维护 PDF 系统库和固定 Python 依赖；完整项目门禁已通过 318 tests，覆盖率 81.56%；新增错误 schema、非法 result 回归覆盖 | 完整 SARIF 官方 Schema 校验和端到端验收 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
@@ -118,6 +118,18 @@
 新增或变更决策时，使用 `ADR-NNN` 编号，记录日期、上下文、方案、决定、后果及受影响模块；重大决策应另建 `code/docs/adr/NNN-标题.md`。
 
 ## 8. 最近完成记录
+
+### 2026-09-09 20:58：补齐独立 Runner 的 Proof/Exploit 工具 profile
+
+- 负责人：Codex
+- 状态：进行中
+- 修改文件：`code/packages/proof/`、`code/apps/sandbox-runner/`、`code/compose.yaml`、`code/uv.lock`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增固定身份、镜像摘要、无网络、隔离文件系统和资源预算约束的 Proof ToolSpec；新增固定入口命令 profile，支持 `proof_of_concept` 与 `exploit`；独立 Sandbox Runner 按 `PROOF_IMAGE_DIGEST` 可选装配该 profile。
+- 测试与结果：Dev Container 内 Ruff、Pyright 通过；`pytest tests/proof tests/sandbox_runner -q` 为 15 passed、1 skipped。
+- 问题：真实 Proof 工具镜像尚未配置，尚未执行真实回放。
+- 阻碍点：无；真实镜像回放属于后续验收，不影响功能代码继续集成。
+- 决策：Proof 与 Exploit 继续共用受 ToolSpec 和 Sandbox 策略约束的执行入口，不开放任意命令参数。
+- 下一步：构建并固定无害 Proof 工具镜像摘要，启动独立 Runner 后回放 Proof/Exploit 请求。
 
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 

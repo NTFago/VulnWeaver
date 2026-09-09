@@ -7,6 +7,7 @@ dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-domain",
     "vulnweaver-persistence",
+    "vulnweaver-sandbox-runner",
     "httpx>=0.28,<1",
 ]
 
@@ -18,6 +19,7 @@ build-backend = "uv_build"
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-sandbox-runner = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_proof"

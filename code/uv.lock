@@ -1524,6 +1524,7 @@ dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
     { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-sandbox-runner" },
 ]
 
 [package.metadata]
@@ -1532,6 +1533,7 @@ requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
 ]
 
 [[package]]

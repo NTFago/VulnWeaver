@@ -248,6 +248,8 @@ services:
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       AFL_CASR_IMAGE_REF: ${AFL_CASR_IMAGE_REF:-vulnweaver-afl-casr:fixed}
       AFL_CASR_IMAGE_DIGEST: ${AFL_CASR_IMAGE_DIGEST:-}
+      PROOF_IMAGE_REF: ${PROOF_IMAGE_REF:-vulnweaver-proof:fixed}
+      PROOF_IMAGE_DIGEST: ${PROOF_IMAGE_DIGEST:-}
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
       - sandbox-runtime:/var/lib/vulnweaver/sandbox
