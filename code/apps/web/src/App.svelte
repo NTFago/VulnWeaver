@@ -250,7 +250,6 @@
     if (!selectedTask || selectedTask.artifact_version_ids.length === 0) return;
     const versionId = selectedTask.artifact_version_ids[0];
     const version = artifactVersions.get(versionId);
-    if (!version?.parent_version_id) { error = "当前样本缺少报告所需的父版本"; return; }
     begin();
     try {
       const job = await api.createReport(selectedTask.id, {

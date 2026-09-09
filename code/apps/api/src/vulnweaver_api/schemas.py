@@ -107,7 +107,7 @@ class CreateReportJobBody(StrictModel):
     schema_version: Literal["1.0.0"]
     artifact_id: str = Field(min_length=1, max_length=128)
     version_id: str = Field(min_length=1, max_length=128)
-    parent_version_id: str = Field(min_length=1, max_length=128)
+    parent_version_id: str | None = Field(default=None, min_length=1, max_length=128)
     format: Literal["markdown", "sarif"] = "markdown"
 
 

@@ -133,7 +133,7 @@ export const api = {
   createReport: (taskId: string, payload: {
     artifact_id: string;
     version_id: string;
-    parent_version_id: string;
+    parent_version_id?: string | null;
     format: "markdown" | "sarif";
   }) => request<Job>(`/api/tasks/${taskId}/reports`, {
     method: "POST",
