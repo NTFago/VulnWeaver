@@ -134,7 +134,7 @@ export const api = {
     artifact_id: string;
     version_id: string;
     parent_version_id?: string | null;
-    format: "markdown" | "sarif";
+    format: "markdown" | "pdf" | "sarif";
   }) => request<Job>(`/api/tasks/${taskId}/reports`, {
     method: "POST",
     headers: writeHeaders(true),

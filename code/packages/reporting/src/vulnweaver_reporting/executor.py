@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import tempfile
+from pathlib import Path
 from typing import cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService
@@ -22,6 +24,7 @@ from vulnweaver_persistence import Database
 
 from vulnweaver_reporting.artifacts import register_report
 from vulnweaver_reporting.markdown import build_markdown
+from vulnweaver_reporting.pdf import render_pdf
 from vulnweaver_reporting.sarif import build_sarif, validate_sarif
 
 
@@ -58,7 +61,7 @@ class ReportJobExecutor:
             task_id, artifact_id, version_id, parent_version_id
         )):
             return _failure(job, "report.artifact_target_required", FailureKind.VALIDATION)
-        if report_format not in {"markdown", "sarif"}:
+        if report_format not in {"markdown", "pdf", "sarif"}:
             return _failure(job, "report.format_unsupported", FailureKind.VALIDATION)
         task_id = cast(str, task_id)
         artifact_id = cast(str, artifact_id)
@@ -81,6 +84,10 @@ class ReportJobExecutor:
                 document = build_sarif(findings)
                 validate_sarif(document)
                 content = json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode()
+            elif report_format == "pdf":
+                with tempfile.TemporaryDirectory(prefix="vulnweaver-report-") as directory:
+                    output = render_pdf(findings, Path(directory) / "report.pdf")
+                    content = output.read_bytes()
             else:
                 content = build_markdown(findings).encode()
             result = await register_report(

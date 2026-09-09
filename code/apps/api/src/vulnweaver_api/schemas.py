@@ -108,7 +108,7 @@ class CreateReportJobBody(StrictModel):
     artifact_id: str = Field(min_length=1, max_length=128)
     version_id: str = Field(min_length=1, max_length=128)
     parent_version_id: str | None = Field(default=None, min_length=1, max_length=128)
-    format: Literal["markdown", "sarif"] = "markdown"
+    format: Literal["markdown", "pdf", "sarif"] = "markdown"
 
 
 class FindingEvidenceDetail(StrictModel):

@@ -43,8 +43,8 @@
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | Fuzz/Crash 契约、预算门禁、清单解析、稳定聚类、CAS 编排和固定 ToolSpec/profile 已完成 | 固定 AFL++/CASR 镜像下完成无害样本、预算、覆盖率和 crash cluster 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 目标/种子 CAS bundle、单次 Runner 调用、summary/manifest/minimized-input 解析和回归测试已完成 | 真实 AFL++/CASR 镜像回放；不得在宿主执行样本 | 2026-09-09 |
 | T20 Proof/Exploit 流程 | 进行中 | Codex | ProofRequest、Poc 持久化、Scheduler/Worker/API、SandboxRunnerClient、固定 Proof/Exploit profile 和无害容器回放已完成 | 通过 HTTP Runner 提交带 CAS 工件的 Proof/Exploit 请求，并验收策略拒绝、重放和部分失败 | 2026-09-09 |
-| T21 Markdown/PDF/SARIF 报告 | 进行中 | Codex | 报告生成、派生工件登记、Job/Worker 路由、版本化内容读取、Job 结果查询和 Web 下载关联已完成 | 真实数据库 Finding 报告回放及完整 SARIF/浏览器验收 | 2026-09-09 |
-| T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
+| T21 Markdown/PDF/SARIF 报告 | 进行中 | Codex | 报告生成、派生工件登记、Job/Worker 路由、版本化内容读取、Job 结果查询、PDF 生成和 Web 下载入口已完成 | 真实数据库 Finding 报告回放及完整 SARIF/PDF/浏览器验收 | 2026-09-09 |
+| T22 全链路 UI、可观测性与 E2E | 进行中 | Codex | 任务页 Finding 摘要/详情、Markdown/SARIF/PDF 报告操作和下载入口已接入 | 浏览器自动化全链路、可观测性收口和最终验收报告 | 2026-09-09 |
 
 ## 4. 当前问题
 
@@ -74,6 +74,8 @@
 
 ## 8. 最近完成记录
 
+| 2026-09-09 | T21 PDF 报告端到端接入 | API/Worker/Web 支持 PDF，Worker 通过临时文件调用 WeasyPrint 后写入 CAS；Dev Container 内 Web typecheck/build、Ruff 和 reporting 测试通过 | 真实数据库报告 Job 与浏览器回放 |
+
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
 | 2026-09-09 | 台账清理 | 修正未来日期、重复问题编号、过期分支描述；移除已解决问题、已确认事项明细、旧模板和重复历史，仅保留当前可执行信息 | 后续事实变化时及时更新本文件 |
@@ -88,6 +90,8 @@
 
 ## 9. 验证记录
 
+| 2026-09-09 | T21 PDF 定向检查 | Dev Container 内 `svelte-check` 0 错误、0 警告；Vite build 成功；Ruff 通过；`pytest tests/reporting -q`：8 passed；API 测试 2 passed、10 skipped | API/Worker 真实数据库 PDF Job 和浏览器点击链路；API 跳过项因容器内未暴露宿主 55432 端口 |
+
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
 | 2026-09-09 | 全量质量门禁 | Dev Container 内 318 tests 通过，分支覆盖率 81.56%；Ruff、Pyright、TypeScript、Svelte、PostgreSQL/Redis 集成检查通过 | T16/T18/T19 真实工具动态验收、T20 HTTP CAS 回放、T21/T22 完整 E2E |
@@ -98,8 +102,9 @@
 
 ## 10. 下一步
 
-1. 构建并固定 AFL++/CASR 与 Proof 镜像摘要，在独立 Sandbox Runner 中回放无害样本，覆盖预算终止、最小输入、覆盖率、crash cluster 和 Proof/Exploit 两种入口。
-2. 使用真实数据库任务完成 T20 Proof/Exploit 和 T21 报告 Job 的 CAS 工件回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
-3. 配置 `analysis-plane` 可达的 REVIEW 模型，完成 C/C++/Python/Java P2 端到端验收；随后执行 T22 浏览器全链路、可观测性和最终报告验收。
+1. 使用真实数据库任务完成 T21 Markdown/PDF/SARIF 报告 Job 回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
+2. 构建并固定 AFL++/CASR 与 Proof 镜像摘要，在独立 Sandbox Runner 中回放无害样本，覆盖预算终止、最小输入、覆盖率、crash cluster 和 Proof/Exploit 两种入口。
+3. 使用真实数据库任务完成 T20 Proof/Exploit 的 CAS 工件回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
+4. 配置 `analysis-plane` 可达的 REVIEW 模型，完成 C/C++/Python/Java P2 端到端验收；随后执行 T22 浏览器全链路、可观测性和最终报告验收。
 
 更新时间：2026-09-09（Asia/Shanghai）
