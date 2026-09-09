@@ -35,7 +35,9 @@ from vulnweaver_contracts import (
     Job,
     PairFunction,
     Poc,
+    PocKind,
     Project,
+    ProofRequest,
     QueueEvent,
     ResourceBudget,
     Review,
@@ -49,6 +51,7 @@ from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
 from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, IdempotencyConflict
 from vulnweaver_persistence.fingerprints import request_fingerprint
+from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
 
 from vulnweaver_api.auth import (
@@ -65,6 +68,7 @@ from vulnweaver_api.schemas import (
     ArtifactDetail,
     CreateAnnotationBody,
     CreateProjectBody,
+    CreateProofJobBody,
     CreateReportJobBody,
     CreateTaskBody,
     ErrorResponse,
@@ -640,6 +644,35 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 version_id=report_version_id,
                 parent_version_id=source_version["id"],
                 report_format=body.format,
+            )
+
+    @app.post("/api/findings/{finding_id}/proof", status_code=202)
+    async def create_proof_job(
+        finding_id: str,
+        body: CreateProofJobBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> Job:
+        job_id = f"job:proof:{uuid4().hex}"
+        request = cast(ProofRequest, {
+            "schema_version": SchemaVersion.VALUE_1_0_0,
+            "id": f"proof:{uuid4().hex}",
+            "job_id": job_id,
+            "finding_id": finding_id,
+            "script_ref": body.script_ref,
+            "image_digest": body.image_digest,
+            "permission_mode": body.permission_mode,
+            "resource_budget": body.resource_budget.model_dump(mode="json"),
+            "timeout_seconds": body.resource_budget.timeout_seconds,
+        })
+        validate_contract("ProofRequest", request)
+        scheduler = ProofJobScheduler(
+            tool=ToolIdentity(name="proof-tool", version="1.0.0", image_digest=body.image_digest)
+        )
+        async with database.transaction() as repositories:
+            return await scheduler.schedule(
+                repositories,
+                request,
+                kind=PocKind.EXPLOIT if body.kind == "exploit" else PocKind.PROOF_OF_CONCEPT,
             )
 
     @app.get("/api/findings/{finding_id}/evidence")

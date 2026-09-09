@@ -103,6 +103,15 @@ class ReviewFindingBody(StrictModel):
     supersedes_review_id: str | None = Field(default=None, max_length=128)
 
 
+class CreateProofJobBody(StrictModel):
+    schema_version: Literal["1.0.0"]
+    script_ref: str = Field(min_length=1, max_length=2048)
+    image_digest: str = Field(min_length=1, max_length=128)
+    permission_mode: Literal["request_permission", "full_access"]
+    resource_budget: ResourceBudgetModel
+    kind: Literal["proof_of_concept", "exploit"] = "proof_of_concept"
+
+
 class CreateReportJobBody(StrictModel):
     schema_version: Literal["1.0.0"]
     artifact_id: str = Field(min_length=1, max_length=128)
