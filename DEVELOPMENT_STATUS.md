@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前阶段**：P2 源码静态分析 MVP 待端到端验收，T13/T14/T15（含 R5）已完成；P3 二进制分析 MVP 进行中，T16 待工具链验收、T17 已完成、T18 待验证、T19 进行中；P4 T20 Proof/Exploit 已开始；R-001/R-002 代码审计与修复及 R-003 PR 主线同步已完成
 - **总体状态**：已合入 `origin/main` 的 T15-R5 静态分析完整性修复：Semgrep 只读文件系统问题、失败 Job 误结算成功及 Task 结果/阶段事件失真均已修复。当前分支继续包含 T16-R2/T17 二进制分析与 PAIR、T18 Sandbox 安全基线和 T19 AFL++/CASR 编排；Sandbox 已具备 tmpfs 输出硬配额和执行期资源采样，fuzz 最小输入采用无压缩归档、累计预算及先校验后发布。P2 仍缺真实 REVIEW 模型四语言端到端验收，T16/T18/T19 仍有真实工具镜像或动态压力验收。
-- **最后更新**：2026-09-09 21:18（Asia/Shanghai）
+- **最后更新**：2026-09-09 21:34（Asia/Shanghai）
 - **代码目录**：`code/` 已初始化 Python/TypeScript 工作区、Dev Container 与 Compose 基础设施
 - **版本管理**：远端 `origin` 指向 `https://github.com/NTFago/VulnWeaver.git`；已同步 `origin/main@6070ba2`（PR #13 已合入）；当前从该基线开发 `feat/p4-proof-exploit`，T20 首个实现检查点及 Dev Container 全量验证已完成。
 - **稳定开发规则**：根目录 `AGENTS.md` 已建立
@@ -46,7 +46,7 @@
 | T18 Sandbox Runner 安全基线 | 待验证 | Codex | 已实现版本化 `SandboxRequest`/`SandboxResult`、ToolSpec 精确绑定、无 Shell Docker CLI runtime、只读输入/隔离输出、禁网/非 root/capability drop/资源边界、超时取消、输出 CAS 登记和孤儿回收 | 需要真实 Docker runtime 运行无害固定命令，验证容器清理、禁网、只读根文件系统、非 root、输出限制和运行时统计；依赖 T04/T09，按 M12/P4 验收 | 2026-09-09 |
 | T19 AFL++/CASR 与崩溃分诊 | 进行中 | Codex | 已交付版本化 `FuzzRequest`/`FuzzResult`/`CrashRecord`、执行数/时长/崩溃数预算门禁、有界清单解析、规范化栈帧、稳定 crash ID/stack hash 聚类、结构化失败、固定 ToolSpec/profile、CAS 输入输出编排和 workspace/锁文件接入 | 使用真实固定 AFL++/CASR 镜像，经 Sandbox Runner 执行无害样本并完成最小化输入、覆盖率和 crash Evidence 验收；依赖 T06/T18，按 M13 验收 | 2026-09-09 |
 | T19-R2 AFL++/CASR Sandbox 集成 | 待验证 | Codex | 交付目标与种子确定性 CAS bundle、固定 `afl-casr` ToolSpec/profile、单次 Sandbox Runner 调用、有界 summary/manifest/minimized-input 解析、CAS 摘要绑定和结构化失败；新增回归测试覆盖参数替换与非法输出 | 接入固定版本 AFL++/CASR 镜像，在 Sandbox Runner 中运行无害公开样本并完成真实预算终止、coverage/crash cluster 验收；本阶段不在宿主执行样本 | 2026-09-09 |
-| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；新增 Finding POC 查询 API、Proof Job Scheduler、Worker 执行适配和统一 Job 路由；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit | 在不突破控制面/执行面边界的前提下配置独立 Sandbox Runner 通道；补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-09 |
+| T20 Proof/Exploit 流程 | 进行中 | Codex | 新增版本化 `ProofRequest`、`vulnweaver-proof`、`pocs` 迁移和幂等 `PocRepository`；Finding 事务内同步 `poc_ids` 投影；新增 Finding POC 查询 API、Proof Job Scheduler、Worker 执行适配和统一 Job 路由；补齐 Proof 包依赖与负向执行测试；固定工具身份、脚本工件、镜像摘要和资源预算；未确认 Finding 或未开启项目利用验证时在 Sandbox 前拒绝 exploit | 在不突破控制面/执行面边界的前提下配置独立 Sandbox Runner 通道；补充策略拒绝、重放、部分失败和真实无害 Proof Sandbox 验收 | 2026-09-09 |
 | R-001 全量代码审计与修复 | 已完成 | Codex | 审计架构安全边界、契约、进程/沙箱生命周期、状态与事务实现、错误处理、前后端和测试；修复非有限 JSON 数、Windows 容器路径、CAS 写入前组合输出预算、Docker 命令超时、父取消子进程泄漏、WebSocket 无日志及测试顺序污染 | 无；真实工具镜像、动态压力/E2E 和远端 CI 属于现有 T16/T18/T19 验收范围 | 2026-09-09 |
 | R-002 审查缺陷修复 | 已完成 | Codex | Sandbox 输出改用有配额 tmpfs 卷和只读保活容器，执行期采样 CPU/内存；fuzz 归档拒绝压缩、限制单项/累计/归档预算并只发布 crash 预算内输入；保留 CAS 瞬时错误可重试语义；补齐 WebSocket 断连感知和 fuzzing 直接依赖 | 无；生产 AFL++/CASR 镜像需按 T19 验证 `/bin/sleep` 保活约束和完整流程 | 2026-09-09 |
 | R-003 `origin/main` 同步与冲突解决 | 已完成 | Codex | PR #12 源分支已合并 `origin/main@a88dfd0`；代码自动合并，动态台账按双方事实处理唯一冲突并消除重复问题编号；全量回归及静态、契约、锁文件检查通过 | 等待 PR #12 远端检查与评审流程合并 `main` | 2026-09-09 |

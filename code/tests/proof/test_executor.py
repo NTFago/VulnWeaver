@@ -5,12 +5,16 @@ from typing import cast
 
 from vulnweaver_contracts import (
     FindingStatus,
+    Job,
+    JobKind,
+    JobStatus,
     PocKind,
     ProofRequest,
     SandboxResult,
     SandboxStatus,
 )
-from vulnweaver_proof import ProofExecutionService
+from vulnweaver_persistence import Database
+from vulnweaver_proof import ProofExecutionService, ProofJobExecutor
 
 IMAGE_DIGEST = "sha256:" + "a" * 64
 
@@ -70,6 +74,47 @@ class _FakeSandbox:
     async def run(self, request: object, cancellation: asyncio.Event) -> SandboxResult:
         self.requests.append(request)
         return self.result
+
+
+def _job(**kwargs: object) -> Job:
+    return cast(
+        Job,
+        {
+            "schema_version": "1.0.0",
+            "id": "job:proof-test",
+            "task_id": "task:proof-test",
+            "kind": kwargs.get("kind", JobKind.PROOF),
+            "input_refs": [],
+            "status": JobStatus.QUEUED,
+            "idempotency_key": "proof-test",
+            "resource_budget": _request()["resource_budget"],
+            "retry_policy": {
+                "max_attempts": 1,
+                "backoff_seconds": 1,
+                "retryable_failure_kinds": [],
+            },
+            "attempt": 0,
+            "lease": None,
+            "failure": None,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            **({"arguments": kwargs["arguments"]} if "arguments" in kwargs else {}),
+        },
+    )
+
+
+def test_worker_adapter_rejects_non_proof_jobs_without_database_access() -> None:
+    executor = ProofJobExecutor(cast(Database, None), cast(ProofExecutionService, None))
+    result = asyncio.run(executor.execute(_job(kind=JobKind.REVIEW), asyncio.Event()))
+    assert result["status"] == JobStatus.FAILED
+    assert result["failure"]["code"] == "proof.invalid_job_kind"
+
+
+def test_worker_adapter_rejects_missing_structured_request_without_database_access() -> None:
+    executor = ProofJobExecutor(cast(Database, None), cast(ProofExecutionService, None))
+    result = asyncio.run(executor.execute(_job(), asyncio.Event()))
+    assert result["status"] == JobStatus.FAILED
+    assert result["failure"]["code"] == "proof.request_required"
 
 
 def test_exploit_is_policy_denied_before_sandbox_for_unconfirmed_finding() -> None:

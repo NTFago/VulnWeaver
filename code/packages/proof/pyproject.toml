@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-domain",
+    "vulnweaver-persistence",
 ]
 
 [build-system]
@@ -15,6 +16,7 @@ build-backend = "uv_build"
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
+vulnweaver-persistence = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_proof"

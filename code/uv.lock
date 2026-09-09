@@ -1386,12 +1386,14 @@ source = { editable = "packages/proof" }
 dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-persistence" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
 ]
 
 [[package]]
