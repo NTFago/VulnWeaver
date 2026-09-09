@@ -219,6 +219,17 @@
 - 阻碍点：无。
 - 下一步：使用无害 recipe 在独立 Sandbox Runner 中完成 Proof 与 Exploit 两种回放，并执行 Web 浏览器链路。
 
+### 2026-09-10：完成 Proof/Exploit 无害容器回放
+
+- 负责人：Codex
+- 状态：待验证
+- 修改文件：`code/tests/fixtures/proof/smoke.py`、`DEVELOPMENT_STATUS.md`
+- 已完成：新增公开、无害的 Proof recipe fixture；使用固定 `vulnweaver-proof:fixed` 镜像，在 `--network none`、只读根、非 root、全 capabilities drop 和 no-new-privileges 约束下分别完成 `proof_of_concept` 与 `exploit` 入口回放，两个容器均正常退出。
+- 测试与结果：两次 `docker run` 均 exit 0；未执行任何真实漏洞利用或外部网络访问。
+- 问题：尚未通过 HTTP Sandbox Runner API 端到端提交带 CAS 工件的完整请求，也未执行浏览器自动化回放。
+- 阻碍点：无。
+- 下一步：补齐 CAS 工件请求的 Runner HTTP 回放，并完成 T22 浏览器链路验收。
+
 ### 2026-09-09 19:46：完成 T20 Proof/Exploit 首个安全编排检查点
 
 - 负责人：Codex
