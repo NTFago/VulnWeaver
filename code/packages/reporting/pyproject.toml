@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
+    "vulnweaver-persistence",
     "weasyprint>=68,<69",
 ]
 
@@ -16,6 +17,7 @@ build-backend = "uv_build"
 [tool.uv.sources]
 vulnweaver-contracts = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
+vulnweaver-persistence = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_reporting"

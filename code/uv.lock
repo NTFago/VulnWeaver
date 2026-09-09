@@ -1549,6 +1549,7 @@ source = { editable = "packages/reporting" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-persistence" },
     { name = "weasyprint" },
 ]
 
@@ -1556,6 +1557,7 @@ dependencies = [
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "weasyprint", specifier = ">=68,<69" },
 ]
 
