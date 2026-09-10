@@ -730,6 +730,11 @@ class Poc(TypedDict):
     resource_budget: ResourceBudget
     created_at: str
 
+class ExploitScript(TypedDict):
+    schema_version: SchemaVersion
+    script: str
+    rationale: str
+
 class ProofRequest(TypedDict):
     schema_version: SchemaVersion
     id: Identifier

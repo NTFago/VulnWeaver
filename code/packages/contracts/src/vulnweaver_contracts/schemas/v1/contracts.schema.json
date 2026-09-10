@@ -968,6 +968,16 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "ExploitScript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "script", "rationale"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "script": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
+      }
+    },
     "ProofRequest": {
       "type": "object",
       "additionalProperties": false,

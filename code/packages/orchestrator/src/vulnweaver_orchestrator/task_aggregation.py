@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from typing import Protocol
 
 from vulnweaver_contracts import (
+    FindingStatus,
     Job,
     JobKind,
     JobStatus,
@@ -54,14 +56,24 @@ _ACTIVE = frozenset(
 )
 
 
+class ExploitDispatchScheduler(Protocol):
+    """Implemented by the proof package; dispatches auto-exploit Jobs."""
+
+    async def schedule_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None: ...
+
+
 class TaskAggregateSettlementHook:
     def __init__(
         self,
         review_scheduler: ReviewJobScheduler | None = None,
         audit_scheduler: SemanticAuditScheduler | None = None,
+        exploit_scheduler: ExploitDispatchScheduler | None = None,
     ) -> None:
         self._review_scheduler = review_scheduler
         self._audit_scheduler = audit_scheduler
+        self._exploit_scheduler = exploit_scheduler
 
     async def after_terminal(
         self, repositories: Repositories, job: Job, result: WorkerResult
@@ -100,6 +112,23 @@ class TaskAggregateSettlementHook:
                 [finding["id"] for finding in findings],
             )
             jobs = await repositories.jobs.list_for_task(task["id"])
+        review_pending = any(
+            item["kind"] is JobKind.REVIEW and item["status"] in _ACTIVE for item in jobs
+        )
+        if (
+            self._exploit_scheduler is not None
+            and job["kind"] is JobKind.REVIEW
+            and not review_pending
+        ):
+            # T31: confirmed findings flow into automatic exploit verification
+            # when the project opted in; the scheduler enforces the gates again.
+            project = await repositories.projects.get(task["project_id"])
+            if project["exploit_validation_enabled"]:
+                for finding in findings:
+                    if finding["status"] is FindingStatus.CONFIRMED:
+                        await self._exploit_scheduler.schedule_in_transaction(
+                            repositories, finding["id"]
+                        )
         aggregate = aggregate_task(
             [JobSnapshot(kind=item["kind"], status=item["status"]) for item in jobs],
             [item["status"] for item in findings],

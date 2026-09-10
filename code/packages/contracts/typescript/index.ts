@@ -638,6 +638,12 @@ export interface Poc {
   created_at: string;
 }
 
+export interface ExploitScript {
+  schema_version: SchemaVersion;
+  script: string;
+  rationale: string;
+}
+
 export interface ProofRequest {
   schema_version: SchemaVersion;
   id: Identifier;

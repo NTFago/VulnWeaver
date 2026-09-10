@@ -30,7 +30,13 @@ from vulnweaver_orchestrator import (
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
-from vulnweaver_proof import ProofExecutionService, ProofJobExecutor, SandboxRunnerClient
+from vulnweaver_proof import (
+    AutoExploitScheduler,
+    ExploitScriptGenerator,
+    ProofExecutionService,
+    ProofJobExecutor,
+    SandboxRunnerClient,
+)
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
 from vulnweaver_reporting import ReportJobExecutor
 from vulnweaver_source_analysis import (
@@ -75,6 +81,7 @@ async def _run() -> None:
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
     audit_scheduler = SemanticAuditScheduler(database)
+    exploit_scheduler = _auto_exploit_scheduler(database)
     review_executor, audit_executor, model_gateway = await _model_executors(database, store)
     report_executor = ReportJobExecutor(
         database,
@@ -85,7 +92,7 @@ async def _run() -> None:
             image_digest=None,
         ),
     )
-    proof_executor = _proof_executor(database)
+    proof_executor = _proof_executor(database, store, model_gateway)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -133,7 +140,9 @@ async def _run() -> None:
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
-        settlement_hook=TaskAggregateSettlementHook(review_scheduler, audit_scheduler),
+        settlement_hook=TaskAggregateSettlementHook(
+            review_scheduler, audit_scheduler, exploit_scheduler
+        ),
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -239,7 +248,11 @@ def _setting_float(settings: dict[str, object], name: str, default: float) -> fl
     return float(value)
 
 
-def _proof_executor(database: Database) -> ProofJobExecutor | None:
+def _proof_executor(
+    database: Database,
+    store: LocalContentAddressedStore,
+    model_gateway: ModelGateway | None,
+) -> ProofJobExecutor | None:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
@@ -252,7 +265,20 @@ def _proof_executor(database: Database) -> ProofJobExecutor | None:
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
     )
-    return ProofJobExecutor(database, service)
+    generator = (
+        ExploitScriptGenerator(database, model_gateway, store)
+        if model_gateway is not None
+        else None
+    )
+    return ProofJobExecutor(database, service, script_generator=generator)
+
+
+def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
+    image_digest = os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
+    if not image_digest:
+        # Without a pinned proof image the automatic exploit pipeline stays off.
+        return None
+    return AutoExploitScheduler(database, image_digest=image_digest)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
