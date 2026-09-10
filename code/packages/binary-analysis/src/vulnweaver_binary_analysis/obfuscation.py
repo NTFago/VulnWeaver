@@ -36,7 +36,9 @@ def assess_control_flow_flattening(
         raise ValueError("invalid flattening heuristic thresholds")
     blocks_by_function: dict[str, list[BinaryBasicBlock]] = defaultdict(list)
     for block in basic_blocks:
-        blocks_by_function[block["function_name"]].append(block)
+        function_name = block.get("function_name")
+        if function_name is not None:
+            blocks_by_function[function_name].append(block)
     jumps_by_function: Counter[str] = Counter()
     for xref in xrefs:
         source_function = xref.get("source_function")
