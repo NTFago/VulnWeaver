@@ -137,3 +137,8 @@ body{font-size:16px;line-height:1.5}
 .finding-detail p{font-size:14px;line-height:1.7}
 .proof-actions label{font-size:12px}
 .detail-evidence>b{font-size:13px}
+
+/* Checkbox controls opt out of the full-width settings input treatment. */
+.settings-form>label.check{display:flex;align-items:flex-start;gap:12px}
+.settings-form>label.check input{width:16px;height:16px;flex:0 0 16px;margin:3px 0 0;padding:0;accent-color:var(--accent)}
+.settings-form>label.check span{display:grid;gap:5px}
