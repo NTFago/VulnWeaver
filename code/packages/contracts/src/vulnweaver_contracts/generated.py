@@ -801,13 +801,14 @@ class ActionPlanProposal(TypedDict):
     rationale: str
 
 class SemanticAuditFinding(TypedDict):
-    cwe_id: str
+    cwe_id: Identifier
     title: str
     severity: Severity
-    path: str
-    start_line: int
-    end_line: NotRequired[int]
     rationale: str
+    path: NotRequired[str]
+    start_line: NotRequired[int]
+    end_line: NotRequired[int]
+    address: NotRequired[int]
 
 class SemanticAuditReport(TypedDict):
     schema_version: SchemaVersion
