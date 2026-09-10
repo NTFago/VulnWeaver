@@ -148,6 +148,12 @@ jobs:
       - name: Markdown documentation gate
         if: needs.change-scope.outputs.code_changed != 'true'
         working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git diff --check "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          # The checkout above is a shallow clone (depth 1), so the base commit
+          # object is absent and `git diff --check` would fail with "bad object".
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
           echo "Documentation-only change: full code quality gate skipped."
