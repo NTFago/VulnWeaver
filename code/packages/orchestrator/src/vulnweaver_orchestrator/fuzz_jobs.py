@@ -7,7 +7,11 @@ from collections.abc import Sequence
 from typing import cast
 
 from vulnweaver_contracts import (
+    CrashRecord,
+    Evidence,
     EvidenceRelation,
+    EvidenceStrength,
+    EvidenceType,
     FailureKind,
     FindingEvidence,
     Job,
@@ -109,6 +113,56 @@ async def link_fuzz_evidence(
         await repositories.findings.link_evidence(relation)
         linked.append(evidence_id)
     return tuple(linked)
+
+
+async def persist_crash_evidence(
+    repositories: Repositories,
+    *,
+    finding_id: str,
+    crashes: Sequence[CrashRecord],
+    created_by: str,
+) -> tuple[str, ...]:
+    """Persist minimized crash inputs as reproducible Finding evidence."""
+    evidence_ids: list[str] = []
+    for crash in sorted(crashes, key=lambda item: item["id"]):
+        evidence_id = _id("evidence", "fuzz-crash", crash["id"])
+        await repositories.evidence.create(
+            Evidence(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=evidence_id,
+                type=EvidenceType.CRASH_RECORD,
+                strength=EvidenceStrength.STRONG,
+                artifact_ref=crash["input_ref"],
+                digest=crash["input_digest"],
+                tool=crash["tool"],
+                input_ref=crash["input_ref"],
+                command_hash=None,
+                exit_code=crash["exit_code"],
+                stdout_ref=None,
+                stderr_ref=crash["stderr_ref"],
+                replay_recipe=cast(
+                    JsonObject,
+                    {
+                        "kind": "fuzz_crash",
+                        "reproducible": True,
+                        "crash_id": crash["id"],
+                        "artifact_version_id": crash["artifact_version_id"],
+                        "stack_hash": crash["stack_hash"],
+                        "signal": crash["signal"],
+                        "fuzz_tool": crash["fuzz_tool"],
+                    },
+                ),
+                created_at=crash["created_at"],
+            )
+        )
+        evidence_ids.append(evidence_id)
+    return await link_fuzz_evidence(
+        repositories,
+        finding_id=finding_id,
+        evidence_ids=evidence_ids,
+        created_by=created_by,
+        created_at=crashes[0]["created_at"] if crashes else "1970-01-01T00:00:00Z",
+    )
 
 
 def _id(*parts: str) -> str:
