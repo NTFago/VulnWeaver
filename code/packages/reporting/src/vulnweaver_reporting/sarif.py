@@ -5,12 +5,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from vulnweaver_contracts import Finding
+from vulnweaver_contracts import Finding, Poc
 
 
-def build_sarif(findings: Sequence[Finding]) -> dict[str, Any]:
+def build_sarif(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> dict[str, Any]:
     """Return SARIF without embedding evidence or unbounded tool logs."""
-    results = [_result(finding) for finding in findings]
+    poc_counts: dict[str, int] = {}
+    poc_results: dict[str, list[str]] = {}
+    for poc in pocs:
+        poc_counts[poc["finding_id"]] = poc_counts.get(poc["finding_id"], 0) + 1
+        if poc["result"] is not None:
+            poc_results.setdefault(poc["finding_id"], []).append(_enum_value(poc["result"]))
+    results = [_result(finding, poc_counts.get(finding["id"], 0), poc_results.get(finding["id"], [])) for finding in findings]
     rules = {
         finding["cwe_id"]: {
             "id": finding["cwe_id"],
@@ -81,7 +87,7 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
                 raise ValueError("SARIF result locations must be an array")
 
 
-def _result(finding: Finding) -> dict[str, Any]:
+def _result(finding: Finding, poc_count: int = 0, poc_results: Sequence[str] = ()) -> dict[str, Any]:
     level = {
         "critical": "error",
         "high": "error",
@@ -105,6 +111,10 @@ def _result(finding: Finding) -> dict[str, Any]:
             "findingId": finding["id"],
             "status": _enum_value(finding["status"]),
             "confidence": finding["confidence"],
+            "evidenceIds": list(finding["evidence_ids"]),
+            "reviewIds": list(finding["review_ids"]),
+            "pocCount": poc_count,
+            "pocResults": list(poc_results),
         },
         "fixes": [{"description": {"text": finding["fix_suggestion"][:4096]}}],
     }
