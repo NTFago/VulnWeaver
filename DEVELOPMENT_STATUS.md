@@ -10,9 +10,9 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
-- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，但课设核心要求——多智能体自主协作、二进制逆向自主规划与伪代码漏洞检测、关键逻辑标定、自动利用生成、证据链报告——尚未实现。已建立补齐任务包 T25-T34（定义见第 3.1 节，均未开始）。
-- **当前分支**：`main`。
-- **当前负责人**：Codex（T01-T24）；T25-T34 待认领。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
+- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已在 `feat/t25-agent-loop` 完成实现与定向验收（待验证）；T26-T34 由并行会话推进中。
+- **当前分支**：`main`（T25 位于 `feat/t25-agent-loop` 独立 worktree，已 rebase 至最新 `origin/main`）。
+- **当前负责人**：Codex（T01-T24）；T25 Codex（`feat/t25-agent-loop`）；T26-T34 各行见进度表。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
 
@@ -47,7 +47,7 @@
 | T22 全链路 UI、可观测性与 E2E | 待验证 | Codex | 浏览器全链路验收完成：登录→项目→任务页→Finding 详情（证据/POC/复现记录、Proof/Exploit 入口）→报告下载；可观测性（Job 汇总、事件时间线载荷展开、LIVE）已验证；最终验收报告见 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑全量回归与真实模型/工具验收归 P2/T16/T18/T19 | 2026-09-10 |
 | T23 Web 首次注册与产品设置 | 已完成 | Codex（独立 worktree） | Web 一次性管理员注册、事务竞争裁决、认证/CSRF 设置 API、模型 URL/名称/API Key/重试参数设置页、API Key 写后不回显/显式清除、Worker DB 配置读取、迁移、Compose 与升级文档已完成 | 合并后在独立 TLS 部署完成真实浏览器首次启动验收；API Key 按用户选择明文落库，数据库/备份读取者可见 | 2026-09-10 |
 | T24 Web 工作台布局与可读性优化 | 已完成 | Codex | 桌面、响应式与字号调整完成；设置页复选框已从通用整宽输入规则中隔离，恢复与说明文字横向对齐 | 无 | 2026-09-10 |
-| T25 智能体规划执行框架 | 未开始 | 待认领 | — | 通用“规划—执行—观察”Agent 循环：LLM 输出结构化 ActionPlan → Policy Engine 校验 → 工具/Job 调度 → 结果回填 → 多步迭代；决策轨迹写 AgentRun；步数/token/时间预算与无模型结构化降级（定义见 3.1） | 2026-09-10 |
+| T25 智能体规划执行框架 | 待验证 | Codex（`feat/t25-agent-loop`） | `orchestrator/agent_loop.py` 通用“规划—执行—观察”循环：模型输出新增 `ActionPlanProposal` 契约（允许空 steps 表达完成，身份字段全由服务端构造），经 PolicyEngine 校验后执行已批准步骤并回填有界观察；决策序列（plan_accepted/rejected、step_executed/failed、loop_completed、degraded_to_fixed_pipeline 等）写入聚合 AgentRun 并经可选 Sink 持久化；预算覆盖规划轮次、token、deadline、单计划步数与观察截断；模型未配置立即降级、连续失败/重复策略拒绝结构化降级到固定管线。15 个循环测试 + 2 个契约测试通过 | 接入首个消费智能体（T27/T29/T31）后在真实任务中经 `GET /api/tasks/{id}/agent-runs` 验证轨迹；合并前跑全量门禁 | 2026-09-10 |
 | T26 二进制主管线收口（Ghidra 默认可用） | 进行中 | Codex | 选择 Sandbox Runner binary-tools 路径；Compose 默认构建并启动 `vulnweaver-binary-tools:fixed` 持有服务，Runner 显式依赖该服务；镜像摘要仍需部署配置提供 | 配置摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查 | 2026-09-10 |
 | T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T25 智能体规划执行框架（`feat/t25-agent-loop`） | 新增 `orchestrator/agent_loop.py` 通用规划—执行—观察循环与 `ActionPlanProposal` 公共契约（`06fdebb`、`9558375`，已 rebase 至最新 main）；15 个循环测试 + 2 个契约测试通过，覆盖循环推进、模型身份覆盖、策略拒绝回填与降级、轮次/token/deadline/步数预算终止、未配置立即降级、许可等待、失败步骤观察与观察截断；Ruff、Pyright 0 错误、契约生成 `--check` 无漂移、contracts tsc 通过 | 接入首个消费智能体（T27/T29/T31）后经真实任务验证 AgentRun 轨迹查询；合并前跑全量门禁 |
 | 2026-09-10 | T24 Web 工作台布局与可读性优化 | 主内容限制在 1600px 可读轨道，项目与任务双栏按职责分配宽度；任务指标、Finding 操作区、事件载荷及窄屏断点完成；将原 9–12px 辅助文字提升至 11–14px；修复设置页复选框受整宽输入规则覆盖的错位；Web 镜像重建后首页 HTTP 200 | 可补一次真实浏览器多视口截图回归 |
 | 2026-09-10 | P2 四语言真实模型端到端验收 | `.env` 中的 GLM 端点经 `/api/settings` 落库（api_key_configured=true，密钥不回显）；上传 C/C++/Python/Java 四个样本，四任务全部 completed：import 4 succeeded、source_analysis 6 succeeded、review 3 succeeded（模型 `review-model/glm-5.3-flash`），finding 按模型独立意见更新为 `unverifiable`（模型单独不能 confirm 的门禁生效）；Java 按设计无规则无候选。排查中修复：模型传输错误现在记录响应体（GLM 1210 max_tokens 限制可诊断） | 无剩余功能项 |
 | 2026-09-10 | T16 DIE/Ghidra/UPX 工具镜像回放验收（`feat/t16-binary-tools`） | 新增 `apps/binary-tools` Dockerfile（DIE 3.21 deb + Ghidra 12.1.3 + openjdk-21-jdk + UPX）与 `vulnweaver-binary-entrypoint`（复用真实 binary-analysis 适配器）；`binary-analysis` 新增 `binary_tool_spec`/`binary_command_profile`，Runner 注册 BINARY_TOOLS_IMAGE_DIGEST profile 并为沙箱容器固定主机名解析。HTTP 回放：四工具全部 succeeded，binary-facts.json 25KB 入 CAS（含 Ghidra 真实伪代码）。修复 Ghidra 适配器项目目录未预创建缺陷。全量门禁 332 passed / 81.27% | P2 四语言真实模型端到端待模型接入 |
@@ -162,21 +163,13 @@
 | 2026-09-10 | ADR-021 评审结论登记 | PR #17 合并入 `main`（`b704814`）；项目负责人批准 D-001，ADR-021 状态改为已接受，勾选评审结论并同步 `DEVELOPMENT_STATUS.md`；纯文档变更 | 按ADR-021实施顺序启动 AuditPlan/覆盖度/结算门禁设计任务 |
 | 2026-09-10 | T20 HTTP Runner CAS 回放验收（`feat/sprint-final-closeout`） | 修复 runner 镜像缺 docker-cli（Debian 13 拆包）与 runtime 重复传递镜像 ENTRYPOINT 两个缺陷后，经 `http://sandbox-runner:8080` 完成：CAS 脚本 Proof 回放成功、scheduler 幂等重放同 Job、exploit 未开启项目策略拒绝、失败脚本结构化部分失败且 Poc 留痕；`tests/proof/test_http_replay.py` 4 用例通过，全量门禁 328 passed / 81.38% | 完整 API→Worker 队列链路重跑归 T22 收口 |
 | 2026-09-09 | Q-006/Q-007 安全与事务修复（`feat/sprint-final-closeout`） | Proof/Exploit 的 `script_ref` 现按项目范围解析归属（同 digest 可跨项目登记，全局解析不安全）；ProofJobExecutor 拆分事务，沙箱 HTTP 调用不再占用 DB 连接。Dev Container 全量门禁通过：328 passed、覆盖率 81.40%，Ruff/Pyright/Svelte 0 错误 | 继续推进 T16/T18/T19/T20/T21/T22 真实环境验收 |
-| 2026-09-09 | AGENTS.md 课设支撑性修订 | 对照课设功能要求审查开发规则：新增功能验收锚点、Dev Container 门禁约定、静态解析与运行样本边界澄清、教学漏洞样本规则、提示词资产管理和分支合并后清理规则；修正根目录文件清单与过期分支记录；已清理 7 个已合并本地功能分支和远程旧分支；纯文档修订，无代码行为变化 | 合并 PR #16 后继续按 T20/T21/T22 验收事项推进 |
-| 2026-09-09 | PR 前质量检查修复（`4318939`） | Pyright 定位可观测性端点 9 处类型错误，修复 `list_after` 位置传参运行时 Bug、failure 窄化和 `_count_values` 类型，并新增带失败 Job 的 API 回归测试；Dev Container 全量门禁通过（322 passed、81.22%） | 合并 PR 后继续 T20/T21/T22 真实回放 |
-| 2026-09-09 | 代码审查修复（Proof/Report，`6dfc0db`、`97115eb`） | `/code-review high --fix` 定位 7 处问题，已修复 5 处正确性缺陷并提交：Sandbox 状态 `is`→`==`、proof 输出文件名改为 `result.json`、移除报告版本过早读取、报告 job/幂等键按格式区分、调度器放行 pdf | Q-006/Q-007 两项待跟进 |
-| 2026-09-09 | T22 任务可观测性摘要 | API 提供任务 Jobs、事件、Finding 状态和结构化失败码汇总，Web 任务页加载并展示 Job 状态汇总 | 浏览器全链路和最终验收报告 |
-| 2026-09-09 | T22 事件载荷可观测性 | Web 事件时间线支持展开查看结构化 payload，便于追踪策略、Job 和任务状态变化 | 浏览器链路和最终验收报告 |
-| 2026-09-09 | T20 Web Proof/Exploit 操作 | Finding 详情提供脚本引用、镜像摘要输入及 Proof 发起；仅 confirmed Finding 且项目开启利用验证时显示 Exploit | 真实 Runner HTTP 回放与策略拒绝验收 |
-| 2026-09-09 | T20 Proof Job 发起接口 | API 新增 Finding Proof/Exploit Job 投递接口，接入 ProofRequest 校验、项目策略和 Outbox 调度 | Web 操作按钮与真实 Runner 回放 |
-| 2026-09-09 | T22 Finding 证据链详情 | Web 点击 Finding 后加载证据关系和 Poc 记录并展示工具、强度、摘要和执行状态；Dev Container 内 Svelte 检查通过 | 浏览器完整任务链路和可观测性收口 |
-| 2026-09-09 | T21 PDF 报告端到端接入 | API/Worker/Web 支持 PDF，Worker 通过临时文件调用 WeasyPrint 后写入 CAS；Dev Container 内 Web typecheck/build、Ruff 和 reporting 测试通过 | 真实数据库报告 Job 与浏览器回放 |
 | 2026-09-09 | T20 无害 Proof/Exploit 容器回放（`d0bcac0`） | 固定 `vulnweaver-proof:fixed` 镜像在禁网、只读根、非 root、capabilities drop 和 no-new-privileges 下分别回放两个入口，均 exit 0 | 补齐带 CAS 工件的 HTTP Runner 回放；不执行真实利用 |
 
 ## 9. 验证记录
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T25 定向门禁（worktree `feat/t25-agent-loop`，rebase 至 origin/main 后复跑） | Dev Container 内：`ruff check .` 通过；`pyright` 0 错误 0 警告；`pytest tests/orchestrator tests/tool_runtime tests/model_gateway tests/contracts`：56 passed（含 T25 循环测试 15 项与 ActionPlanProposal 契约测试 2 项）、29 skipped（一次性容器未启用 PostgreSQL 集成环境）；`generate_contracts.py --check` 无漂移；contracts `tsc --noEmit` 通过 | 全量套件与覆盖率门禁未在分支执行（合并前由全量门禁/CI 覆盖）；PostgreSQL/Redis 集成测试未跑 |
 | 2026-09-10 | T24 Web 定向门禁 | 复选框修复后 Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 通过（0 错误、0 警告）；`pnpm --filter @vulnweaver/web build` 成功（111 modules transformed）；Web 镜像重建并替换运行容器，新 CSS 资源 `index-e2kade8Q.css`、首页 HTTP 200 | 未执行真实浏览器多视口截图回归 |
 | 2026-09-10 | P2 四语言端到端 | 真实数据库+真实模型：C/C++（CWE-120 strcpy）、Python（CWE-95 eval）候选 finding 均经独立复核（outcome=unverifiable，model=review-model/glm-5.3-flash），Java import/索引验证通过；全部门禁 333 passed / 81.26% | 利用链利用验证未执行（项目未开启 exploit_validation） |
 | 2026-09-10 | T16 二进制工具链回放 | 独立 Sandbox Runner HTTP 回放（禁网/非 root/只读根）：DIE succeeded（compiler=GCC 14.2.0）、UPX succeeded（not_upx_packed）、objdump succeeded（21 函数/95 指令/34 xref）、Ghidra succeeded（19 函数/28 基本块/19 段伪代码导出 CAS）；修复 Ghidra 项目目录与沙箱主机名解析 | angr 动态执行未启用；PE 样本未单独回放 |
@@ -196,9 +189,9 @@
 
 ## 10. 下一步
 
-1. 认领 T25 智能体规划执行框架（P0 地基，T27/T31/T32 依赖其循环与降级语义），按 3.1 验收标准实现并测试。
-2. 并行认领 T26 二进制主管线收口：为 analysis-worker 镜像内置 Ghidra 或接通 binary-tools 沙箱路径（二选一，在 ADR/台账记录决策），使 ELF 教学样本伪代码经 `GET /api/tasks/{id}/pair` 可查。
-3. T29 语义审计智能体（源码侧可先行，不依赖 T25/T26）：落地 ADR-021 AuditPlan 必跑基线，使 LLM 产出候选 Finding；二进制侧在 T26 完成后打通端到端。
-4. 其余按 T27 → T30 → T28 → T33 → T34 → T31 → T32 推进；每个任务包完成前逐项核对 3.1 验收标准与对应模块（M01/M07/M10/M11/M13/M14/M15/M16）验收标准。
+1. 评审并合并 `feat/t25-agent-loop`（T25 智能体规划执行框架，已 rebase 至最新 main，定向门禁全绿）；合并时执行全量门禁确认覆盖率与集成测试。
+2. T27/T29/T31 在各自接入点消费 `AgentLoop`（`orchestrator/agent_loop.py`）：注入 PLANNING 档位 PlannerGateway、ToolRegistry/PolicyEngine 与领域 StepExecutor，经 Sink 持久化聚合 AgentRun，供 `GET /api/tasks/{id}/agent-runs` 查询。
+3. T26 继续：配置 BINARY_TOOLS_IMAGE_DIGEST 摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查。
+4. 其余任务包按进度表“剩余工作”推进；每个任务包完成前逐项核对 3.1 验收标准与对应模块验收标准。
 
 更新时间：2026-09-10（Asia/Shanghai）
