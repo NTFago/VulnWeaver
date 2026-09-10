@@ -11,38 +11,15 @@
     Job,
     Project,
     QueueEvent,
-    ResourceBudget,
     Review,
     Task,
     TaskResult,
     TaskStatus,
   } from "@vulnweaver/contracts";
   import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type ProductSettings, type Session } from "./lib/api";
+  import { CUSTOM_PRESET_ID, PROVIDER_PRESETS, type ProviderPreset } from "./lib/providers";
 
   type View = "settings" | "overview" | "project" | "task";
-
-  type BudgetInputs = {
-    max_model_tokens: string;
-    cpu_millis: string;
-    memory_bytes: string;
-    disk_bytes: string;
-    max_tool_concurrency: string;
-    max_dynamic_runs: string;
-    timeout_seconds: string;
-  };
-  const blankBudgetInputs = (): BudgetInputs => ({
-    max_model_tokens: "", cpu_millis: "", memory_bytes: "", disk_bytes: "",
-    max_tool_concurrency: "", max_dynamic_runs: "", timeout_seconds: "",
-  });
-  const budgetLabels: Record<keyof BudgetInputs, string> = {
-    cpu_millis: "CPU（毫核）",
-    memory_bytes: "内存（字节）",
-    disk_bytes: "磁盘（字节）",
-    timeout_seconds: "超时（秒）",
-    max_model_tokens: "模型 token 上限",
-    max_tool_concurrency: "并发工具数",
-    max_dynamic_runs: "动态运行额度",
-  };
 
   const statusText: Record<TaskStatus, string> = {
     created: "已登记", validating: "校验中", analyzing: "分析中", reviewing: "复核中",
@@ -93,8 +70,6 @@
   let pairFunctions: PairFunction[] = [];
   let agentRuns: Record<string, unknown>[] = [];
   let selectedFunctionId: string | null = null;
-  let customBudget = false;
-  let budgetInputs: BudgetInputs = blankBudgetInputs();
 
   type PairNodeLike = { id: string; function_id: string | null };
   type PairEdgeLike = { source_node_id: string; target_node_id: string; type: string };
@@ -196,19 +171,6 @@
 
   function displayResult(result: TaskResult | null): string {
     return result ? resultText[result] : "尚未生成";
-  }
-
-  function budgetFromForm(): ResourceBudget | undefined {
-    if (!customBudget) return undefined;
-    const parsed: Record<string, number> = {};
-    for (const key of Object.keys(budgetInputs) as (keyof BudgetInputs)[]) {
-      const value = Number(budgetInputs[key].trim());
-      if (!Number.isInteger(value) || value < 0) {
-        throw new Error(`资源预算「${budgetLabels[key]}」必须是不小于 0 的整数`);
-      }
-      parsed[key] = value;
-    }
-    return parsed as unknown as ResourceBudget;
   }
 
   function taskFailureContext(task: Task): string {
@@ -330,6 +292,18 @@
   let tierApiKeys: Record<TierName, string> = { planning: "", audit: "", review: "", report: "" };
   let clearTierApiKeys: TierName[] = [];
   let expandedTier: TierName | null = null;
+  let selectedPreset: string = CUSTOM_PRESET_ID;
+  let presetModelNote = "";
+
+  function applyProviderPreset(preset: ProviderPreset): void {
+    if (!productSettings) return;
+    selectedPreset = preset.id;
+    if (preset.id === CUSTOM_PRESET_ID) { presetModelNote = ""; return; }
+    productSettings.review_model_base_url = preset.base_url;
+    productSettings.review_model_name = preset.models[0].name;
+    productSettings.review_model_context_window_tokens = preset.context_window_tokens;
+    presetModelNote = preset.models[0].note;
+  }
 
   function emptyTierConfig() {
     return {
@@ -426,10 +400,9 @@
     try {
       const project = await api.createProject({
         name: projectName.trim(), input_scope: [projectScope.trim()], permission_mode: permissionMode,
-        exploit_validation_enabled: exploitEnabled, resource_budget: budgetFromForm(),
+        exploit_validation_enabled: exploitEnabled,
       });
       projects = [project, ...projects]; showProjectForm = false; projectName = "";
-      customBudget = false; budgetInputs = blankBudgetInputs();
       await openProject(project); done("项目已创建");
     } catch (caught) { busy = false; showError(caught); }
   }
@@ -715,7 +688,7 @@
         <section class="page-heading">
           <div>
             <h1>产品设置</h1>
-            <p>模型接入与执行预算保存在 PostgreSQL，Worker 在下一次任务时自动生效。数据库、Cookie 安全策略、内部服务地址和 API 密钥仍由部署方安全注入。</p>
+            <p>模型接入保存在 PostgreSQL，Worker 在下一次任务时自动生效。系统不设计算资源配额，动态执行仍只经策略校验进入一次性沙箱。数据库、Cookie 安全策略、内部服务地址和 API 密钥仍由部署方安全注入。</p>
           </div>
         </section>
         <div class="settings-layout">
@@ -723,7 +696,7 @@
             <a href="#sec-review-model">复核模型</a>
             <a href="#sec-model-tiers">分档位模型</a>
             <a href="#sec-tool-images">工具镜像</a>
-            <a href="#sec-sandbox-budgets">沙箱预算</a>
+            <a href="#sec-sandbox-budgets">高级设置</a>
             <a href="#sec-account">账户安全</a>
           </nav>
           <div class="settings-body">
@@ -733,11 +706,24 @@
                   <div><h2>独立复核模型</h2><p>所有模型调用在档位未单独配置时回退到这里。</p></div>
                   <span class={`badge ${productSettings.api_key_configured ? "ok" : "warn"}`}>{productSettings.api_key_configured ? "API Key 已配置" : "API Key 未配置"}</span>
                 </header>
+                <div class="preset-row" role="group" aria-label="供应商预设">
+                  <span class="preset-label">供应商预设</span>
+                  {#each PROVIDER_PRESETS as preset (preset.id)}
+                    <button type="button" class="preset-chip" class:active={selectedPreset === preset.id}
+                      on:click={() => applyProviderPreset(preset)}>{preset.label}</button>
+                  {/each}
+                  <button type="button" class="preset-chip" class:active={selectedPreset === CUSTOM_PRESET_ID}
+                    on:click={() => (selectedPreset = CUSTOM_PRESET_ID)}>自定义</button>
+                </div>
+                {#if selectedPreset !== CUSTOM_PRESET_ID}
+                  <p class="muted preset-hint">{PROVIDER_PRESETS.find((preset) => preset.id === selectedPreset)?.hint}{presetModelNote ? ` 默认模型：${presetModelNote}。` : ""}</p>
+                {/if}
                 <div class="field-grid">
-                  <label>OpenAI 兼容端点<input bind:value={productSettings.review_model_base_url} placeholder="https://example.com/v1" /></label>
-                  <label>模型名称<input bind:value={productSettings.review_model_name} placeholder="review-model" /></label>
+                  <label>请求地址<input bind:value={productSettings.review_model_base_url} placeholder="https://api.example.com/v1" on:input={() => (selectedPreset = CUSTOM_PRESET_ID)} /></label>
+                  <label>模型名称<input bind:value={productSettings.review_model_name} placeholder="deepseek-chat" on:input={() => (selectedPreset = CUSTOM_PRESET_ID)} /></label>
                   <label>API Key<input bind:value={reviewApiKey} type="password" autocomplete="new-password" placeholder={productSettings.api_key_configured ? "留空以保留现有值" : "输入 API Key"} /></label>
                 </div>
+                <label class="check"><input type="checkbox" disabled checked /><span><b>上下文自动裁剪</b><small>已配置上下文窗口时，网关按粗估（约 4 字符/token）自动截断超长输入并记录到智能体轨迹；窗口填 0 表示不限制。</small></span></label>
                 {#if productSettings.api_key_configured}<label class="check"><input type="checkbox" bind:checked={clearReviewApiKey} /><span><b>清除已保存的 API Key</b><small>保存后立即删除；输入新值会在未勾选时替换旧值。</small></span></label>{/if}
                 <div class="field-grid cols-4">
                   <label>超时（秒）<input bind:value={productSettings.review_model_timeout_seconds} type="number" min="1" max="600" /></label>
@@ -802,18 +788,10 @@
               </section>
 
               <div class="advanced-anchor" id="sec-sandbox-budgets">
-                <button type="button" class="secondary adv-toggle" aria-expanded={showAdvancedSettings} on:click={() => showAdvancedSettings = !showAdvancedSettings}>{showAdvancedSettings ? "收起高级设置" : "高级设置：沙箱资源与预算"}</button>
+                <button type="button" class="secondary adv-toggle" aria-expanded={showAdvancedSettings} on:click={() => showAdvancedSettings = !showAdvancedSettings}>{showAdvancedSettings ? "收起高级设置" : "高级设置：模糊测试与运行时"}</button>
                 {#if showAdvancedSettings}
                   <section class="panel advanced-settings">
-                    <p class="muted">0 表示未设置，沿用环境变量或代码默认值；更改在下一次任务执行时生效。</p>
-                    {#each [["afl", "AFL++/CASR（模糊测试）"], ["proof", "Proof 工具"], ["binary", "二进制工具"]] as [tool, label]}
-                      <div class="field-grid cols-4 budget-block">
-                        <label>{label} CPU（毫秒核）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].cpu_millis} type="number" min="0" /></label>
-                        <label>{label} 内存（字节）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].memory_bytes} type="number" min="0" /></label>
-                        <label>{label} 磁盘（字节）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].disk_bytes} type="number" min="0" /></label>
-                        <label>{label} 超时（秒）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].timeout_seconds} type="number" min="0" max="86400" /></label>
-                      </div>
-                    {/each}
+                    <p class="muted">0 表示未设置，沿用环境变量或代码默认值；更改在下一次任务执行时生效。系统不再设置 CPU / 内存 / 磁盘 / 进程数配额。</p>
                     <div class="field-grid cols-4">
                       <label>Fuzz 最大执行次数<input bind:value={productSettings.fuzz_budgets.max_executions} type="number" min="0" /></label>
                       <label>Fuzz 最长时长（秒）<input bind:value={productSettings.fuzz_budgets.max_duration_seconds} type="number" min="0" max="86400" /></label>
@@ -862,18 +840,6 @@
               <label>运行模式<select bind:value={permissionMode}><option value="request_permission">每次动态执行前请求许可</option><option value="full_access">在已授权范围内自动执行</option></select></label>
             </div>
             <label class="check"><input type="checkbox" bind:checked={exploitEnabled} /><span><b>允许利用验证</b><small>仅对 confirmed Finding，且仍需经策略门禁。</small></span></label>
-            <label class="check"><input type="checkbox" bind:checked={customBudget} /><span><b>自定义资源预算</b><small>不勾选则使用覆盖全部已注册工具的默认预算；低于工具要求的预算会被拒绝。</small></span></label>
-            {#if customBudget}
-              <div class="field-grid cols-4">
-                <label>CPU（毫核）<input type="text" inputmode="numeric" bind:value={budgetInputs.cpu_millis} required /></label>
-                <label>内存（字节）<input type="text" inputmode="numeric" bind:value={budgetInputs.memory_bytes} required /></label>
-                <label>磁盘（字节）<input type="text" inputmode="numeric" bind:value={budgetInputs.disk_bytes} required /></label>
-                <label>超时（秒）<input type="text" inputmode="numeric" bind:value={budgetInputs.timeout_seconds} required /></label>
-                <label>模型 token 上限<input type="text" inputmode="numeric" bind:value={budgetInputs.max_model_tokens} required /></label>
-                <label>并发工具数<input type="text" inputmode="numeric" bind:value={budgetInputs.max_tool_concurrency} required /></label>
-                <label>动态运行额度<input type="text" inputmode="numeric" bind:value={budgetInputs.max_dynamic_runs} required /></label>
-              </div>
-            {/if}
             <div class="form-actions"><button class="primary" disabled={busy}>创建并进入</button></div>
           </form>
         {/if}
@@ -971,7 +937,7 @@
           <div><strong>{completedJobCount()}<em>/ {jobs.length}</em></strong><span>已完成的执行单元</span></div>
           <div><strong>{events.length}</strong><span>事件</span></div>
           <div><strong>{findings.length}</strong><span>候选问题</span></div>
-          <div><strong>{selectedTask.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div>
+          <div><strong>{selectedProject?.exploit_validation_enabled ? "开启" : "关闭"}</strong><span>利用验证</span></div>
         </section>
         <section class="panel table-panel">
           <header class="panel-head">

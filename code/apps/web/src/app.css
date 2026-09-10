@@ -181,6 +181,17 @@ textarea { resize: vertical; min-height: 44px; }
 .stack-list { display: grid; gap: 16px; margin: 0; }
 .stack-list > label { display: grid; gap: 8px; }
 
+/* Provider preset chips on the settings page. */
+.preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.preset-label { color: var(--muted); font-size: 12.5px; margin-right: 4px; }
+.preset-chip {
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font-size: 12.5px; cursor: pointer;
+}
+.preset-chip:hover:not(:disabled) { border-color: rgba(201, 244, 59, 0.55); color: var(--accent); }
+.preset-chip.active { border-color: rgba(201, 244, 59, 0.55); background: rgba(201, 244, 59, 0.07); color: var(--accent); }
+.preset-hint { margin: -2px 0 10px; font-size: 12.5px; }
+
 .check { display: flex; align-items: flex-start; gap: 12px; margin-top: 18px; cursor: pointer; }
 .check input { width: 16px; height: 16px; flex: 0 0 16px; margin: 3px 0 0; padding: 0; accent-color: var(--accent); }
 .check span { display: grid; gap: 4px; }
