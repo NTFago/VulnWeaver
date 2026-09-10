@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 from vulnweaver_binary_analysis import (
+    AngrAdapter,
     BinaryAnalysisLimits,
     BinaryMetadata,
     DetectItEasyAdapter,
@@ -64,6 +65,8 @@ async def main() -> int:
     parser.add_argument("--max-functions", type=int, required=True)
     parser.add_argument("--max-instructions", type=int, required=True)
     parser.add_argument("--max-pseudocode-functions", type=int, required=True)
+    parser.add_argument("--target-addresses", default="")
+    parser.add_argument("--angr-enabled", action="store_true")
     args = parser.parse_args()
     if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
         print("binary limits must be positive", file=sys.stderr)
@@ -97,6 +100,15 @@ async def main() -> int:
         ghidra = await GhidraHeadlessAdapter(
             GHIDRA_EXECUTABLE, GHIDRA_SCRIPTS
         ).analyze(target, metadata, limits, cancellation)
+        targets = tuple(
+            sorted({int(value) for value in args.target_addresses.split(",") if value})
+        )
+        if len(targets) > limits.max_symbolic_functions or any(value < 0 for value in targets):
+            print("target addresses are invalid", file=sys.stderr)
+            return 2
+        angr = await AngrAdapter(enabled=args.angr_enabled).analyze_targets(
+            target, metadata, limits, cancellation, targets
+        )
 
         facts = {
             "schema_version": SCHEMA_VERSION,
@@ -113,8 +125,9 @@ async def main() -> int:
                     "packed": upx.packed,
                     "unpacked": upx.unpacked_path is not None,
                 },
-            "objdump": _run_dict(objdump),
+                "objdump": _run_dict(objdump),
                 "ghidra": _run_dict(ghidra),
+                "angr": _run_dict(angr),
             },
             # These normalized collections are consumed by the worker-side
             # PAIR importer; tool-specific runs above remain available for
@@ -124,6 +137,7 @@ async def main() -> int:
             "basic_blocks": list(objdump.basic_blocks),
             "xrefs": list(objdump.xrefs),
             "pseudocode": list(ghidra.pseudocode),
+            "symbolic_facts": list(angr.symbolic_facts),
             "imports": list(objdump.imports),
             "strings": list(extract_strings(target, metadata, limits)),
             "samples": {

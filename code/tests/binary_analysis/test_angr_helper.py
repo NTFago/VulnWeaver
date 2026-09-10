@@ -1,8 +1,11 @@
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
-from vulnweaver_binary_analysis.angr_helper import _symbolically_explore
+import pytest
+from vulnweaver_binary_analysis.angr_helper import _symbolically_explore, main
 
 
 @dataclass
@@ -71,3 +74,23 @@ def test_symbolic_helper_records_per_target_failures() -> None:
         "unconstrained_states": 0,
         "reason": "RuntimeError",
     }
+
+
+def test_angr_helper_rejects_missing_target_argument(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "angr_helper",
+            "input.bin",
+            "output.json",
+            "10",
+            "20",
+            "30",
+            "40",
+            "2",
+            "3",
+        ],
+    )
+    with pytest.raises(SystemExit, match="usage: angr_helper"):
+        main()

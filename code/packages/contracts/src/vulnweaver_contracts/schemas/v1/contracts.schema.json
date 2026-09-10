@@ -1365,6 +1365,29 @@
         "password": {"type": "string", "minLength": 12, "maxLength": 1024}
       }
     },
+    "ReadablePseudocodeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "text"],
+      "properties": {
+        "function_name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 32768}
+      }
+    },
+    "ReadablePseudocodeReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pseudocode"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "pseudocode": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/ReadablePseudocodeItem"}
+        }
+      }
+    },
     "ProductSettings": {
       "type": "object",
       "additionalProperties": false,
@@ -1461,6 +1484,7 @@
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/SourceImportResult"},
     {"$ref": "#/$defs/BinaryAnalysisResult"},
+    {"$ref": "#/$defs/ReadablePseudocodeReport"},
     {"$ref": "#/$defs/PairFunction"},
     {"$ref": "#/$defs/PairNode"},
     {"$ref": "#/$defs/PairEdge"},

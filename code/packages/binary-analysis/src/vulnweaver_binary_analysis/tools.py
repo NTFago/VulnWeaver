@@ -101,11 +101,15 @@ class BinaryFactsAdapter:
         *,
         image_digest: str,
         input_ref: str,
+        target_addresses: tuple[int, ...] = (),
+        angr_enabled: bool = False,
     ):
         self._sandbox = sandbox
         self._store = store
         self._image_digest = image_digest
         self._input_ref = input_ref
+        self._target_addresses = target_addresses
+        self._angr_enabled = angr_enabled
 
     async def analyze(
         self,
@@ -126,6 +130,8 @@ class BinaryFactsAdapter:
                 "max_functions": limits.max_functions,
                 "max_instructions": limits.max_instructions,
                 "max_pseudocode_functions": limits.max_pseudocode_functions,
+                "target_addresses": list(self._target_addresses),
+                "angr_enabled": self._angr_enabled,
             },
             output_file_names=["binary-facts.json"],
             resource_budget=cast(ResourceBudget, _sandbox_budget(limits)),
@@ -159,6 +165,9 @@ class BinaryFactsAdapter:
             basic_blocks=tuple(cast(list[BinaryBasicBlock], facts.get("basic_blocks", []))),
             xrefs=tuple(cast(list[BinaryXref], facts.get("xrefs", []))),
             pseudocode=tuple(cast(list[BinaryPseudocode], facts.get("pseudocode", []))),
+            symbolic_facts=tuple(
+                cast(list[BinarySymbolicFact], facts.get("symbolic_facts", []))
+            ),
             imports=tuple(cast(list[BinaryImport], facts.get("imports", []))),
             compiler=cast(str | None, die.get("compiler")),
             packer=cast(str | None, die.get("packer")),
@@ -617,6 +626,10 @@ class AngrAdapter:
     def __init__(self, enabled: bool = False, runner: CommandRunner | None = None) -> None:
         self._enabled = enabled
         self._runner = runner or BoundedCommandRunner()
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
 
     async def analyze(
         self,

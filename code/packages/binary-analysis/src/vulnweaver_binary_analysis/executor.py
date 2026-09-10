@@ -21,6 +21,7 @@ from vulnweaver_contracts import (
     ArtifactVersion,
     BinaryAnalysisResult,
     BinaryAnalysisStatus,
+    BinaryPseudocode,
     BinaryToolRun,
     FailureKind,
     Job,
@@ -41,12 +42,19 @@ from vulnweaver_binary_analysis.critical_logic import (
     CriticalLogicCandidate,
     discover_critical_logic,
 )
+from vulnweaver_binary_analysis.deobfuscation import (
+    recover_readable_pseudocode,
+    validate_model_readable_pseudocode,
+)
 from vulnweaver_binary_analysis.headers import (
     BinaryInspectionError,
     extract_strings,
     inspect_binary,
 )
-from vulnweaver_binary_analysis.obfuscation import assess_control_flow_flattening
+from vulnweaver_binary_analysis.obfuscation import (
+    ObfuscationAssessment,
+    assess_control_flow_flattening,
+)
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
     BinaryFactsAdapter,
@@ -107,6 +115,17 @@ class BinaryPlanningHook(Protocol):
     ) -> tuple[int, ...]: ...
 
 
+class ReadablePseudocodeHook(Protocol):
+    """Optional model pass producing an anchored, review-only pseudocode view."""
+
+    async def render(
+        self,
+        job: Job,
+        pseudocode: tuple[BinaryPseudocode, ...],
+        obfuscation: JsonObject,
+    ) -> Sequence[Mapping[str, object]]: ...
+
+
 class BinaryImportExecutor:
     """Inspect one registered ELF/PE and publish immutable normalized analysis."""
 
@@ -124,6 +143,7 @@ class BinaryImportExecutor:
         sandbox_image_digest: str | None = None,
         planning_hook: BinaryPlanningHook | None = None,
         critical_logic_hook: CriticalLogicHook | None = None,
+        readable_pseudocode_hook: ReadablePseudocodeHook | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -136,6 +156,7 @@ class BinaryImportExecutor:
         self._sandbox_image_digest = sandbox_image_digest
         self._planning_hook = planning_hook
         self._critical_logic_hook = critical_logic_hook
+        self._readable_pseudocode_hook = readable_pseudocode_hook
         self._angr_adapter = next(
             (adapter for adapter in self._adapters if isinstance(adapter, AngrAdapter)),
             None,
@@ -159,6 +180,7 @@ class BinaryImportExecutor:
         sandbox_image_digest: str | None = None,
         planning_hook: BinaryPlanningHook | None = None,
         critical_logic_hook: CriticalLogicHook | None = None,
+        readable_pseudocode_hook: ReadablePseudocodeHook | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
@@ -176,6 +198,7 @@ class BinaryImportExecutor:
             sandbox_image_digest=sandbox_image_digest,
             planning_hook=planning_hook,
             critical_logic_hook=critical_logic_hook,
+            readable_pseudocode_hook=readable_pseudocode_hook,
         )
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
@@ -263,27 +286,38 @@ class BinaryImportExecutor:
         metadata: BinaryMetadata,
         cancellation: asyncio.Event,
         produced: list[str],
+        object_ref: str,
     ) -> tuple[int, ...] | None:
         """Run the model planning hook; failures degrade instead of aborting."""
-        angr_adapter = self._angr_adapter
         planning_hook = self._planning_hook
-        assert angr_adapter is not None
         assert planning_hook is not None
 
         async def run_angr(target_addresses: tuple[int, ...]) -> JsonObject:
             _validate_symbolic_targets(target_addresses, metadata)
-            contribution = await angr_adapter.analyze_targets(
-                analyzed_path,
-                metadata,
-                self._limits,
-                cancellation,
-                target_addresses,
-            )
+            if self._sandbox is not None and self._sandbox_image_digest is not None:
+                contribution = await BinaryFactsAdapter(
+                    self._sandbox,
+                    self._store,
+                    image_digest=self._sandbox_image_digest,
+                    input_ref=object_ref,
+                    target_addresses=target_addresses,
+                    angr_enabled=True,
+                ).analyze(analyzed_path, metadata, self._limits, cancellation)
+            else:
+                angr_adapter = self._angr_adapter
+                assert angr_adapter is not None
+                contribution = await angr_adapter.analyze_targets(
+                    analyzed_path,
+                    metadata,
+                    self._limits,
+                    cancellation,
+                    target_addresses,
+                )
             aggregate.merge(contribution, self._limits)
             explored = [
                 fact
                 for fact in aggregate.symbolic_facts
-                if fact.get("address") in target_addresses
+                if fact["function_address"] in target_addresses
             ]
             return {
                 "targets": list(target_addresses),
@@ -377,9 +411,18 @@ class BinaryImportExecutor:
                         self._store,
                         image_digest=self._sandbox_image_digest,
                         input_ref=object_ref,
+                        target_addresses=target_addresses,
+                        angr_enabled=(
+                            self._angr_adapter.enabled
+                            if self._angr_adapter is not None
+                            else False
+                        ),
                     ),
                 )
-            planning_active = self._planning_hook is not None and self._angr_adapter is not None
+            planning_active = self._planning_hook is not None and (
+                self._angr_adapter is not None
+                or (self._sandbox is not None and self._sandbox_image_digest is not None)
+            )
             for adapter in adapters:
                 if cancellation.is_set():
                     return _cancelled_result(job["id"], produced)
@@ -404,7 +447,7 @@ class BinaryImportExecutor:
             if planning_active and not cancellation.is_set():
                 assert self._planning_hook is not None
                 planned = await self._plan_with_agent(
-                    job, aggregate, analyzed_path, metadata, cancellation, produced
+                    job, aggregate, analyzed_path, metadata, cancellation, produced, object_ref
                 )
                 if planned is None:
                     return _cancelled_result(job["id"], produced)
@@ -447,6 +490,11 @@ class BinaryImportExecutor:
             produced.append(result_version_id)
             if cancellation.is_set():
                 return _cancelled_result(job["id"], produced)
+            readable_version_id = await self._publish_readable_pseudocode(
+                job, result_version_id, aggregate
+            )
+            if readable_version_id is not None:
+                produced.append(readable_version_id)
             if self._pair_importer is not None:
                 try:
                     await self._pair_importer.import_binary_result(
@@ -494,6 +542,75 @@ class BinaryImportExecutor:
             )
         finally:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
+
+    async def _publish_readable_pseudocode(
+        self, job: Job, analysis_version_id: str, aggregate: BinaryAnalysisAggregate
+    ) -> str | None:
+        """Publish a bounded review artifact without changing decompiler evidence."""
+        max_chars = min(32 * 1024, self._limits.max_pseudocode_chars)
+        source = _bounded_readable_source(
+            aggregate.pseudocode,
+            max_chars=max_chars,
+            # The artifact contains raw excerpts plus deterministic and optional
+            # model views.  Keep substantial headroom for JSON escaping/metadata.
+            total_chars=self._limits.max_tool_output_bytes // 16,
+        )
+        if not source:
+            return None
+        assessments = assess_control_flow_flattening(aggregate.basic_blocks, aggregate.xrefs)
+        recovered = recover_readable_pseudocode(source, assessments, max_chars=max_chars)
+        model_view: tuple[BinaryPseudocode, ...] = ()
+        if self._readable_pseudocode_hook is not None:
+            try:
+                candidates = await self._readable_pseudocode_hook.render(
+                    job, source, _obfuscation_document(assessments)
+                )
+                model_view = validate_model_readable_pseudocode(
+                    source, candidates, max_chars=max_chars
+                )
+            except Exception as error:  # Readability is advisory and must not lose evidence.
+                LOGGER.warning(
+                    "binary_readable_pseudocode_degraded",
+                    extra={"job_id": job["id"], "error": type(error).__name__},
+                )
+        document = {
+            "schema_version": "1.0.0",
+            "analysis_artifact_version_id": analysis_version_id,
+            "original_pseudocode_excerpts": list(source),
+            "recovered_pseudocode": list(recovered),
+            "model_pseudocode": list(model_view),
+            "obfuscation": _obfuscation_document(assessments)["assessments"],
+            "truncated_function_count": max(0, len(aggregate.pseudocode) - len(source)),
+        }
+        content = json.dumps(
+            document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        if len(content) > self._limits.max_tool_output_bytes:
+            raise BinaryAnalysisExecutionError(
+                "binary_import.readable_pseudocode_too_large",
+                "bounded readable pseudocode artifact exceeds the output limit",
+                kind=FailureKind.INTERNAL,
+            )
+        stored = await asyncio.to_thread(
+            self._store.put_stream, io.BytesIO(content), max_bytes=len(content)
+        )
+        version_id = _derived_identifier("artifact-version", job["id"], "readable-pseudocode")
+        artifact_id = _derived_identifier("artifact", job["id"], "readable-pseudocode")
+        await self._register_derived(
+            job,
+            parent_version_id=analysis_version_id,
+            artifact_id=artifact_id,
+            version_id=version_id,
+            stored=stored,
+            generation_config={
+                "format": "binary-readable-pseudocode",
+                "source_analysis_version_id": analysis_version_id,
+                "recovery": "deterministic-control-flow-labeling",
+                "model_view_count": len(model_view),
+                "truncated_function_count": max(0, len(aggregate.pseudocode) - len(source)),
+            },
+        )
+        return version_id
 
     async def _validate_input(self, job: Job, version_id: str, object_ref: str) -> None:
         try:
@@ -798,7 +915,20 @@ def _planning_facts(job: Job, aggregate: BinaryAnalysisAggregate) -> JsonObject:
                 {"name": item["name"], "address": item["address"]}
                 for item in aggregate.functions[:64]
             ],
-            "obfuscation": [
+            "obfuscation": _obfuscation_document(assessments)["assessments"],
+            "basic_block_count": len(aggregate.basic_blocks),
+            "xref_count": len(aggregate.xrefs),
+            "pseudocode_count": len(aggregate.pseudocode),
+        },
+    )
+
+
+def _obfuscation_document(assessments: Sequence[ObfuscationAssessment]) -> JsonObject:
+    """Return JSON-safe, bounded explainable flattening assessments."""
+    return cast(
+        JsonObject,
+        {
+            "assessments": [
                 {
                     "function_name": item.function_name,
                     "flattened": item.flattened,
@@ -808,12 +938,31 @@ def _planning_facts(job: Job, aggregate: BinaryAnalysisAggregate) -> JsonObject:
                     "reason": item.reason,
                 }
                 for item in assessments[:16]
-            ],
-            "basic_block_count": len(aggregate.basic_blocks),
-            "xref_count": len(aggregate.xrefs),
-            "pseudocode_count": len(aggregate.pseudocode),
+            ]
         },
     )
+
+
+def _bounded_readable_source(
+    pseudocode: Sequence[BinaryPseudocode], *, max_chars: int, total_chars: int
+) -> tuple[BinaryPseudocode, ...]:
+    """Select complete bounded excerpts so readability cannot exhaust output quota."""
+    selected: list[BinaryPseudocode] = []
+    remaining = total_chars
+    for item in pseudocode[:256]:
+        text = item["text"][:max_chars]
+        if not text or len(text) > remaining:
+            continue
+        selected.append(
+            BinaryPseudocode(
+                function_name=item["function_name"],
+                address=item["address"],
+                text=text,
+                tool_name=item["tool_name"],
+            )
+        )
+        remaining -= len(text)
+    return tuple(selected)
 
 
 def _target_addresses(job: Job, limits: BinaryAnalysisLimits) -> tuple[int, ...]:
