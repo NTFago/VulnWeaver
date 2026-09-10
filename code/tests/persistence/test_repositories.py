@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.engine import RowMapping
 from vulnweaver_contracts import (
     ArtifactKind,
     JobKind,
@@ -13,6 +14,7 @@ from vulnweaver_contracts import (
     PermissionMode,
     TaskResult,
     TaskStatus,
+    validate_contract,
 )
 from vulnweaver_persistence import (
     Database,
@@ -23,6 +25,7 @@ from vulnweaver_persistence import (
     PersistenceInvariantError,
 )
 from vulnweaver_persistence.models import jobs, outbox_events
+from vulnweaver_persistence.repositories import _task_event_from_row
 
 from tests.persistence.factories import (
     artifact,
@@ -411,6 +414,33 @@ def test_task_events_are_append_only_and_type_restricted(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_legacy_task_status_event_gets_nullable_failure_on_read() -> None:
+    legacy_row = cast(
+        RowMapping,
+        {
+            "schema_version": "1.0.0",
+            "id": "event:legacy-task-status",
+            "event_type": "task.status_changed",
+            "task_id": "task:legacy",
+            "sequence": 1,
+            "occurred_at": datetime(2026, 9, 11, tzinfo=UTC),
+            "correlation_id": "task:legacy",
+            "causation_id": None,
+            "payload": {
+                "task_id": "task:legacy",
+                "previous_status": "created",
+                "status": "validating",
+                "result": None,
+            },
+        },
+    )
+
+    event = _task_event_from_row(legacy_row)
+
+    assert event["payload"]["failure"] is None
+    validate_contract("QueueEvent", event)
 
 
 def test_repository_conflicts_remain_structured(seeded_database_url: str) -> None:
