@@ -789,6 +789,11 @@ class ActionPlan(TypedDict):
     steps: list[ActionStep]
     created_at: str
 
+class ActionPlanProposal(TypedDict):
+    schema_version: SchemaVersion
+    steps: list[ActionStep]
+    rationale: str
+
 class ToolSpec(TypedDict):
     schema_version: SchemaVersion
     name: Identifier

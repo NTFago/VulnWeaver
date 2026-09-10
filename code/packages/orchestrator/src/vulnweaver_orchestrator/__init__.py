@@ -1,5 +1,17 @@
 """LangGraph orchestration entry points."""
 
+from vulnweaver_orchestrator.agent_loop import (
+    AgentLoop,
+    AgentLoopBudget,
+    AgentLoopRequest,
+    AgentLoopResult,
+    AgentLoopStatus,
+    AgentRunSink,
+    ExecutedStep,
+    PlannerGateway,
+    StepExecutor,
+    StepOutcome,
+)
 from vulnweaver_orchestrator.audit_plan import (
     AuditBaseline,
     AuditPlan,
@@ -30,14 +42,22 @@ from vulnweaver_orchestrator.reviews import (
 from vulnweaver_orchestrator.task_aggregation import TaskAggregateSettlementHook
 
 __all__ = [
+    "AgentLoop",
+    "AgentLoopBudget",
+    "AgentLoopRequest",
+    "AgentLoopResult",
+    "AgentLoopStatus",
+    "AgentRunSink",
     "Checkpoint",
     "CheckpointConflict",
     "CheckpointStore",
+    "ExecutedStep",
     "InitialJobPolicy",
     "InMemoryCheckpointStore",
     "OrchestrationResult",
     "Orchestrator",
     "OrchestratorSettings",
+    "PlannerGateway",
     "PostgresCheckpointStore",
     "FindingReviewGate",
     "IndependentModelReviewer",
@@ -47,6 +67,8 @@ __all__ = [
     "ReviewGateResult",
     "ReviewJobExecutor",
     "ReviewJobScheduler",
+    "StepExecutor",
+    "StepOutcome",
     "TaskAggregateSettlementHook",
     "AuditBaseline",
     "AuditPlan",
