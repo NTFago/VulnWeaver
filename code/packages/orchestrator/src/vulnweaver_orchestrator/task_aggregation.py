@@ -19,10 +19,13 @@ from vulnweaver_domain import JobSnapshot, aggregate_task, transition_task
 from vulnweaver_domain.transitions import TASK_TRANSITIONS
 from vulnweaver_persistence import Repositories
 
+from vulnweaver_orchestrator.audit_plan import AuditPlan, build_baseline_plan, complete_baselines
 from vulnweaver_orchestrator.review_jobs import ReviewJobScheduler
 from vulnweaver_orchestrator.semantic_audit import SemanticAuditScheduler
 
 LOGGER = logging.getLogger("vulnweaver.orchestrator.aggregation")
+
+_AUDIT_BASELINES = ("static_rules", "semantic_function_audit")
 
 _PHASES = (
     TaskStatus.CREATED,
@@ -102,9 +105,28 @@ class TaskAggregateSettlementHook:
             [item["status"] for item in findings],
             [],
         )
-        for status, task_result in _transition_path(
-            task["status"], aggregate.status, aggregate.result, jobs
-        ):
+        transitions = _transition_path(task["status"], aggregate.status, aggregate.result, jobs)
+        if aggregate.result is TaskResult.NO_FINDINGS and self._audit_scheduler is not None:
+            plan = _audit_plan(jobs)
+            if plan.missing_required():
+                # ADR-021: NO_FINDINGS requires the required audit baselines to
+                # have actually run; blocking beats silently reporting a clean
+                # scan when the semantic baseline never completed.
+                LOGGER.warning(
+                    "audit_plan_no_findings_blocked",
+                    extra={
+                        "task_id": task["id"],
+                        "job_id": job["id"],
+                        "missing_required": list(plan.missing_required()),
+                        "coverage": plan.coverage(),
+                    },
+                )
+                transitions = [
+                    (status, task_result)
+                    for status, task_result in transitions
+                    if status is not TaskStatus.COMPLETED
+                ]
+        for status, task_result in transitions:
             allowed_now = TASK_TRANSITIONS.get(task["status"], frozenset())
             if status not in allowed_now:
                 LOGGER.warning(
@@ -135,6 +157,23 @@ class TaskAggregateSettlementHook:
             await repositories.task_events.append(event)
             await repositories.outbox.add(event)
             task = updated.task
+
+
+def _audit_plan(jobs: list[Job]) -> AuditPlan:
+    """Derive the durable audit-plan completion from settled Job facts."""
+    plan = build_baseline_plan(*_AUDIT_BASELINES)
+    completed: list[str] = []
+    if any(
+        item["kind"] is JobKind.SOURCE_ANALYSIS and item["status"] is JobStatus.SUCCEEDED
+        for item in jobs
+    ):
+        completed.append("static_rules")
+    if any(
+        item["kind"] is JobKind.SEMANTIC_AUDIT and item["status"] is JobStatus.SUCCEEDED
+        for item in jobs
+    ):
+        completed.append("semantic_function_audit")
+    return complete_baselines(plan, completed)
 
 
 def _transition_path(
