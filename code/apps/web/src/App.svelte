@@ -429,6 +429,46 @@
   function goHome(): void {
     void openSettings();
   }
+
+  /**
+   * 任务输入类型：优先取输入工件的 ArtifactKind，
+   * 无法解析时按任务已有作业的 JobKind 推断，默认按源码任务处理。
+   */
+  function deriveTaskType(): "source" | "binary" {
+    if (selectedTask) {
+      const versionId = selectedTask.artifact_version_ids[0];
+      const version = versionId ? artifactVersions.get(versionId) : undefined;
+      const artifact = version ? artifacts.find((item) => item.id === version.artifact_id) : undefined;
+      if (artifact) {
+        if (artifact.kind === "elf" || artifact.kind === "pe") return "binary";
+        if (artifact.kind === "source_archive" || artifact.kind === "source_repository") return "source";
+      }
+    }
+    if (jobs.some((job) => job.kind === "binary_analysis")) return "binary";
+    return "source";
+  }
+
+  $: taskType = deriveTaskType();
+
+  async function retryJobs(jobIds: string[]): Promise<boolean> {
+    if (!selectedTask || jobIds.length === 0) return false;
+    begin();
+    try {
+      const results = await Promise.allSettled(jobIds.map((id) => api.retryJob(id)));
+      const accepted = results.filter((result) => result.status === "fulfilled").length;
+      const firstRejection = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (accepted === 0 && firstRejection) {
+        busy = false;
+        showError(firstRejection.reason);
+        return false;
+      }
+      jobs = await api.jobs(selectedTask.id);
+      done(accepted === jobIds.length
+        ? `已投递 ${accepted} 个作业重试请求`
+        : `已投递 ${accepted}/${jobIds.length} 个重试请求，其余被拒绝`);
+      return true;
+    } catch (caught) { busy = false; showError(caught); return false; }
+  }
 </script>
 
 <svelte:head><title>{selectedProject ? `${selectedProject.name} · VulnWeaver` : "VulnWeaver · 漏洞织鉴"}</title></svelte:head>
@@ -485,9 +525,11 @@
           {selectedFunctionId}
           {reportVersionIds}
           {artifactVersions}
+          {taskType}
           {busy}
           onOpenProject={() => void openProject(selectedProject!)}
           onCancelTask={cancelTask}
+          onRetryJobs={retryJobs}
           onCreateReport={createReport}
           onCreateProof={createProof}
           onSelectFinding={(finding) => void selectFinding(finding)}

@@ -16,6 +16,8 @@
   import { api } from "../api";
   import { formatDate, shortId } from "../format";
   import { taskResultLabels, taskStatusLabels } from "../i18n";
+  import TaskPipeline from "../components/TaskPipeline.svelte";
+  import type { PipelineTaskType } from "../pipeline";
 
   /** 任务详情页：任务状态、漏洞与报告、函数工作台、作业与事件轨迹、智能体运行。 */
 
@@ -37,9 +39,11 @@
   export let selectedFunctionId: string | null = null;
   export let reportVersionIds: string[] = [];
   export let artifactVersions = new Map<string, ArtifactVersion>();
+  export let taskType: PipelineTaskType = "source";
   export let busy = false;
 
   export let onOpenProject: () => void = () => {};
+  export let onRetryJobs: (jobIds: string[]) => Promise<boolean> = async () => false;
   export let onCancelTask: () => void = () => {};
   export let onCreateReport: (format: "markdown" | "pdf" | "sarif") => void = () => {};
   export let onCreateProof: (kind: "proof_of_concept" | "exploit", scriptRef: string, imageDigest: string) => void = () => {};
@@ -142,8 +146,15 @@
     return "vulnweaver-report.md";
   }
 
-  function completedJobCount(): number {
-    return jobs.filter((job) => job.status === "succeeded").length;
+  $: failedJobs = jobs.filter((job) => job.status === "failed");
+  $: confirmedFindings = findings.filter((finding) => finding.status === "confirmed").length;
+  $: activeReportJobs = jobs.filter((job) => job.kind === "report" && ["pending", "queued", "running", "waiting_permission"].includes(job.status));
+  $: reportStateText = reportVersionIds.length > 0
+    ? `已生成 ${reportVersionIds.length} 份`
+    : activeReportJobs.length > 0 ? "生成中" : "未生成";
+
+  function retryFailedJobs(): void {
+    void onRetryJobs(failedJobs.map((job) => job.id));
   }
 
   async function submitReview(): Promise<void> {
@@ -172,23 +183,23 @@
   </div>
   <div class="task-actions">
     <span class={`status-badge large ${task.status}`}><i></i>{taskStatusLabels[task.status]}</span>
+    {#if failedJobs.length > 0}<button class="secondary" on:click={retryFailedJobs} disabled={busy}>重试失败作业（{failedJobs.length}）</button>{/if}
     {#if !["completed", "failed", "cancelled"].includes(task.status)}<button class="danger" on:click={onCancelTask} disabled={busy}>取消任务</button>{/if}
+    <button class="secondary" on:click={() => onCreateReport("markdown")} disabled={busy}>报告 Markdown</button>
+    <button class="secondary" on:click={() => onCreateReport("sarif")} disabled={busy}>报告 SARIF</button>
+    <button class="secondary" on:click={() => onCreateReport("pdf")} disabled={busy}>报告 PDF</button>
   </div>
 </section>
+<TaskPipeline {jobs} {taskType} {busy} onRetryStage={(jobIds) => void onRetryJobs(jobIds)} />
 <section class="metric-strip task-metrics" aria-label="任务统计">
-  <div><strong>{completedJobCount()}<em>/ {jobs.length}</em></strong><span>已完成的执行单元</span></div>
-  <div><strong>{events.length}</strong><span>事件</span></div>
-  <div><strong>{findings.length}</strong><span>候选问题</span></div>
-  <div><strong>{task.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div>
+  <div><strong>{findings.length}</strong><span>漏洞总数</span></div>
+  <div><strong>{confirmedFindings}</strong><span>已确认漏洞</span></div>
+  <div><strong>{failedJobs.length}</strong><span>失败作业</span></div>
+  <div><strong>{reportStateText}</strong><span>报告状态</span></div>
 </section>
 <section class="panel table-panel">
   <header class="panel-head">
     <div><h2>问题与报告</h2><p>候选问题、人工复核与报告导出。</p></div>
-    <div class="task-actions">
-      <button class="secondary" on:click={() => onCreateReport("markdown")} disabled={busy}>Markdown</button>
-      <button class="secondary" on:click={() => onCreateReport("sarif")} disabled={busy}>SARIF</button>
-      <button class="secondary" on:click={() => onCreateReport("pdf")} disabled={busy}>PDF</button>
-    </div>
   </header>
   {#if findings.length === 0}
     <div class="compact-empty">当前任务尚未产生候选问题。</div>
