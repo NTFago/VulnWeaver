@@ -433,22 +433,28 @@
   /**
    * 任务输入类型：优先取输入工件的 ArtifactKind，
    * 无法解析时按任务已有作业的 JobKind 推断，默认按源码任务处理。
+   * 通过参数显式引用状态，保证 Svelte 响应式语句能跟踪依赖。
    */
-  function deriveTaskType(): "source" | "binary" {
-    if (selectedTask) {
-      const versionId = selectedTask.artifact_version_ids[0];
-      const version = versionId ? artifactVersions.get(versionId) : undefined;
-      const artifact = version ? artifacts.find((item) => item.id === version.artifact_id) : undefined;
+  function computeTaskType(
+    task: Task | null,
+    versions: Map<string, ArtifactVersion>,
+    projectArtifacts: Artifact[],
+    currentJobs: Job[],
+  ): "source" | "binary" {
+    if (task) {
+      const versionId = task.artifact_version_ids[0];
+      const version = versionId ? versions.get(versionId) : undefined;
+      const artifact = version ? projectArtifacts.find((item) => item.id === version.artifact_id) : undefined;
       if (artifact) {
         if (artifact.kind === "elf" || artifact.kind === "pe") return "binary";
         if (artifact.kind === "source_archive" || artifact.kind === "source_repository") return "source";
       }
     }
-    if (jobs.some((job) => job.kind === "binary_analysis")) return "binary";
+    if (currentJobs.some((job) => job.kind === "binary_analysis")) return "binary";
     return "source";
   }
 
-  $: taskType = deriveTaskType();
+  $: taskType = computeTaskType(selectedTask, artifactVersions, artifacts, jobs);
 
   async function retryJobs(jobIds: string[]): Promise<boolean> {
     if (!selectedTask || jobIds.length === 0) return false;

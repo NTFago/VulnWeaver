@@ -357,7 +357,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
-    margin-top: 24px;
+    margin-top: 0;
     align-items: start;
   }
   .task-column { min-width: 0; display: grid; }
