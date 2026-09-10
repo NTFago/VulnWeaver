@@ -990,6 +990,9 @@ class ProductSettings(TypedDict):
     review_model_api_key: NotRequired[str | None]
     clear_review_model_api_key: NotRequired[bool]
     tool_image_digests: NotRequired[ToolImageDigests]
+    model_tiers: NotRequired[ModelTierSettings]
+    tier_api_keys: NotRequired[TierApiKeys]
+    clear_tier_api_keys: NotRequired[list[Literal['planning', 'audit', 'review', 'report']]]
     sandbox_budgets: NotRequired[SandboxBudgets]
     fuzz_budgets: NotRequired[FuzzBudgets]
     sandbox_runner_timeout_seconds: NotRequired[int]
@@ -1016,6 +1019,28 @@ class FuzzBudgets(TypedDict):
     max_executions: NotRequired[int]
     max_duration_seconds: NotRequired[int]
     max_crashes: NotRequired[int]
+
+class ModelTierSettings(TypedDict):
+    planning: NotRequired[TierModelConfig]
+    audit: NotRequired[TierModelConfig]
+    review: NotRequired[TierModelConfig]
+    report: NotRequired[TierModelConfig]
+
+class TierModelConfig(TypedDict):
+    protocol: NotRequired[Literal['openai', 'anthropic']]
+    base_url: NotRequired[str]
+    model_name: NotRequired[str]
+    context_window_tokens: NotRequired[int]
+    thinking_mode: NotRequired[Literal['off', 'default', 'custom']]
+    thinking_budget_tokens: NotRequired[int]
+    timeout_seconds: NotRequired[float]
+    max_attempts: NotRequired[int]
+
+class TierApiKeys(TypedDict):
+    planning: NotRequired[str | None]
+    audit: NotRequired[str | None]
+    review: NotRequired[str | None]
+    report: NotRequired[str | None]
 
 class PasswordChangeRequest(TypedDict):
     schema_version: SchemaVersion
