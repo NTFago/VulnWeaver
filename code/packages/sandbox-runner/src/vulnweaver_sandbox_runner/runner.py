@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import logging
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -36,6 +37,8 @@ from vulnweaver_sandbox_runner.runtime import (
 )
 
 CommandBuilder = Callable[[Mapping[str, object], PurePath, PurePath], Sequence[str]]
+
+LOGGER = logging.getLogger(__name__)
 
 # Operational disk protection for the shared CAS volume, not a compute-resource quota:
 # it is orders of magnitude above any legitimate tool output and exists only so a
@@ -158,6 +161,13 @@ class SandboxRunner:
                         resource_usage=_usage(0, 0, 0, 0),
                     )
                 except (OSError, TimeoutError, RuntimeError) as error:
+                    # The structured failure only carries the exception type; log the
+                    # message so runtime failures stay diagnosable from runner logs.
+                    LOGGER.error(
+                        "sandbox_runtime_failed request_id=%s error=%s",
+                        request["id"],
+                        str(error)[:2000],
+                    )
                     result = _policy_result(
                         request["id"],
                         "sandbox.runtime_failed",
