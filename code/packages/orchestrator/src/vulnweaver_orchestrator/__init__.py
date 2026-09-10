@@ -7,6 +7,7 @@ from vulnweaver_orchestrator.checkpoints import (
     InMemoryCheckpointStore,
     PostgresCheckpointStore,
 )
+from vulnweaver_orchestrator.audit_plan import AuditBaseline, AuditPlan, build_baseline_plan, complete_baselines
 from vulnweaver_orchestrator.flow import (
     InitialJobPolicy,
     OrchestrationResult,
@@ -42,4 +43,8 @@ __all__ = [
     "ReviewJobExecutor",
     "ReviewJobScheduler",
     "TaskAggregateSettlementHook",
+    "AuditBaseline",
+    "AuditPlan",
+    "build_baseline_plan",
+    "complete_baselines",
 ]
