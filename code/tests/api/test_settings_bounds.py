@@ -10,14 +10,13 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
+from vulnweaver_api.schemas import ProductSettingsBody
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGatewaySettings,
     ModelRoute,
     ModelTier,
 )
-
-from vulnweaver_api.schemas import ProductSettingsBody
 
 # The widest values the settings API allows for the fields the gateway rule-checks.
 API_MAXIMA = {
