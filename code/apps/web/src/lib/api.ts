@@ -6,6 +6,7 @@ import type {
   CreateTaskRequest,
   ErrorResponse,
   Finding,
+  PairFunction,
   Evidence,
   FindingEvidence,
   Poc,
@@ -172,6 +173,8 @@ export const api = {
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  pair: (taskId: string) => request<PairFunction[]>(`/api/tasks/${encodeURIComponent(taskId)}/pair`),
+  agentRuns: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`),
   pairNeighborhood: (taskId: string, functionId: string, depth = 1) =>
     request<Record<string, unknown>>(`/api/tasks/${encodeURIComponent(taskId)}/pair/function/${encodeURIComponent(functionId)}/neighborhood?depth=${depth}`),
   annotations: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/annotations`),

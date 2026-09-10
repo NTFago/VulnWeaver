@@ -5,6 +5,7 @@
     ArtifactKind,
     ArtifactVersion,
     Finding,
+    PairFunction,
   Poc,
     Job,
     Project,
@@ -69,6 +70,8 @@
   let annotationNote = "";
   let reviewRationale = "";
   let pairNeighborhood: Record<string, unknown> | null = null;
+  let pairFunctions: PairFunction[] = [];
+  let agentRuns: Record<string, unknown>[] = [];
 
   let username = "";
   let password = "";
@@ -274,7 +277,7 @@
     try {
       socket?.close(); selectedTask = await api.task(task.id); view = "task";
       selectedFinding = null; selectedEvidence = []; selectedPocs = [];
-      [jobs, events, findings, observability] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id), api.observability(task.id)]);
+      [jobs, events, findings, observability, pairFunctions, agentRuns] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id), api.observability(task.id), api.pair(task.id), api.agentRuns(task.id)]);
       await refreshReportResults();
       connectEvents(task.id); done();
     } catch (caught) { busy = false; showError(caught); }
