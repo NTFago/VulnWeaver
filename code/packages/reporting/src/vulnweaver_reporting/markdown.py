@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from vulnweaver_contracts import Finding, Poc
+from vulnweaver_contracts import Evidence, Finding, Poc
 
 
-def build_markdown(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
+def build_markdown(
+    findings: Sequence[Finding],
+    pocs: Sequence[Poc] = (),
+    evidence: dict[str, list[Evidence]] | None = None,
+) -> str:
     """Render a reviewable report while keeping raw evidence out of the document."""
     poc_by_finding: dict[str, list[Poc]] = {}
     for poc in pocs:
@@ -16,6 +20,7 @@ def build_markdown(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str
     if not findings:
         return "\n".join(lines + ["No findings were reported.", ""])
     for finding in findings:
+        finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
         path = location.get("path", "unknown")
         line = location.get("line", 1)
@@ -50,6 +55,14 @@ def build_markdown(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str
                 "",
             ]
         )
+        for item in finding_evidence:
+            recipe = item["replay_recipe"]
+            lines.append(
+                f"- `{item['id']}`: `{_value(item['type'])}`, artifact `{item['artifact_ref']}`, "
+                f"digest `{item['digest']}`"
+            )
+            if "stack_hash" in recipe:
+                lines.append(f"  - Crash stack: `{recipe['stack_hash']}`")
         for poc in poc_by_finding.get(finding["id"], []):
             lines.append(
                 f"- POC `{poc['id']}`: `{_value(poc['status'])}` / "

@@ -10,6 +10,7 @@ from typing import cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService
 from vulnweaver_contracts import (
+    Evidence,
     FailureKind,
     Job,
     JobKind,
@@ -73,8 +74,15 @@ class ReportJobExecutor:
                 task = await repositories.tasks.get(task_id)
                 findings = await repositories.findings.list_for_task(task["id"])
                 pocs: list[Poc] = []
+                evidence_by_finding: dict[str, list[Evidence]] = {}
                 for finding in findings:
                     pocs.extend(await repositories.pocs.list_for_finding(finding["id"]))
+                    evidence_by_finding[finding["id"]] = [
+                        await repositories.evidence.get(relation["evidence_id"])
+                        for relation in await repositories.findings.list_evidence_relations(
+                            finding["id"]
+                        )
+                    ]
                 artifact = await repositories.artifacts.get(artifact_id)
                 if (
                     artifact["kind"].value != "derived"
@@ -92,7 +100,7 @@ class ReportJobExecutor:
                     )
                     content = output.read_bytes()
             else:
-                content = build_markdown(findings, pocs).encode()
+                content = build_markdown(findings, pocs, evidence_by_finding).encode()
             result = await register_report(
                 self._registration,
                 artifact,
