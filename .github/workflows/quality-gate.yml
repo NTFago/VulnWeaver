@@ -14,6 +14,12 @@ permissions:
 jobs:
   python-quality:
     name: Python quality gate
+    # A WIP PR is allowed to be used as a draft integration branch. Keep the
+    # job in the workflow (rather than filtering the workflow trigger) so a
+    # required branch-protection check is reported as successful when skipped.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.pull_request.title, 'WIP:') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
