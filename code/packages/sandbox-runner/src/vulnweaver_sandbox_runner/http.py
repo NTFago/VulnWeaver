@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+from collections.abc import Mapping
 from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -14,7 +15,12 @@ from vulnweaver_contracts import SandboxRequest, SandboxResult, validate_contrac
 from vulnweaver_sandbox_runner.runner import SandboxRunner
 
 
-def create_sandbox_app(runner: SandboxRunner, *, bearer_token: str | None = None) -> FastAPI:
+def create_sandbox_app(
+    runner: SandboxRunner,
+    *,
+    bearer_token: str | None = None,
+    tool_digests: Mapping[tuple[str, str], str] | None = None,
+) -> FastAPI:
     """Create the private service boundary around one configured Runner."""
     if bearer_token is not None and not bearer_token:
         raise ValueError("sandbox bearer token must not be empty")
@@ -23,6 +29,18 @@ def create_sandbox_app(runner: SandboxRunner, *, bearer_token: str | None = None
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/tools/{tool_name}/{tool_version}")
+    async def tool_digest(
+        tool_name: str,
+        tool_version: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, str]:
+        _authorize(authorization, bearer_token)
+        digest = (tool_digests or {}).get((tool_name, tool_version))
+        if digest is None:
+            raise HTTPException(status_code=404, detail="tool is not registered")
+        return {"tool_name": tool_name, "tool_version": tool_version, "image_digest": digest}
 
     @app.post("/v1/sandbox/runs", response_model=None)
     async def run_sandbox(

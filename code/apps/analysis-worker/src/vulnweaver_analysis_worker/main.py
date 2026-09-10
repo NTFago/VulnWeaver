@@ -90,6 +90,7 @@ async def _run() -> None:
         static_scheduler=scheduler,
         pair_importer=pair_importer,
     )
+    binary_sandbox, binary_digest = await _binary_sandbox()
     binary_executor = BinaryImportExecutor.configured(
         database,
         store,
@@ -101,8 +102,8 @@ async def _run() -> None:
         angr_enabled=_environment_bool("ANGR_ENABLED", False),
         upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
         pair_importer=BinaryPairImporter(database),
-        sandbox=_binary_sandbox(),
-        sandbox_image_digest=os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None,
+        sandbox=binary_sandbox,
+        sandbox_image_digest=binary_digest,
     )
     executor = AnalysisJobExecutor(
         source_executor,
@@ -242,14 +243,18 @@ def _proof_executor(database: Database) -> ProofJobExecutor | None:
     return ProofJobExecutor(database, service)
 
 
-def _binary_sandbox() -> SandboxRunnerClient | None:
+async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
-        return None
-    return SandboxRunnerClient(
+        return None, None
+    client = SandboxRunnerClient(
         runner_url,
         timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
     )
+    digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None
+    if digest is None:
+        digest = await client.tool_digest("binary-facts", "1.0.0")
+    return client, digest
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

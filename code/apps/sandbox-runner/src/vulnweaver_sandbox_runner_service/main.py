@@ -84,7 +84,16 @@ def build_app():
         root=sandbox_root,
     )
     token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None
-    return create_sandbox_app(runner, bearer_token=token)
+    registered_digests = {}
+    if binary_digest:
+        registered_digests[("binary-facts", "1.0.0")] = binary_digest
+    if proof_digest:
+        registered_digests[("proof-tool", "1.0.0")] = proof_digest
+    if digest:
+        registered_digests[("afl-casr", "1.0.0")] = digest
+    return create_sandbox_app(
+        runner, bearer_token=token, tool_digests=registered_digests
+    )
 
 
 def _resource_budget() -> ResourceBudget:

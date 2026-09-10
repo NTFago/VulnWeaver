@@ -22,6 +22,19 @@ class SandboxRunnerClient:
         self._url = base_url.rstrip("/") + "/v1/sandbox/runs"
         self._timeout = timeout_seconds
 
+    async def tool_digest(self, tool_name: str, tool_version: str) -> str | None:
+        """Read a digest registered by the Runner without accessing Docker."""
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
+                endpoint = f"{self._url.rsplit('/', 3)[0]}/tools/{tool_name}/{tool_version}"
+                response = await client.get(endpoint)
+            response.raise_for_status()
+            payload = response.json()
+            digest = payload.get("image_digest") if isinstance(payload, dict) else None
+            return digest if isinstance(digest, str) and digest.startswith("sha256:") else None
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
+
     async def run(
         self, request: SandboxRequest, cancellation: asyncio.Event
     ) -> SandboxResult:
