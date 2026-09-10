@@ -924,6 +924,37 @@ export interface ProductSettings {
   review_model_min_interval_seconds: number;
   review_model_api_key?: string | null;
   clear_review_model_api_key?: boolean;
+  tool_image_digests?: ToolImageDigests;
+  sandbox_budgets?: SandboxBudgets;
+  fuzz_budgets?: FuzzBudgets;
+  sandbox_runner_timeout_seconds?: number;
+  fuzz_runner_timeout_seconds?: number;
+  angr_enabled?: boolean | null;
+}
+
+export interface ToolImageDigests {
+  binary_tools?: Sha256Digest | null;
+  proof_tool?: Sha256Digest | null;
+  afl_casr?: Sha256Digest | null;
+}
+
+export interface SandboxResourceBudget {
+  cpu_millis?: number;
+  memory_bytes?: number;
+  disk_bytes?: number;
+  timeout_seconds?: number;
+}
+
+export interface SandboxBudgets {
+  afl?: SandboxResourceBudget;
+  proof?: SandboxResourceBudget;
+  binary?: SandboxResourceBudget;
+}
+
+export interface FuzzBudgets {
+  max_executions?: number;
+  max_duration_seconds?: number;
+  max_crashes?: number;
 }
 
 export interface PasswordChangeRequest {

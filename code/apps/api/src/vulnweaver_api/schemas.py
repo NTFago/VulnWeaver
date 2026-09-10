@@ -47,6 +47,34 @@ class InstallationStatusResponse(StrictModel):
     registration_open: bool
 
 
+DigestPattern = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$", max_length=71)]
+
+
+class SandboxResourceBudgetModel(StrictModel):
+    cpu_millis: int = Field(default=0, ge=0, le=100_000_000)
+    memory_bytes: int = Field(default=0, ge=0)
+    disk_bytes: int = Field(default=0, ge=0)
+    timeout_seconds: int = Field(default=0, ge=0, le=86_400)
+
+
+class SandboxBudgetsModel(StrictModel):
+    afl: SandboxResourceBudgetModel = Field(default_factory=SandboxResourceBudgetModel)
+    proof: SandboxResourceBudgetModel = Field(default_factory=SandboxResourceBudgetModel)
+    binary: SandboxResourceBudgetModel = Field(default_factory=SandboxResourceBudgetModel)
+
+
+class FuzzBudgetsModel(StrictModel):
+    max_executions: int = Field(default=0, ge=0, le=1_000_000_000)
+    max_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+    max_crashes: int = Field(default=0, ge=0, le=10_000)
+
+
+class ToolImageDigestsModel(StrictModel):
+    binary_tools: DigestPattern | None = None
+    proof_tool: DigestPattern | None = None
+    afl_casr: DigestPattern | None = None
+
+
 class ProductSettingsBody(StrictModel):
     schema_version: Literal["1.0.0"] = "1.0.0"
     review_model_base_url: str = Field(default="", max_length=2048)
@@ -57,6 +85,12 @@ class ProductSettingsBody(StrictModel):
     review_model_min_interval_seconds: float = Field(default=0, ge=0, le=3600)
     review_model_api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     clear_review_model_api_key: bool = False
+    tool_image_digests: ToolImageDigestsModel = Field(default_factory=ToolImageDigestsModel)
+    sandbox_budgets: SandboxBudgetsModel = Field(default_factory=SandboxBudgetsModel)
+    fuzz_budgets: FuzzBudgetsModel = Field(default_factory=FuzzBudgetsModel)
+    sandbox_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
+    fuzz_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
+    angr_enabled: bool | None = None
 
 
 class ProductSettingsResponse(StrictModel):
@@ -68,6 +102,12 @@ class ProductSettingsResponse(StrictModel):
     review_model_repair_attempts: int
     review_model_min_interval_seconds: float
     api_key_configured: bool
+    tool_image_digests: ToolImageDigestsModel
+    sandbox_budgets: SandboxBudgetsModel
+    fuzz_budgets: FuzzBudgetsModel
+    sandbox_runner_timeout_seconds: int
+    fuzz_runner_timeout_seconds: int
+    angr_enabled: bool | None
 
 
 class PasswordChangeRequest(StrictModel):
