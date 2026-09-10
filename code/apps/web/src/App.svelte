@@ -352,7 +352,7 @@
         resource_budget: budget, kind,
       });
       jobs = [job, ...jobs.filter((item) => item.id !== job.id)];
-      done(`${kind === "exploit" ? "Exploit" : "Proof"} Job 已投递`);
+      done(kind === "exploit" ? "利用验证作业已投递" : "概念验证作业已投递");
     } catch (caught) { busy = false; showError(caught); }
   }
 

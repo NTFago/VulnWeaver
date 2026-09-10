@@ -15,7 +15,23 @@
   import type { FindingEvidenceDetail } from "../api";
   import { api } from "../api";
   import { formatDate } from "../format";
-  import { taskResultLabels, taskStatusLabels } from "../i18n";
+  import {
+    confidenceTier,
+    confidenceTierLabels,
+    evidenceStrengthLabels,
+    evidenceTypeLabels,
+    failureCodeText,
+    findingCategoryLabels,
+    findingStatusLabels,
+    jobKindLabels,
+    jobStatusLabels,
+    pocKindLabels,
+    pocResultLabels,
+    pocStatusLabels,
+    severityLabels,
+    taskResultLabels,
+    taskStatusLabels,
+  } from "../i18n";
   import TaskPipeline from "../components/TaskPipeline.svelte";
   import FindingStats from "../components/FindingStats.svelte";
   import AgentPanel from "../components/AgentPanel.svelte";
@@ -215,8 +231,8 @@
       {#each findings as finding (finding.id)}
         <button class="finding-row" on:click={() => onSelectFinding(finding)}>
           <span class={`status-dot ${finding.status}`}></span>
-          <span class="task-cell"><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></span>
-          <span class="confidence">{Math.round(finding.confidence * 100)}%</span>
+          <span class="task-cell"><b>{finding.title}</b><small>{severityLabels[finding.severity]} · {findingCategoryLabels[finding.category]} · {finding.cwe_id}</small></span>
+          <span class="confidence" title="置信度：{confidenceTierLabels[confidenceTier(finding.confidence)]}">{Math.round(finding.confidence * 100)}%</span>
         </button>
       {/each}
     </div>
@@ -225,12 +241,12 @@
     <article class="finding-detail">
       <header><b>{selectedFinding.title}</b><span class={`status-dot ${selectedFinding.status}`}></span></header>
       <p>{selectedFinding.fix_suggestion}</p>
-      <small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small>
+      <small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · 复现记录：{selectedFinding.poc_ids.length} 条</small>
       <div class="proof-actions">
-        <label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS/object reference" /></label>
+        <label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS 对象引用" /></label>
         <label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label>
-        <button class="secondary" on:click={() => createProof("proof_of_concept")} disabled={busy}>发起 Proof</button>
-        {#if selectedFinding.status === "confirmed" && project?.exploit_validation_enabled}<button class="danger" on:click={() => createProof("exploit")} disabled={busy}>发起 Exploit</button>{/if}
+        <button class="secondary" on:click={() => createProof("proof_of_concept")} disabled={busy}>发起概念验证</button>
+        {#if selectedFinding.status === "confirmed" && project?.exploit_validation_enabled}<button class="danger" on:click={() => createProof("exploit")} disabled={busy}>发起利用验证</button>{/if}
       </div>
       <div class="proof-actions review-actions">
         <label>复核结论<select bind:value={reviewOutcome}><option value="candidate">候选</option><option value="confirmed">确认</option><option value="false_positive">误报</option><option value="disputed">有争议</option><option value="unverifiable">无法验证</option></select></label>
@@ -242,13 +258,13 @@
         <button class="secondary" on:click={submitAnnotation} disabled={busy || !annotationNote.trim()}>保存标注</button>
       </div>
       {#if reviews.length > 0}
-        <div class="detail-evidence"><b>复核历史</b>{#each reviews as review, i (i)}<small>{review.outcome} · {review.model} · {review.rationale}</small>{/each}</div>
+        <div class="detail-evidence"><b>复核历史</b>{#each reviews as review, i (i)}<small>{findingStatusLabels[review.outcome]} · {review.model} · {review.rationale}</small>{/each}</div>
       {/if}
       {#if evidence.length > 0}
-        <div class="detail-evidence"><b>证据链</b>{#each evidence as item, i (i)}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>
+        <div class="detail-evidence"><b>证据链</b>{#each evidence as item, i (i)}<small>{evidenceTypeLabels[item.evidence.type]} · {evidenceStrengthLabels[item.evidence.strength]} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>
       {/if}
       {#if pocs.length > 0}
-        <div class="detail-evidence"><b>复现记录</b>{#each pocs as poc (poc.id)}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>
+        <div class="detail-evidence"><b>复现记录</b>{#each pocs as poc (poc.id)}<small>{pocKindLabels[poc.kind]} · {pocStatusLabels[poc.status]} · {poc.result ? pocResultLabels[poc.result] : "未执行"}</small>{/each}</div>
       {/if}
     </article>
   {/if}
@@ -289,9 +305,9 @@
             {#each jobs as job (job.id)}
               <article>
                 <span class={`status-dot ${job.status}`}></span>
-                <div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>
+                <div><b>{jobKindLabels[job.kind]}</b><small>{jobStatusLabels[job.status]} · 第 {job.attempt}/{job.retry_policy.max_attempts} 次尝试</small></div>
                 {#if job.status === "failed"}<button class="text-button job-retry" disabled={busy} on:click={() => void onRetryJobs([job.id])}>重试</button>{/if}
-                {#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}
+                {#if job.failure}<p>{job.failure.message}</p><small>{failureCodeText(job.failure.code)}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}
               </article>
             {/each}
           </div>
