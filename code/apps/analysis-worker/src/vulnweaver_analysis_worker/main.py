@@ -167,7 +167,12 @@ async def _run() -> None:
         )
         exploit_scheduler = _auto_exploit_scheduler(database, config)
         fuzz_scheduler = _fuzz_scheduler(
-            database, store, config, harness_enabled=model_gateway is not None
+            database,
+            store,
+            config,
+            fuzz_executor=fuzz_executor,
+            registry=tool_registry,
+            harness_enabled=model_gateway is not None,
         )
         binary_sandbox, binary_digest = await _binary_sandbox(config)
         binary_planning_hook = (
@@ -616,11 +621,18 @@ def _fuzz_scheduler(
     store: LocalContentAddressedStore,
     config: ResolvedDeploymentConfig,
     *,
+    fuzz_executor: FuzzJobExecutor | None,
+    registry: ToolRegistry,
     harness_enabled: bool,
 ) -> FuzzJobScheduler | None:
-    """Enable automatic fuzz dispatch; the resolver declines when it cannot run."""
-    if not (config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()):
-        # Without a pinned fuzz image the scheduler would only ever decline.
+    """Enable automatic fuzz dispatch; the resolver declines when it cannot run.
+
+    Availability follows the executor, which discovers the AFL++/CASR digest from
+    the Runner (or a settings/env pin); a deployment able to execute fuzz jobs
+    can also dispatch them.
+    """
+
+    if fuzz_executor is None:
         return None
 
     async def resolve(
@@ -632,10 +644,22 @@ def _fuzz_scheduler(
             task,
             config,
             store=store,
+            digest=_registered_fuzz_digest(registry),
             harness_enabled=harness_enabled,
         )
 
     return FuzzJobScheduler(database, target_resolver=resolve)
+
+
+def _registered_fuzz_digest(registry: ToolRegistry) -> str | None:
+    """Return the AFL++/CASR digest the executor registered, if any."""
+
+    try:
+        spec = registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+    except ToolRuntimeError:
+        return None
+    digest = str(spec["image_digest"])
+    return digest or None
 
 
 async def _fuzz_target(
@@ -645,6 +669,7 @@ async def _fuzz_target(
     config: ResolvedDeploymentConfig,
     *,
     store: LocalContentAddressedStore,
+    digest: str | None,
     harness_enabled: bool,
 ) -> FuzzTarget | None:
     """Resolve a bounded fuzz target for one Finding, or decline.
@@ -653,10 +678,8 @@ async def _fuzz_target(
     or injection candidates and only against the artifact the Finding is
     anchored to. The anchored artifact doubles as the visible seed corpus: it is
     present in both the fuzz and binary-facts CAS by construction, and the bundle
-    builder keeps the total seed budget bounded. When the deployment has not
-    pinned a fuzz digest, no target is produced and dispatch is skipped.
+    builder keeps the total seed budget bounded.
     """
-    digest = config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     if not digest:
         return None
     if finding["category"] not in _FUZZABLE_CATEGORIES:

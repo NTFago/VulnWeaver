@@ -47,6 +47,9 @@ public class ExportVulnWeaver extends GhidraScript {
         }
 
         File target = new File(arguments[0]).getCanonicalFile();
+        // Ghidra maps the program at its own image base; downstream consumers key
+        // facts by file virtual addresses (objdump/symbol table), so normalize.
+        long imageBase = currentProgram.getImageBase().getOffset();
         DecompInterface decompiler = new DecompInterface();
         decompiler.openProgram(currentProgram);
         try (PrintWriter out = new PrintWriter(new FileWriter(target))) {
@@ -62,7 +65,7 @@ public class ExportVulnWeaver extends GhidraScript {
                 long size = function.getBody().getNumAddresses();
                 out.printf(
                     "{\"name\":\"%s\",\"address\":%d,\"size\":%d,\"attributes\":{\"source\":\"ghidra\"}}",
-                    escape(function.getName()), function.getEntryPoint().getOffset(), size
+                    escape(function.getName()), function.getEntryPoint().getOffset() - imageBase, size
                 );
             }
 
@@ -85,7 +88,7 @@ public class ExportVulnWeaver extends GhidraScript {
                 String functionName = function == null ? "" : function.getName();
                 out.printf(
                     "{\"address\":%d,\"bytes\":\"%s\",\"mnemonic\":\"%s\",\"operands\":\"%s\",\"function_name\":%s}",
-                    instruction.getAddress().getOffset(), bytes.toString(),
+                    instruction.getAddress().getOffset() - imageBase, bytes.toString(),
                     escape(instruction.getMnemonicString()), escape(operands(instruction)),
                     function == null ? "null" : "\"" + escape(functionName) + "\""
                 );
@@ -109,7 +112,7 @@ public class ExportVulnWeaver extends GhidraScript {
                 pseudocodeCount++;
                 out.printf(
                     "{\"function_name\":\"%s\",\"address\":%d,\"text\":\"%s\",\"tool_name\":\"ghidra\"}",
-                    escape(function.getName()), function.getEntryPoint().getOffset(), escape(body)
+                    escape(function.getName()), function.getEntryPoint().getOffset() - imageBase, escape(body)
                 );
             }
             out.print("],\"imports\":[]}");
