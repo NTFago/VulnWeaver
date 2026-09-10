@@ -106,7 +106,7 @@ class BinaryFactsAdapter:
     ) -> ToolContribution:
         request = SandboxRequest(
             schema_version=SchemaVersion.VALUE_1_0_0,
-            id=f"binary-facts:{self._input_ref}",
+            id=f"binary-facts:{self._input_ref.removeprefix('cas://sha256/')}",
             tool_name="binary-facts",
             tool_version="1.0.0",
             image_digest=self._image_digest,
