@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
 - **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成并经浏览器视觉验收；此前 `main@10a8936` 审查确认的模型档位、源码/二进制语义审计、动态 Job 聚合、生产 Harness、自动 Markdown、Compose 可达性和前端恢复/复核缺陷均已修复并回归。
-- **当前分支**：`feat/web-settings-first-modernization`（主仓库 `课设 - codex` 单一检出，基于 `main@3b4f973`；未推送）。
+- **当前分支**：`main`（`50fcbca`，已合并 T36 的 PR #49）；工作树干净。
 - **当前负责人**：Codex（T36 已完成）；T26-T34 各行见进度表。
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
@@ -59,7 +59,7 @@
 | T33 前端逆向工作台与人工复核 | 待验证 | Codex | 任务页新增「函数与调用链」工作台：函数列表点击选中、caller/callee 双列联动跳转、二进制伪代码代码视图；新增「智能体运行轨迹」区（模型、决策数、token、耗时、失败码）渲染 agent-runs；人工复核与标注入口此前已并入 Finding 详情 | 真实二进制样本浏览器回归验证（依赖 T26 沙箱链路产出伪代码） | 2026-09-10 |
 | T34 报告证据链写实 | 待验证 | Codex（`feat/t32-fuzz-auto`） | PR #44 遗留的“稳定 Finding 投影字段”已落地为 `Finding.call_path`：`CallPathStep` 公共契约、`findings.call_path` NOT NULL 列与迁移 0018、Python/TS 绑定；`vulnweaver_pair.build_call_path_steps` 为纯函数投影（仅取 `call` 边、经节点→函数映射解析二进制指令节点、去重并上限 64），静态投影与语义审计两处 Finding 构造点分别经一次共享邻域读取填充；持久化读写对称（`_canonical_finding` 规范化，避免幂等 `create` 自冲突）。三类报告消费：Markdown `### Call path` 段、HTML/PDF `<ul>` 段、SARIF `codeFlows[].threadFlows[].locations`（源码步骤为 path:line，二进制步骤为 `binary://0x…`）。同时修复 PairEdge 行映射未做枚举转换（`type` 读回为裸字符串，`is` 比较静默丢失全部调用边）。既有严重等级/修复建议/证据摘要/crash stack 能力保留 | 真实报告 Job 端到端（生成含调用路径的 Markdown/PDF/SARIF 并经 API 下载）与独立 SARIF Schema 校验留待部署环境执行 | 2026-09-10 |
 | T35 主分支全链路接线修复 | 已完成 | Codex（`codex/fix-main-review`） | PLANNING/REVIEW/AUDIT 共用产品模型配置；源码无静态扫描器与二进制导入均会进入语义基线；动态 Job 创建后重新聚合；默认 Markdown 在结算前自动投递；源码 Harness 读取有界摘录并走生成→沙箱编译→安全解包→Fuzz，ELF 直接 Fuzz、PE 明确拒绝；Compose 默认回环暴露 Web 并透传摘要；前端 WebSocket 补事件后重连，人工复核可选结果并显示历史 | 真实 PLANNING 模型 + AFL/Proof 固定镜像的动态 E2E 仍属部署验收，不影响代码任务完成 | 2026-09-10 |
-| T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
+| T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`，PR #49 已合并） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
@@ -169,7 +169,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
-| 2026-09-10 | T36 Web 设置默认页与界面现代化改版（`feat/web-settings-first-modernization`） | Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 0 错误 0 警告、`vite build` 成功；以临时 Mock API（契约同形数据，存系统临时目录不入库）+ 浏览器采集 17 张页面截图（桌面设置/项目/任务/认证三变体 + 移动端两张），两路 judge 视觉验收 16/17 通过，修复移动端导航胶囊拉伸后复核通过 | 部署环境重建 Web 镜像后的真实浏览器回归待执行；分支未推送，是否合并/发 PR 待用户确认 |
+| 2026-09-10 | T36 Web 设置默认页与界面现代化改版（`feat/web-settings-first-modernization`，PR #49 已合并入 `main` `50fcbca`） | Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 0 错误 0 警告、`vite build` 成功；以临时 Mock API（契约同形数据，存系统临时目录不入库）+ 浏览器采集 17 张页面截图（桌面设置/项目/任务/认证三变体 + 移动端两张）经 judge 视觉验收全部通过；CI Python quality gate 通过 | 部署环境重建 Web 镜像后的真实浏览器回归待执行；远程分支 `origin/feat/web-settings-first-modernization` 保留未删（删远程分支需用户确认） |
 | 2026-09-10 | Q-015/Q-016 修复（`fix/fresh-deploy-defaults`）：沙箱客户端超时默认值回归、工件卷属主竞争 | `docker compose config --quiet` 通过，依赖关系核对无误（api/analysis-worker/sandbox-runner → artifact-init，orchestrator 不受影响）；**删卷重建实测**：`down -v` 后 `up -d`，`artifact-init` exit 0、11 个容器全部 Up、`analysis-worker` 稳定（此前必崩溃循环）、工件卷 `.staging`/`.objects`/`.uploads` 属主均为 10001；Web `200`、`/health/ready` ready、`/api/auth/installation` `registration_open: true`（空库） | 无 |
 | 2026-09-10 | Q-014 沙箱客户端超时默认值修正（`compose.yaml` / `.env.example`：60s → 660s） | 实时栈实测：60s 时 `binary-import` 在任务批准后精确 61s 失败（`ToolExecutionError`），沙箱容器在 Job 失败后仍在运行；置为 600s 后同一 PE 样本的 `import` Job `succeeded`，任务走完 `validating→analyzing→reporting→completed`（`result=partial`，产出 3 个工件版本） | 长耗时工具接入时按最长工具超时复核该默认值 |
 | 2026-09-10 | Q-010~Q-013 修复（`fix/budget-and-orchestration-resilience`，基于 main `0098798`，已合并入 `main` `bf956b6`）：项目预算一致性、Task 失败可见性、队列韧性、proof/fuzz 预算方向 | 见下方验证记录；ADR-023/024 已新增；契约 `--check` 无漂移 | 由用户以浏览器走通「新建项目（默认预算）→ 提交 PE 任务」；已存在项目的预算需重建或修正（无更新端点）；是否推送 / 开 PR 待用户确认 |
