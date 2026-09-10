@@ -412,6 +412,7 @@ class AnalysisJobExecutor:
         proof: JobExecutor | None = None,
         report: JobExecutor | None = None,
         semantic_audit: JobExecutor | None = None,
+        fuzz: JobExecutor | None = None,
     ) -> None:
         self._source = source
         self._static = static
@@ -420,6 +421,7 @@ class AnalysisJobExecutor:
         self._proof = proof
         self._report = report
         self._semantic_audit = semantic_audit
+        self._fuzz = fuzz
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is JobKind.REVIEW:
@@ -442,6 +444,16 @@ class AnalysisJobExecutor:
                     retryable=False,
                 )
             return await self._semantic_audit.execute(job, cancellation)
+        if job["kind"] is JobKind.FUZZ:
+            if self._fuzz is None:
+                return _failed_result(
+                    job["id"],
+                    code="fuzz.executor_unconfigured",
+                    kind=FailureKind.DEPENDENCY,
+                    message="fuzz executor is not configured",
+                    retryable=False,
+                )
+            return await self._fuzz.execute(job, cancellation)
         if job["kind"] in {JobKind.PROOF, JobKind.EXPLOIT}:
             if self._proof is None:
                 return _failed_result(
