@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 479 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
+- **当前阶段**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 487 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移（与 origin/main PR #55-#58 合并后复验）；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
 - **当前分支**：`dev`（自 `main@c3f571d` 新建，已 rebase 至 `origin/main@0f1df82`，随后整体推送）
 - **当前负责人**：Codex（T38）
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
