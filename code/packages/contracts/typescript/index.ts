@@ -61,6 +61,10 @@ export interface CrashRecord {
   created_at: string;
 }
 
+export interface HarnessSource {
+  source: string;
+}
+
 export interface FuzzRequest {
   schema_version: SchemaVersion;
   id: Identifier;
@@ -470,6 +474,14 @@ export interface DataflowStep {
   order: number;
 }
 
+export interface CallPathStep {
+  relation: "target" | "caller" | "callee";
+  function_name: string;
+  path: string | null;
+  line: number | null;
+  address: number | null;
+}
+
 export interface NetworkPolicy {
   access: NetworkAccess;
   allowed_hosts: Array<string>;
@@ -588,6 +600,7 @@ export interface Finding {
   confidence: number;
   location: FindingLocation;
   dataflow: Array<DataflowStep>;
+  call_path: Array<CallPathStep>;
   status: FindingStatus;
   evidence_ids: Array<Identifier>;
   review_ids: Array<Identifier>;

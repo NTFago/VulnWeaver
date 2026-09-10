@@ -21,6 +21,7 @@ from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError
 from vulnweaver_contracts import (
     AgentRun,
     ArtifactKind,
+    CallPathStep,
     Evidence,
     EvidenceRelation,
     EvidenceStrength,
@@ -35,7 +36,9 @@ from vulnweaver_contracts import (
     JobRequestedEvent,
     JobStatus,
     JsonObject,
+    PairEdge,
     PairFunction,
+    PairNode,
     ResourceBudget,
     RetryPolicy,
     RunStatus,
@@ -47,6 +50,7 @@ from vulnweaver_contracts import (
     WorkerResult,
 )
 from vulnweaver_model_gateway import ModelCallResult, ModelGatewayError, ModelTier
+from vulnweaver_pair import build_call_path_steps
 from vulnweaver_persistence import Database, Repositories
 
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
@@ -292,12 +296,14 @@ class SemanticAuditor:
         async with self._database.transaction() as repositories:
             for candidate in candidates:
                 finding = candidate
-                location = await _resolve_location(
+                anchor = await _resolve_location(
                     repositories, job, source_version_id, binary_version_id, finding
                 )
-                if location is None:
+                if anchor is None:
                     dropped += 1
                     continue
+                location = anchor.location
+                call_path = await _call_path(repositories, anchor)
                 cwe_id = str(finding["cwe_id"])
                 finding_id = _stable_id("finding", job["task_id"], cwe_id, _canonical(location))
                 evidence_id = _stable_id("evidence", run_id, cwe_id, _canonical(location))
@@ -307,7 +313,7 @@ class SemanticAuditor:
                     )
                 )
                 await repositories.findings.upsert_candidate(
-                    _finding(finding_id, job, finding, location)
+                    _finding(finding_id, job, finding, location, call_path)
                 )
                 await repositories.findings.link_evidence(
                     FindingEvidence(
@@ -388,6 +394,7 @@ def _finding(
     job: Job,
     finding: JsonObject,
     location: JsonObject,
+    call_path: list[CallPathStep],
 ) -> Finding:
     return Finding(
         schema_version=SchemaVersion.VALUE_1_0_0,
@@ -400,6 +407,7 @@ def _finding(
         confidence=0.4,
         location=cast(SourceLocation, location),
         dataflow=[],
+        call_path=call_path,
         status=FindingStatus.CANDIDATE,
         evidence_ids=[],
         review_ids=[],
@@ -409,13 +417,22 @@ def _finding(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _Anchor:
+    """An accepted model finding resolved onto the immutable PAIR index."""
+
+    location: JsonObject
+    function: PairFunction
+    artifact_version_id: str
+
+
 async def _resolve_location(
     repositories: Repositories,
     job: Job,
     source_version_id: str,
     binary_version_id: str,
     finding: JsonObject,
-) -> JsonObject | None:
+) -> _Anchor | None:
     """Anchor a model finding onto the immutable PAIR index or drop it."""
     address = finding.get("address")
     if address is not None:
@@ -423,8 +440,16 @@ async def _resolve_location(
             return None
         functions = await repositories.pair.functions_at_address(binary_version_id, address)
         anchor = functions[0] if functions else None
-        location = anchor["binary_location"] if anchor else None
-        return cast(JsonObject, dict(location)) if location is not None else None
+        if anchor is None:
+            return None
+        location = anchor["binary_location"]
+        if location is None:
+            return None
+        return _Anchor(
+            location=cast(JsonObject, dict(location)),
+            function=anchor,
+            artifact_version_id=binary_version_id,
+        )
     start_line = finding["start_line"]
     functions = await repositories.pair.functions_at_location(
         source_version_id,
@@ -437,7 +462,24 @@ async def _resolve_location(
     source = anchor["source_location"]
     if source is None:
         return None
-    return cast(JsonObject, dict(source))
+    return _Anchor(
+        location=cast(JsonObject, dict(source)),
+        function=anchor,
+        artifact_version_id=source_version_id,
+    )
+
+
+async def _call_path(repositories: Repositories, anchor: _Anchor) -> list[CallPathStep]:
+    """Project the anchored function's immediate callers and callees."""
+    neighborhood = await repositories.pair.neighborhood(
+        anchor.artifact_version_id, anchor.function["id"], depth=1
+    )
+    return build_call_path_steps(
+        cast(list[PairFunction], neighborhood["functions"]),
+        cast(list[PairNode], neighborhood["nodes"]),
+        cast(list[PairEdge], neighborhood["edges"]),
+        anchor.function["id"],
+    )
 
 
 def _category(cwe_id: str) -> FindingCategory:

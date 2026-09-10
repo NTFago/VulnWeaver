@@ -24,6 +24,7 @@ def test_markdown_report_references_evidence_without_embedding_logs() -> None:
             "confidence": 0.9,
             "location": {"path": "main.py", "line": 3},
             "dataflow": [],
+            "call_path": [],
             "status": "confirmed",
             "evidence_ids": ["evidence:1"],
             "review_ids": ["review:1"],
@@ -53,6 +54,7 @@ def test_markdown_renders_evidence_artifact_and_crash_summary() -> None:
             "confidence": 0.9,
             "location": {"path": "main.py", "line": 3},
             "dataflow": [],
+            "call_path": [],
             "status": "confirmed",
             "evidence_ids": [],
             "review_ids": [],
@@ -87,3 +89,84 @@ def test_markdown_renders_evidence_artifact_and_crash_summary() -> None:
     report = build_markdown([finding], evidence=evidence)  # type: ignore[arg-type]
     assert "cas://minimized-input" in report
     assert "Crash stack" in report
+
+
+def test_markdown_renders_the_projected_call_path() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:call-path",
+            "task_id": "task:1",
+            "category": "memory_corruption",
+            "cwe_id": "CWE-120",
+            "title": "Overflow",
+            "severity": "critical",
+            "confidence": 0.8,
+            "location": {"path": "src/app.c", "line": 10},
+            "dataflow": [],
+            "call_path": [
+                {
+                    "relation": "target",
+                    "function_name": "handler",
+                    "path": "src/app.c",
+                    "line": 10,
+                    "address": None,
+                },
+                {
+                    "relation": "caller",
+                    "function_name": "main",
+                    "path": "src/main.c",
+                    "line": 3,
+                    "address": None,
+                },
+                {
+                    "relation": "callee",
+                    "function_name": "win_copy",
+                    "path": None,
+                    "line": None,
+                    "address": 0x401000,
+                },
+            ],
+            "status": "confirmed",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "Fix it",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    report = build_markdown([finding])
+
+    assert "### Call path" in report
+    assert "`target` handler (`src/app.c:10`)" in report
+    assert "`caller` main (`src/main.c:3`)" in report
+    assert "`callee` win_copy (`0x401000`)" in report
+
+
+def test_markdown_omits_the_call_path_section_when_empty() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:no-path",
+            "task_id": "task:1",
+            "category": "injection",
+            "cwe_id": "CWE-078",
+            "title": "Injection",
+            "severity": "high",
+            "confidence": 0.9,
+            "location": {"path": "main.py", "line": 3},
+            "dataflow": [],
+            "call_path": [],
+            "status": "confirmed",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "Fix it",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert "### Call path" not in build_markdown([finding])

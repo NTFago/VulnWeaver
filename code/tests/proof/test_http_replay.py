@@ -185,6 +185,7 @@ async def _seed(database_url: str) -> None:
                             "end_column": 10,
                         },
                         "dataflow": [],
+                        "call_path": [],
                         "status": status,
                         "evidence_ids": [],
                         "review_ids": [],

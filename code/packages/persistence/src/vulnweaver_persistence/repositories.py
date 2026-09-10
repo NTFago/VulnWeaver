@@ -33,6 +33,7 @@ from vulnweaver_contracts import (
     JobStatus,
     Lease,
     PairEdge,
+    PairEdgeType,
     PairFunction,
     PairNode,
     PairRaw,
@@ -1338,10 +1339,7 @@ class FindingRepository:
 
     async def create(self, finding: Finding) -> Finding:
         validate_contract("Finding", finding)
-        canonical = cast(
-            Finding,
-            {**finding, "created_at": _canonical_timestamp(finding["created_at"])},
-        )
+        canonical = _canonical_finding(finding)
         values = {
             **canonical,
             "schema_version": str(canonical["schema_version"]),
@@ -1376,10 +1374,7 @@ class FindingRepository:
                 "candidate upsert only accepts candidate findings",
                 details={"finding_id": finding["id"]},
             )
-        canonical = cast(
-            Finding,
-            {**finding, "created_at": _canonical_timestamp(finding["created_at"])},
-        )
+        canonical = _canonical_finding(finding)
         values = {
             **canonical,
             "schema_version": str(canonical["schema_version"]),
@@ -2183,6 +2178,24 @@ def _task_from_row(row: RowMapping) -> Task:
     )
 
 
+def _canonical_finding(finding: Finding) -> Finding:
+    """Return the canonical in-memory shape of a Finding.
+
+    ``call_path`` is projected for every candidate, so it is a required contract
+    field and the stored row always carries it. Normalizing here keeps the
+    idempotent ``create`` comparison identical to the row it just wrote.
+    """
+
+    return cast(
+        Finding,
+        {
+            **finding,
+            "call_path": finding["call_path"],
+            "created_at": _canonical_timestamp(finding["created_at"]),
+        },
+    )
+
+
 def _finding_from_row(row: RowMapping) -> Finding:
     return Finding(
         schema_version=row["schema_version"],
@@ -2195,6 +2208,7 @@ def _finding_from_row(row: RowMapping) -> Finding:
         confidence=float(row["confidence"]),
         location=row["location"],
         dataflow=row["dataflow"],
+        call_path=row["call_path"],
         status=FindingStatus(row["status"]),
         evidence_ids=row["evidence_ids"],
         review_ids=row["review_ids"],
@@ -2317,7 +2331,7 @@ def _pair_edge_from_row(row: RowMapping) -> PairEdge:
         artifact_version_id=row["artifact_version_id"],
         source_node_id=row["source_node_id"],
         target_node_id=row["target_node_id"],
-        type=row["type"],
+        type=PairEdgeType(row["type"]),
         scope=row["scope"],
         confidence=float(row["confidence"]),
         evidence_id=row["evidence_id"],
