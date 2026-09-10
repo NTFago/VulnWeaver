@@ -29,8 +29,8 @@ class SandboxRunnerClient:
                 endpoint = f"{self._url.rsplit('/', 2)[0]}/tools/{tool_name}/{tool_version}"
                 response = await client.get(endpoint)
             response.raise_for_status()
-            payload = response.json()
-            digest = payload.get("image_digest") if isinstance(payload, dict) else None
+            payload = cast(dict[str, object], response.json())
+            digest = payload.get("image_digest")
             return digest if isinstance(digest, str) and digest.startswith("sha256:") else None
         except (httpx.HTTPError, ValueError, TypeError):
             return None

@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
+    ArtifactKind,
     BinaryBasicBlock,
     BinaryFunction,
     BinaryImport,
@@ -27,6 +29,7 @@ from vulnweaver_contracts import (
     BinaryXref,
     BinaryXrefType,
     JsonObject,
+    ResourceBudget,
     SandboxRequest,
     SandboxResult,
     SchemaVersion,
@@ -91,7 +94,14 @@ class BinaryFactsAdapter:
 
     name = "binary-facts"
 
-    def __init__(self, sandbox: BinaryFactsSandbox, store, *, image_digest: str, input_ref: str):
+    def __init__(
+        self,
+        sandbox: BinaryFactsSandbox,
+        store: LocalContentAddressedStore,
+        *,
+        image_digest: str,
+        input_ref: str,
+    ):
         self._sandbox = sandbox
         self._store = store
         self._image_digest = image_digest
@@ -110,7 +120,7 @@ class BinaryFactsAdapter:
             tool_name="binary-facts",
             tool_version="1.0.0",
             image_digest=self._image_digest,
-            artifact_kind=metadata.format,
+            artifact_kind=cast(ArtifactKind, metadata.format),
             input_ref=self._input_ref,
             arguments={
                 "max_functions": limits.max_functions,
@@ -118,7 +128,7 @@ class BinaryFactsAdapter:
                 "max_pseudocode_functions": limits.max_pseudocode_functions,
             },
             output_file_names=["binary-facts.json"],
-            resource_budget=_sandbox_budget(limits),
+            resource_budget=cast(ResourceBudget, _sandbox_budget(limits)),
             timeout_seconds=min(600, max(1, int(limits.command_timeout_seconds))),
         )
         result = await self._sandbox.run(request, cancellation)

@@ -84,7 +84,7 @@ def build_app():
         root=sandbox_root,
     )
     token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None
-    registered_digests = {}
+    registered_digests: dict[tuple[str, str], str] = {}
     if binary_digest:
         registered_digests[("binary-facts", "1.0.0")] = binary_digest
     if proof_digest:
