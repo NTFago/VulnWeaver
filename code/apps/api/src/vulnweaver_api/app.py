@@ -1083,14 +1083,14 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
     }
     parsed = ProductSettingsBody.model_validate({"schema_version": "1.0.0", **public_values})
     stored_tier_keys = values.get("tier_api_keys")
-    configured = (
-        {
-            tier: isinstance(stored_tier_keys, dict) and tier in stored_tier_keys
-            for tier in _TIER_NAMES
-        }
+    stored_key_map: dict[str, object] = (
+        {str(k): v for k, v in cast(dict[str, object], stored_tier_keys).items()}
         if isinstance(stored_tier_keys, dict)
-        else dict.fromkeys(_TIER_NAMES, False)
+        else {}
     )
+    configured: dict[str, bool] = {
+        tier: tier in stored_key_map for tier in _TIER_NAMES
+    }
     return ProductSettingsResponse(
         review_model_base_url=parsed.review_model_base_url,
         review_model_name=parsed.review_model_name,

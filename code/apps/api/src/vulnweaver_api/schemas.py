@@ -123,7 +123,7 @@ class ProductSettingsBody(StrictModel):
     angr_enabled: bool | None = None
     model_tiers: ModelTiersModel = Field(default_factory=ModelTiersModel)
     tier_api_keys: TierApiKeysModel = Field(default_factory=TierApiKeysModel)
-    clear_tier_api_keys: list[TierName] = Field(default_factory=list)
+    clear_tier_api_keys: list[str] = Field(default_factory=list)
 
 
 class ProductSettingsResponse(StrictModel):
@@ -142,7 +142,7 @@ class ProductSettingsResponse(StrictModel):
     fuzz_runner_timeout_seconds: int
     angr_enabled: bool | None
     model_tiers: ModelTiersModel
-    tier_api_keys_configured: dict[TierName, bool]
+    tier_api_keys_configured: dict[str, bool]
 
 
 class PasswordChangeRequest(StrictModel):

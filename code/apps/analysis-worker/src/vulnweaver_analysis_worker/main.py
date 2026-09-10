@@ -7,9 +7,10 @@ import logging
 import os
 import signal
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import FrameType
-from typing import Any
+from typing import Any, cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
@@ -37,6 +38,7 @@ from vulnweaver_model_gateway import (
     ModelGatewaySettings,
     ModelRoute,
     ModelTier,
+    ThinkingConfig,
 )
 from vulnweaver_orchestrator import (
     CriticalLogicConfirmer,
@@ -310,33 +312,35 @@ def _model_executors(
     store: LocalContentAddressedStore,
     product_settings: dict[str, object],
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
-    base_url = str(product_settings.get("review_model_base_url", "")).strip()
-    model = str(product_settings.get("review_model_name", "")).strip()
-    if not base_url and not model:
-        return ReviewJobExecutor(None), None, None
-    if not base_url or not model:
-        raise RuntimeError(
-            "REVIEW_MODEL_BASE_URL and REVIEW_MODEL_NAME must be configured together"
-        )
-    stored_api_key = product_settings.get("review_model_api_key")
-    if stored_api_key is not None and not isinstance(stored_api_key, str):
-        raise RuntimeError("stored review model API key is invalid")
-    endpoint = ModelEndpoint(
-        name="review-model",
-        base_url=base_url,
-        # The configured product model serves both the REVIEW and AUDIT tiers
-        # until dedicated audit-model settings exist.
-        models={ModelTier.REVIEW: model, ModelTier.AUDIT: model},
-        api_key=stored_api_key,
-        timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
-        max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
+    """Build one gateway with an independent endpoint per configured tier.
+
+    Resolution per tier: ``model_tiers.<tier>`` (full protocol/thinking/context
+    support), then the legacy review fields (which historically served REVIEW
+    and AUDIT). Tiers without any configuration get no route; calls on them
+    fail structurally instead of silently using another tier's model.
+    """
+
+    tier_settings = product_settings.get("model_tiers")
+    tiers: dict[str, object] = (
+        dict(cast(Mapping[str, object], tier_settings))
+        if isinstance(tier_settings, dict)
+        else {}
     )
+    tier_keys = product_settings.get("tier_api_keys")
+    api_keys: dict[str, object] = (
+        dict(cast(Mapping[str, object], tier_keys)) if isinstance(tier_keys, dict) else {}
+    )
+
+    routes: dict[ModelTier | str, ModelRoute] = {}
+    for tier in ModelTier:
+        endpoint = _tier_endpoint(tier, tiers, api_keys, product_settings)
+        if endpoint is not None:
+            routes[tier] = ModelRoute(primary=endpoint)
+    if not routes:
+        return ReviewJobExecutor(None), None, None
     gateway = ModelGateway(
         ModelGatewaySettings(
-            routes={
-                ModelTier.REVIEW: ModelRoute(primary=endpoint),
-                ModelTier.AUDIT: ModelRoute(primary=endpoint),
-            },
+            routes=routes,
             proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
             max_repair_attempts=_setting_int(
                 product_settings, "review_model_repair_attempts", 1
@@ -353,6 +357,84 @@ def _model_executors(
         SemanticAuditJobExecutor(database, auditor),
         gateway,
     )
+
+
+def _tier_endpoint(
+    tier: ModelTier,
+    tiers: dict[str, object],
+    api_keys: dict[str, object],
+    product_settings: dict[str, object],
+) -> ModelEndpoint | None:
+    raw_config = tiers.get(tier.value)
+    tier_config: Mapping[str, object] = (
+        cast(Mapping[str, object], raw_config) if isinstance(raw_config, dict) else {}
+    )
+    if str(tier_config.get("base_url", "")).strip() and str(
+        tier_config.get("model_name", "")
+    ).strip():
+        stored_key = api_keys.get(tier.value)
+        if stored_key is not None and not isinstance(stored_key, str):
+            raise RuntimeError(f"stored {tier.value} model API key is invalid")
+        timeout = _config_float(tier_config, "timeout_seconds") or _setting_float(
+            product_settings, "review_model_timeout_seconds", 60
+        )
+        attempts = _config_int(tier_config, "max_attempts") or _setting_int(
+            product_settings, "review_model_max_attempts", 2
+        )
+        thinking_budget = _config_int(tier_config, "thinking_budget_tokens")
+        thinking_mode = str(tier_config.get("thinking_mode") or "off")
+        return ModelEndpoint(
+            name=f"{tier.value}-model",
+            base_url=str(tier_config["base_url"]).strip().rstrip("/"),
+            models={tier: str(tier_config["model_name"]).strip()},
+            api_key=stored_key,
+            timeout_seconds=timeout,
+            max_attempts=attempts,
+            protocol=str(tier_config.get("protocol") or "openai"),
+            context_window_tokens=_config_int(tier_config, "context_window_tokens"),
+            thinking=ThinkingConfig(
+                mode=thinking_mode,
+                budget_tokens=thinking_budget if thinking_mode == "custom" else None,
+            )
+            if thinking_mode != "off"
+            else None,
+        )
+
+    # Legacy fallback: the review fields served REVIEW and AUDIT before
+    # per-tier settings existed.
+    if tier not in {ModelTier.REVIEW, ModelTier.AUDIT}:
+        return None
+    base_url = str(product_settings.get("review_model_base_url", "")).strip()
+    model = str(product_settings.get("review_model_name", "")).strip()
+    if not base_url and not model:
+        return None
+    if not base_url or not model:
+        raise RuntimeError(
+            "REVIEW_MODEL_BASE_URL and REVIEW_MODEL_NAME must be configured together"
+        )
+    stored_api_key = product_settings.get("review_model_api_key")
+    if stored_api_key is not None and not isinstance(stored_api_key, str):
+        raise RuntimeError("stored review model API key is invalid")
+    return ModelEndpoint(
+        name="review-model",
+        base_url=base_url,
+        models={tier: model},
+        api_key=stored_api_key,
+        timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
+        max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
+    )
+
+
+def _config_int(config: Mapping[str, object], key: str) -> int:
+    value = config.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _config_float(config: Mapping[str, object], key: str) -> float:
+    value = config.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def _setting_int(settings: dict[str, object], name: str, default: int) -> int:
