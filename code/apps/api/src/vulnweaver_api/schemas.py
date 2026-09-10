@@ -109,10 +109,12 @@ class ProductSettingsBody(StrictModel):
     schema_version: Literal["1.0.0"] = "1.0.0"
     review_model_base_url: str = Field(default="", max_length=2048)
     review_model_name: str = Field(default="", max_length=256)
+    # These bounds mirror the model gateway's own validation. Accepting a wider range stores a
+    # value the worker rejects when it builds its gateway, which leaves every job unprocessed.
     review_model_timeout_seconds: float = Field(default=60, ge=1, le=600)
-    review_model_max_attempts: int = Field(default=2, ge=1, le=10)
-    review_model_repair_attempts: int = Field(default=1, ge=0, le=5)
-    review_model_min_interval_seconds: float = Field(default=0, ge=0, le=3600)
+    review_model_max_attempts: int = Field(default=2, ge=1, le=8)
+    review_model_repair_attempts: int = Field(default=1, ge=0, le=3)
+    review_model_min_interval_seconds: float = Field(default=0, ge=0, le=60)
     review_model_api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     clear_review_model_api_key: bool = False
     tool_image_digests: ToolImageDigestsModel = Field(default_factory=ToolImageDigestsModel)

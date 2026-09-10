@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from vulnweaver_api import ApiSettings, create_app
 from vulnweaver_api.budgets import (
+    DEFAULT_MODEL_TOKENS,
     MINIMUM_DYNAMIC_RUNS,
     RESOURCE_BUDGET_KEYS,
     minimum_resource_budget,
@@ -47,6 +48,10 @@ def test_omitted_budget_defaults_to_the_shipped_floor(
         assert resolved[key] >= floor[key]
     # Dynamic execution is a first-class capability, so the default must leave runs available.
     assert resolved["max_dynamic_runs"] >= MINIMUM_DYNAMIC_RUNS
+    # Model-driven stages (semantic audit, review, planning) are not represented by a ToolSpec,
+    # so a default derived only from the specs would leave them without any model budget.
+    assert resolved["max_model_tokens"] >= DEFAULT_MODEL_TOKENS
+    assert DEFAULT_MODEL_TOKENS > 0
 
 
 def test_budget_below_the_shipped_floor_is_rejected(

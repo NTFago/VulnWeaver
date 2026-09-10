@@ -32,6 +32,12 @@ RESOURCE_BUDGET_KEYS: tuple[str, ...] = (
 # so the default budget must leave at least one run available or those jobs cannot start.
 MINIMUM_DYNAMIC_RUNS = 1
 
+# The shipped ToolSpecs declare no model tokens because the tools themselves call no model.
+# The pipeline stages that do — semantic audit, independent review, reverse planning, exploit
+# and harness generation — are not represented by a ToolSpec, so deriving the default purely
+# from the specs would leave every one of them failing with "model_budget_exhausted".
+DEFAULT_MODEL_TOKENS = 100_000
+
 
 def minimum_resource_budget(registry: ToolRegistry | None) -> ResourceBudget | None:
     """Return the smallest budget that can run every registered tool.
@@ -68,7 +74,11 @@ def resolve_project_budget(
             )
         resolved = cast(
             ResourceBudget,
-            {**floor, "max_dynamic_runs": max(floor["max_dynamic_runs"], MINIMUM_DYNAMIC_RUNS)},
+            {
+                **floor,
+                "max_dynamic_runs": max(floor["max_dynamic_runs"], MINIMUM_DYNAMIC_RUNS),
+                "max_model_tokens": max(floor["max_model_tokens"], DEFAULT_MODEL_TOKENS),
+            },
         )
     else:
         resolved = requested
