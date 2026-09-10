@@ -53,7 +53,7 @@
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
 | T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed | 二进制伪代码侧在 T26 Ghidra 主管线接通后复用同一审计链路；AuditPlan-NO_FINDINGS 聚合门禁已落地（`feat/audit-plan-gate`）；真实模型端到端验收 | 2026-09-10 |
 | T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器，返回分数与证据关键词；已在 Dev Container 通过定向测试 | 接入 PAIR 持久化、LLM 确认、API 与前端展示 | 2026-09-10 |
-| T31 漏洞自动利用智能体 | 进行中 | Codex | 新增自动生成脚本内容安全校验器，拒绝持久化、横向移动和外部网络行为并限制大小；Dev Container 定向测试通过 | 接入模型生成、脚本工件登记、Proof Scheduler 自动投递及结果证据链 | 2026-09-10 |
+| T31 漏洞自动利用智能体 | 待验证 | Codex（`feat/t31-auto-exploit`） | 新增 `ExploitScript` 公共契约与 `AutoExploitScheduler`：复核结算后对 confirmed 且项目开启利用验证的 Finding 自动投递 EXPLOIT Job（幂等，未确认/未开启自动跳过）；`ExploitScriptGenerator` 执行期按 Finding 事实调用 PLANNING 档模型生成脚本，经 `validate_generated_script` 安全红线校验后登记为输入工件的派生版本（可追溯 produced_by/parent），再走既有沙箱 Proof 链路并落 Poc 证据链；5 项新测试覆盖投递门禁、生成执行全链、危险脚本拒绝、钩子自动投递。全量 370 passed | 真实模型端到端（配置 `PROOF_TOOL_IMAGE_DIGEST` + 模型后对教学样本验收） | 2026-09-10 |
 | T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex | 新增不执行命令的有界 harness 编译—诊断—修正循环抽象，支持结构化诊断与预算耗尽结果；Dev Container 定向测试待提交前复核 | 接入 LLM harness 生成、Sandbox 编译执行、fuzz Job 自动调度和 Finding 证据挂接 | 2026-09-10 |
 | T33 前端逆向工作台与人工复核 | 待验证 | Codex | 任务页新增「函数与调用链」工作台：函数列表点击选中、caller/callee 双列联动跳转、二进制伪代码代码视图；新增「智能体运行轨迹」区（模型、决策数、token、耗时、失败码）渲染 agent-runs；人工复核与标注入口此前已并入 Finding 详情 | 真实二进制样本浏览器回归验证（依赖 T26 沙箱链路产出伪代码） | 2026-09-10 |
 | T34 报告证据链写实 | 进行中 | Codex | Markdown/HTML(PDF源) 增加证据与复核引用、严重等级/状态；SARIF 增加 fixes 修复建议 | 二进制地址/调用路径/工件摘要明细及真实 PDF/SARIF Schema 验收 | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T31 漏洞自动利用智能体（`feat/t31-auto-exploit`） | 复核结算后自动投递 EXPLOIT Job；执行期模型生成脚本→安全红线校验→派生工件登记→沙箱执行→Poc 证据链；新增 `ExploitScript` 契约；测试 5 项新增，全量 370 passed（ruff/pyright 0 错误、契约 --check 无漂移） | 真实模型端到端验收（需 `PROOF_TOOL_IMAGE_DIGEST` 与产品模型配置） |
 | 2026-09-10 | T33 函数工作台与智能体轨迹渲染（`feat/t33-workbench`） | 任务页新增函数列表→caller/callee 双列联动→伪代码代码视图的工作台，及 agent-runs 轨迹区；svelte-check 0 错误 0 警告、Vite 生产构建成功 | 真实二进制样本浏览器回归（依赖 T26 伪代码产出） |
 | 2026-09-10 | ADR-021 NO_FINDINGS 聚合门禁（`feat/audit-plan-gate`） | 结算钩子从 Job 事实推导 AuditPlan（static_rules/semantic_function_audit），聚合结果为 NO_FINDINGS 且已配置语义审计调度器但必跑基线未完成时，阻断 COMPLETED 迁移并记录 `audit_plan_no_findings_blocked`（含缺失基线与覆盖度）；未配置审计调度器的降级部署保持原行为。新增测试 2 项，Dev Container 全量 365 passed | 真实模型 E2E；阻断时任务停留 ANALYZING 的运维语义随真实环境验收复核 |
 | 2026-09-10 | T29 语义审计智能体源码侧（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job/契约/迁移 0017；静态基线结算后自动调度审计 Job，审计完成才调度独立复核（含模型发现候选）；模型 finding 强制锚定 PAIR 索引防幻觉；新增测试 4 项，Dev Container 全量 363 passed（ruff/pyright 0 错误、契约生成 --check 无漂移，PostgreSQL/Redis 集成环境实跑） | 二进制伪代码审计复用链路待 T26；真实模型 E2E 与 AuditPlan-NO_FINDINGS 聚合门禁待接入 |
@@ -162,12 +163,12 @@
 | 2026-09-10 | T19 AFL++/CASR 镜像回放验收（`feat/t19-afl-replay`） | 构建 `vulnweaver-afl-casr:fixed`（AFL++ 4.33c source-only + clang/gdb）与 `vulnweaver-fuzz-entrypoint`；修复 ASAN_OPTIONS symbolize=0、/tmp noexec（新增 /work exec tmpfs）、showmap 逐文件测量三个问题后，独立 Runner 完成：3000 次执行 30.5s、2 个 SIGABRT 崩溃入 manifest、afl-tmin 最小化输入摘要一致、覆盖率 100%；worker 侧 FuzzExecutionService 校验 FuzzResult succeeded（2 crash_ids）。全量门禁 332 passed / 81.34% | T16 DIE/Ghidra/angr 工具验收待真实环境 |
 | 2026-09-10 | T22 浏览器全链路验收与最终验收报告 | 重建 web 镜像后经浏览器自动化验证：登录、任务页可观测性（状态汇总/Jobs/事件载荷展开）、Finding 详情（复现记录 EXPLOITABLE、Proof/Exploit 入口）、报告下载点击触发下载；验收报告归档 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑回归与 T16/T18/T19/P2 真实环境验收 |
 | 2026-09-10 | T20 全链路 + T21 真实数据库报告回放 | 重建 analysis-worker/api/migrate 镜像（补 `vulnweaver-proof` 依赖、WeasyPrint 系统库），配 `SANDBOX_RUNNER_URL` 后：API 提交 Proof Job 经 Dispatcher/Worker/Runner 全链路成功（Poc `completed/exploitable`）；Markdown/SARIF/PDF 报告 Job 真实数据库回放成功并可经 API 下载；修复报告渲染未纳入 Poc 的问题（Markdown/HTML 现显示 Proof runs）。Dev Container 门禁 329 passed | T22 浏览器全链路收口 |
-| 2026-09-10 | T23 Web 首次注册与产品设置 | 独立网络与 tmpfs PostgreSQL 中 API/迁移/契约 34 passed；Ruff、Pyright、Svelte、Vite build、Compose config 通过；未触碰既有 VulnWeaver 容器/网络/卷 | 合并后在独立 TLS 部署完成浏览器首次启动 E2E |
 
 ## 9. 验证记录
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T31 定向门禁（worktree `feat/t31-auto-exploit`） | 新增 5 项测试（调度门禁×2、生成执行全链、危险脚本拒绝、钩子自动投递）通过；Dev Container 全量 370 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误、契约 --check 无漂移 | 真实模型生成与真实沙箱镜像的端到端回放 |
 | 2026-09-10 | T33 Web 定向门禁（worktree `feat/t33-workbench`） | Dev Container 内 `svelte-check` 0 错误 0 警告；`vite build` 成功（工作台/轨迹区进入产物 bundle） | 浏览器多视口回归与真实伪代码数据展示（依赖 T26） |
 | 2026-09-10 | 审计计划门禁定向测试（worktree `feat/audit-plan-gate`） | 新增 2 项集成测试（阻断与放行/降级兼容）通过；Dev Container 全量 365 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误 | 无 |
 | 2026-09-10 | T29 定向门禁（worktree `feat/t29-semantic-audit`） | Dev Container：`ruff check .` 通过、`pyright` 0 错误、`generate_contracts.py --check` 无漂移；`pytest -q` 全量 363 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），PostgreSQL/Redis 集成环境实跑 | 真实 AUDIT 模型端到端（需在产品设置配置模型后跑源码样本链路）；二进制伪代码审计依赖 T26 |

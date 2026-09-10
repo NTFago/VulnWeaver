@@ -30,6 +30,7 @@ from vulnweaver_contracts import (
 from vulnweaver_domain import evaluate_exploit_eligibility
 from vulnweaver_persistence import Database
 
+from .auto_exploit import AutoExploitError, ExploitScriptGenerator
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 
 
@@ -44,30 +45,48 @@ class ProofExecutionError(ValueError):
 class ProofJobExecutor:
     """Adapt the proof service to the durable Worker execution contract."""
 
-    def __init__(self, database: Database, service: ProofExecutionService) -> None:
+    def __init__(
+        self,
+        database: Database,
+        service: ProofExecutionService,
+        *,
+        script_generator: ExploitScriptGenerator | None = None,
+    ) -> None:
         self._database = database
         self._service = service
+        self._script_generator = script_generator
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] not in {JobKind.PROOF, JobKind.EXPLOIT}:
             return _worker_failure(job, "proof.invalid_job_kind", FailureKind.VALIDATION)
         arguments = job.get("arguments")
         raw_request = arguments.get("proof_request") if isinstance(arguments, dict) else None
-        if not isinstance(raw_request, dict):
-            return _worker_failure(job, "proof.request_required", FailureKind.VALIDATION)
-        request = cast(ProofRequest, raw_request)
+        raw_auto = arguments.get("auto_exploit") if isinstance(arguments, dict) else None
         kind = PocKind.EXPLOIT if job["kind"] is JobKind.EXPLOIT else PocKind.PROOF_OF_CONCEPT
         try:
+            if isinstance(raw_auto, dict):
+                if job["kind"] is not JobKind.EXPLOIT:
+                    return _worker_failure(
+                        job, "proof.auto_requires_exploit_kind", FailureKind.VALIDATION
+                    )
+                request = await self._prepare_auto_request(
+                    job, cast(dict[str, object], raw_auto)
+                )
+            else:
+                if not isinstance(raw_request, dict):
+                    return _worker_failure(job, "proof.request_required", FailureKind.VALIDATION)
+                request = cast(ProofRequest, raw_request)
             # The sandbox call must stay outside any database transaction so a
             # slow runner cannot pin a pooled connection for the whole timeout.
             async with self._database.transaction() as repositories:
                 finding = await repositories.findings.get(request["finding_id"])
+                finding_status = finding["status"]
                 task = await repositories.tasks.get(finding["task_id"])
                 project = await repositories.projects.get(task["project_id"])
-                await ensure_script_ref_belongs_to_project(
-                    repositories, script_ref=request["script_ref"], project_id=project["id"]
-                )
-                finding_status = finding["status"]
+                if not isinstance(raw_auto, dict):
+                    await ensure_script_ref_belongs_to_project(
+                        repositories, script_ref=request["script_ref"], project_id=project["id"]
+                    )
                 exploit_validation_enabled = project["exploit_validation_enabled"]
             poc = await self._service.run(
                 request,
@@ -82,6 +101,8 @@ class ProofJobExecutor:
             return _worker_failure(
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
             )
+        except AutoExploitError as error:
+            return _worker_failure(job, error.code, error.kind, error.code.replace("_", " "))
         except (ProofExecutionError, TypeError, ValueError) as error:
             return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
         status = JobStatus.CANCELLED if poc["status"] is PocStatus.CANCELLED else (
@@ -104,6 +125,47 @@ class ProofJobExecutor:
                 retryable=False,
                 details={},
             ),
+        )
+
+    async def _prepare_auto_request(
+        self,
+        job: Job,
+        auto: dict[str, object],
+    ) -> ProofRequest:
+        """Validate policy, generate and register the script, build the request."""
+        finding_id = auto.get("finding_id")
+        image_digest = auto.get("image_digest")
+        if not isinstance(finding_id, str) or not finding_id:
+            raise AutoExploitError("auto_exploit.finding_id_required", FailureKind.VALIDATION)
+        if not isinstance(image_digest, str) or not image_digest.startswith("sha256:"):
+            raise AutoExploitError("auto_exploit.image_digest_required", FailureKind.VALIDATION)
+        if self._script_generator is None:
+            raise AutoExploitError("auto_exploit.model_unconfigured", FailureKind.DEPENDENCY)
+        async with self._database.transaction() as repositories:
+            finding = await repositories.findings.get(finding_id)
+            task = await repositories.tasks.get(finding["task_id"])
+            project = await repositories.projects.get(task["project_id"])
+            if (
+                finding["status"] is not FindingStatus.CONFIRMED
+                or not project["exploit_validation_enabled"]
+            ):
+                raise AutoExploitError("auto_exploit.policy_denied", FailureKind.POLICY)
+            permission_mode = project["permission_mode"]
+        generated = await self._script_generator.generate(job, finding_id)
+        budget = job["resource_budget"]
+        return cast(
+            ProofRequest,
+            {
+                "schema_version": SchemaVersion.VALUE_1_0_0,
+                "id": f"poc:{job['id']}",
+                "job_id": job["id"],
+                "finding_id": finding_id,
+                "script_ref": generated.script_ref,
+                "image_digest": image_digest,
+                "permission_mode": permission_mode,
+                "resource_budget": dict(budget),
+                "timeout_seconds": min(120, int(budget["timeout_seconds"])),
+            },
         )
 
 
