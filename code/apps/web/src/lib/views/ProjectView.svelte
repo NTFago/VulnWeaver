@@ -1,0 +1,108 @@
+<script lang="ts">
+  import type { Artifact, ArtifactKind, ArtifactVersion, Project, Task } from "@vulnweaver/contracts";
+  import { formatDate, shortId } from "../format";
+  import { taskStatusLabels } from "../i18n";
+
+  /** 项目详情页：样本导入、任务创建与最近任务列表。 */
+
+  export let project: Project;
+  export let artifacts: Artifact[] = [];
+  export let artifactVersions = new Map<string, ArtifactVersion>();
+  export let tasks: Task[] = [];
+  export let busy = false;
+  export let onGoOverview: () => void = () => {};
+  export let onOpenTask: (task: Task) => void = () => {};
+  export let onUpload: (kind: ArtifactKind, file: File) => Promise<boolean> = async () => false;
+  export let onCreateTask: (versionIds: string[]) => Promise<boolean> = async () => false;
+  export let onShowError: (message: string) => void = () => {};
+
+  let uploadKind: ArtifactKind = "source_archive";
+  let uploadFile: File | null = null;
+  let selectedVersionIds: string[] = [];
+
+  function versionFileName(versionId: string): string {
+    return String(artifactVersions.get(versionId)?.generation_config.filename ?? "未命名样本");
+  }
+
+  function toggleVersion(versionId: string): void {
+    selectedVersionIds = selectedVersionIds.includes(versionId)
+      ? selectedVersionIds.filter((id) => id !== versionId) : [...selectedVersionIds, versionId];
+  }
+
+  async function upload(): Promise<void> {
+    if (!uploadFile) {
+      onShowError("请选择要导入的样本");
+      return;
+    }
+    const uploaded = await onUpload(uploadKind, uploadFile);
+    if (uploaded) {
+      uploadFile = null;
+      const input = document.querySelector<HTMLInputElement>("#sample-file");
+      if (input) input.value = "";
+    }
+  }
+
+  async function createTask(): Promise<void> {
+    if (selectedVersionIds.length === 0) {
+      onShowError("请至少选择一个样本");
+      return;
+    }
+    await onCreateTask([...selectedVersionIds]);
+  }
+</script>
+
+<section class="page-heading">
+  <div>
+    <button class="breadcrumb" on:click={onGoOverview}>项目</button>
+    <h1>{project.name}</h1>
+    <p><code class="mono-id">{shortId(project.id)}</code>{project.input_scope.length > 0 ? ` · ${project.input_scope.join(" / ")}` : ""}</p>
+  </div>
+  <span class={`badge ${project.permission_mode === "request_permission" ? "warn" : "ok"}`}>{project.permission_mode === "request_permission" ? "动态执行需许可" : "授权范围内自动执行"}</span>
+</section>
+<section class="split-grid">
+  <section class="panel">
+    <header class="panel-head"><div><h2>导入样本</h2><p>原始工件不可变，登记后生成内容寻址版本。</p></div></header>
+    <div class="upload-box">
+      <label>样本类型<select bind:value={uploadKind}><option value="source_archive">源码压缩包</option><option value="elf">ELF 二进制</option><option value="pe">PE 二进制</option></select></label>
+      <label class="file-picker" for="sample-file">
+        <span>{uploadFile?.name ?? "选择本地样本"}</span>
+        <small>{uploadFile ? `${(uploadFile.size / 1048576).toFixed(2)} MB` : "ZIP / TAR / ELF / PE"}</small>
+      </label>
+      <input id="sample-file" class="visually-hidden" type="file" on:change={(e) => uploadFile = e.currentTarget.files?.[0] ?? null} />
+      <button class="primary block" on:click={upload} disabled={busy || !uploadFile}>导入工件库</button>
+    </div>
+  </section>
+  <section class="panel">
+    <header class="panel-head"><div><h2>创建任务</h2><p>选择一个或多个样本版本投递分析。</p></div></header>
+    {#if artifacts.length === 0}
+      <div class="compact-empty">导入样本后，可在此创建分析任务。</div>
+    {:else}
+      <div class="sample-options">
+        {#each artifacts as artifact (artifact.id)}
+          <label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option">
+            <input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} />
+            <span><b>{versionFileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
+          </label>
+        {/each}
+      </div>
+      <button class="primary block" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务{selectedVersionIds.length > 0 ? `（${selectedVersionIds.length}）` : ""}</button>
+    {/if}
+  </section>
+</section>
+<section class="panel table-panel">
+  <header class="panel-head"><div><h2>最近任务</h2><p>点击进入执行轨迹。</p></div><span class="badge muted">{tasks.length} 条记录</span></header>
+  {#if tasks.length === 0}
+    <div class="compact-empty">暂无执行记录。</div>
+  {:else}
+    <div class="task-list">
+      {#each tasks as task (task.id)}
+        <button on:click={() => onOpenTask(task)}>
+          <span class={`status-dot ${task.status}`}></span>
+          <span class="task-cell"><b>{taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
+          <time>{formatDate(task.updated_at)}</time>
+          <span class="arrow" aria-hidden="true">→</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+</section>
