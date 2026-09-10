@@ -58,7 +58,6 @@ class CriticalLogicConfirmer:
             run_id=f"{run_id}-call",
             messages=_messages(candidates),
             output_contract="CriticalLogicAssessment",
-            max_output_tokens=4096,
         )
         run: dict[str, object] = dict(response.agent_run)
         run["id"] = run_id

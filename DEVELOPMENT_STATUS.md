@@ -170,6 +170,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | 移除模型调用硬编码 token 上限（未提交，main 工作树） | `key_logic.py` 删除 `max_output_tokens=4096`（走网关默认不限）；`readable_pseudocode.py` 的 `min(8192, budget)` 改为沿用 Job 资源预算（预算 0 视为不限，与 `auto_exploit.py` 一致）；确认 `test_readable_pseudocode_hook.py` 预算为 321，断言仍成立。沙箱资源限制与 Job 资源预算机制按安全红线保留 | 受影响的定向测试（`test_critical_logic_confirm.py`、`test_readable_pseudocode_hook.py`）需在 Dev Container 补跑：`pytest tests/binary_analysis -q`（Windows 宿主机 venv 为 Linux 环境，无法执行） |
 | 2026-09-10 | T30 分支全量门禁（worktree `feat/t30-key-logic`） | 合并 T28 基线后 Dev Container 内 `pnpm run check` 通过：ruff、pyright 0 errors/0 warnings，pytest 在 PostgreSQL/Redis 集成环境下 385 passed、5 skipped、覆盖率 81.97%，contracts TypeScript 与 svelte-check 0；`generate_contracts.py --check` 无漂移。5 个跳过均为需真实 Proof/Sandbox Runner 的 opt-in 回放 | 配置 PLANNING 模型和 `BINARY_TOOLS_IMAGE_DIGEST` 后的真实教学 ELF 端到端（候选→确认→PAIR API→前端） |
 | 2026-09-10 | T29 二进制侧定向门禁（worktree `feat/t29-binary-audit`） | 新增二进制锚定测试（伪代码上下文进审计、address 锚定 BinaryLocation、幻觉地址丢弃）通过；全量 377 passed、ruff/pyright 0 错误、契约 --check 无漂移 | 真实模型 + 真实二进制样本端到端 |
 | 2026-09-10 | T28 真实模型可读化回放（一次性容器，真实 Runner+真实模型） | gcc 编译的教学 ELF 经 Sandbox Runner binary-facts（binary-tools:t28 摘要）产出 18 函数/16 段真实 Ghidra 伪代码；混淆判定评估正常执行；DeepSeek 模型返回 4 个可读候选全部通过地址锚定校验（`readable-doc` 含原始摘录/确定性恢复/模型视图）。回放过程中修复并回归：`binary_command_profile` 空 target_addresses 不再产生空 argv 参数；hook 失败码与契约校验详情透出；提示词含小写 json 以兼容 DeepSeek json_object 模式；模型输入边界收紧为 4 函数/16KB 防止输出截断。定向测试/ruff/pyright 全绿 | 真实 OLLVM `fla` 编译产物验收（构建进行中） |
