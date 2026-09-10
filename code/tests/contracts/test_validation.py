@@ -409,3 +409,34 @@ def test_sandbox_request_and_result_contracts_validate_isolated_execution_facts(
             "failure": None,
         },
     )
+
+
+def test_action_plan_proposal_allows_an_empty_completion() -> None:
+    validate_contract(
+        "ActionPlanProposal",
+        {
+            "schema_version": "1.0.0",
+            "steps": [],
+            "rationale": "the objective is already satisfied by prior steps",
+        },
+    )
+
+
+def test_action_plan_proposal_rejects_identity_fields_and_missing_rationale() -> None:
+    with pytest.raises(ContractValidationError):
+        validate_contract(
+            "ActionPlanProposal",
+            {
+                "schema_version": "1.0.0",
+                "id": "plan:00000001",
+                "task_id": "task:00000001",
+                "agent_run_id": "run:00000001",
+                "steps": [],
+                "rationale": "model output must not carry plan identity",
+            },
+        )
+    with pytest.raises(ContractValidationError):
+        validate_contract(
+            "ActionPlanProposal",
+            {"schema_version": "1.0.0", "steps": []},
+        )
