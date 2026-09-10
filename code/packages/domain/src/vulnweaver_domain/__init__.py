@@ -1,6 +1,10 @@
 """VulnWeaver domain rules kept independent from persistence and transport."""
 
 from vulnweaver_domain.aggregation import JobSnapshot, TaskAggregate, aggregate_task
+from vulnweaver_domain.deployment_config import (
+    ResolvedDeploymentConfig,
+    resolve_deployment_config,
+)
 from vulnweaver_domain.idempotency import IdempotencyKeyError, normalize_idempotency_key
 from vulnweaver_domain.policies import (
     ConfirmationContext,
@@ -30,7 +34,9 @@ __all__ = [
     "IllegalTransitionError",
     "JobSnapshot",
     "TaskAggregate",
+    "ResolvedDeploymentConfig",
     "aggregate_task",
+    "resolve_deployment_config",
     "evaluate_confirmation",
     "evaluate_exploit_eligibility",
     "normalize_idempotency_key",
