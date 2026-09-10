@@ -101,6 +101,8 @@ async def _run() -> None:
         angr_enabled=_environment_bool("ANGR_ENABLED", False),
         upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
         pair_importer=BinaryPairImporter(database),
+        sandbox=_binary_sandbox(),
+        sandbox_image_digest=os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None,
     )
     executor = AnalysisJobExecutor(
         source_executor,
@@ -238,6 +240,16 @@ def _proof_executor(database: Database) -> ProofJobExecutor | None:
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
     )
     return ProofJobExecutor(database, service)
+
+
+def _binary_sandbox() -> SandboxRunnerClient | None:
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    return SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
+    )
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:
