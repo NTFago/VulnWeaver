@@ -53,9 +53,7 @@ from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceR
 
 AUDIT_BASELINE = "semantic_function_audit"
 _MAX_FUNCTIONS = 256
-_AUDIT_TOOL = ToolIdentity(
-    name="vulnweaver-semantic-audit", version="1.0.0", image_digest=None
-)
+_AUDIT_TOOL = ToolIdentity(name="vulnweaver-semantic-audit", version="1.0.0", image_digest=None)
 
 
 def default_retry_policy() -> RetryPolicy:
@@ -170,9 +168,7 @@ class SemanticAuditor:
 
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
-        run_id = _stable_id(
-            "agent-run", "semantic-audit", job["id"], str(job["attempt"])
-        )
+        run_id = _stable_id("agent-run", "semantic-audit", job["id"], str(job["attempt"]))
         max_tokens = job["resource_budget"]["max_model_tokens"]
         if max_tokens < 1:
             raise _AuditError("semantic_audit.model_budget_exhausted", FailureKind.POLICY)
@@ -230,9 +226,7 @@ class SemanticAuditor:
                     continue
                 entries.extend(
                     (version_id_value, function)
-                    for function in await repositories.pair.list_functions(
-                    version_id_value
-                )
+                    for function in await repositories.pair.list_functions(version_id_value)
                 )
         entries.sort(key=lambda item: _function_sort_key(item[1]))
         return entries[:_MAX_FUNCTIONS], source_version_id, binary_version_id
@@ -367,21 +361,24 @@ def _evidence(
         exit_code=None,
         stdout_ref=None,
         stderr_ref=None,
-        replay_recipe=cast(JsonObject, {
-            "kind": "semantic_model_audit",
-            "reproducible": False,
-            "agent_run_id": run_id,
-            "baseline": AUDIT_BASELINE,
-            "finding_selector": {
-                "cwe_id": finding["cwe_id"],
-                **(
-                    {"path": finding["path"], "start_line": finding["start_line"]}
-                    if "path" in finding
-                    else {"address": finding["address"]}
-                ),
+        replay_recipe=cast(
+            JsonObject,
+            {
+                "kind": "semantic_model_audit",
+                "reproducible": False,
+                "agent_run_id": run_id,
+                "baseline": AUDIT_BASELINE,
+                "finding_selector": {
+                    "cwe_id": finding["cwe_id"],
+                    **(
+                        {"path": finding["path"], "start_line": finding["start_line"]}
+                        if "path" in finding
+                        else {"address": finding["address"]}
+                    ),
+                },
+                "location": location,
             },
-            "location": location,
-        }),
+        ),
         created_at=_now_from(job),
     )
 
@@ -478,8 +475,6 @@ def _now_from(job: Job) -> str:
     return job["updated_at"]
 
 
-
-
 def _function_sort_key(function: PairFunction) -> tuple[str, int, str]:
     location = function["source_location"]
     return (
@@ -529,9 +524,7 @@ class SemanticAuditJobExecutor:
                 failure=None,
             )
         if self._auditor is None:
-            return _failed(
-                job["id"], "semantic_audit.model_unconfigured", FailureKind.DEPENDENCY
-            )
+            return _failed(job["id"], "semantic_audit.model_unconfigured", FailureKind.DEPENDENCY)
         try:
             outcome = await self._auditor.audit(job)
         except _AuditError as error:

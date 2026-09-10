@@ -15,7 +15,7 @@ export type TaskResult = "success" | "partial" | "no_findings";
 
 export type JobStatus = "pending" | "queued" | "running" | "waiting_permission" | "succeeded" | "failed" | "cancelled";
 
-export type JobKind = "validate" | "import" | "source_analysis" | "semantic_audit" | "binary_analysis" | "review" | "proof" | "exploit" | "report";
+export type JobKind = "validate" | "import" | "source_analysis" | "semantic_audit" | "binary_analysis" | "review" | "fuzz" | "proof" | "exploit" | "report";
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
 

@@ -55,6 +55,7 @@ class JobKind(StrEnum):
     SEMANTIC_AUDIT = 'semantic_audit'
     BINARY_ANALYSIS = 'binary_analysis'
     REVIEW = 'review'
+    FUZZ = 'fuzz'
     PROOF = 'proof'
     EXPLOIT = 'exploit'
     REPORT = 'report'

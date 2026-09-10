@@ -85,9 +85,7 @@ def afl_casr_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> To
                 },
             },
         ),
-        network_policy=cast(
-            NetworkPolicy, {"access": NetworkAccess.NONE, "allowed_hosts": []}
-        ),
+        network_policy=cast(NetworkPolicy, {"access": NetworkAccess.NONE, "allowed_hosts": []}),
         filesystem_policy={
             "input_read_only": True,
             "isolated_output": True,

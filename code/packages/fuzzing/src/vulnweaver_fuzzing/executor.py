@@ -60,9 +60,7 @@ _DEFAULT_MAX_MINIMIZED_INPUT_TOTAL_BYTES = 256 * 1024 * 1024
 
 
 class FuzzSandbox(Protocol):
-    async def run(
-        self, request: SandboxRequest, cancellation: asyncio.Event
-    ) -> SandboxResult: ...
+    async def run(self, request: SandboxRequest, cancellation: asyncio.Event) -> SandboxResult: ...
 
 
 def build_fuzz_input_bundle(
@@ -142,9 +140,7 @@ class FuzzExecutionService:
         self._max_minimized_input_bytes = max_minimized_input_bytes
         self._max_minimized_input_total_bytes = max_minimized_input_total_bytes
 
-    async def run(
-        self, request: FuzzRequest, cancellation: asyncio.Event
-    ) -> FuzzResult:
+    async def run(self, request: FuzzRequest, cancellation: asyncio.Event) -> FuzzResult:
         limits = validate_fuzz_request(request)
         triage = CrashTriageService(limits)
         try:
@@ -546,8 +542,7 @@ def _reject_json_constant(value: str) -> None:
 
 def _safe_member(name: str) -> bool:
     return bool(_SAFE_MEMBER.fullmatch(name)) or (
-        name.startswith(_SEED_PREFIX)
-        and bool(_SAFE_MEMBER.fullmatch(name[len(_SEED_PREFIX) :]))
+        name.startswith(_SEED_PREFIX) and bool(_SAFE_MEMBER.fullmatch(name[len(_SEED_PREFIX) :]))
     )
 
 

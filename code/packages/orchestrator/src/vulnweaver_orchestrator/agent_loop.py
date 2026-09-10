@@ -302,9 +302,7 @@ class AgentLoop:
                     break
                 continue
 
-            decision = self._policy.evaluate(
-                cast(dict[str, object], plan), request.policy_context
-            )
+            decision = self._policy.evaluate(cast(dict[str, object], plan), request.policy_context)
             if decision.status is PolicyDecisionStatus.DENIED:
                 plan_rejections += 1
                 policy_reason_codes = decision.reason_codes
@@ -366,9 +364,7 @@ class AgentLoop:
                 )
 
             feedback = {
-                "last_steps": [
-                    _bound_step(step, budget.max_observation_chars) for step in steps
-                ]
+                "last_steps": [_bound_step(step, budget.max_observation_chars) for step in steps]
             }
 
         if status is None:
@@ -406,9 +402,7 @@ class AgentLoop:
                 "id": request.run_id,
                 "task_id": request.task_id,
                 "status": (
-                    RunStatus.SUCCEEDED
-                    if status is AgentLoopStatus.COMPLETED
-                    else RunStatus.FAILED
+                    RunStatus.SUCCEEDED if status is AgentLoopStatus.COMPLETED else RunStatus.FAILED
                 ),
                 "model": model_label,
                 "prompt_hash": _digest(

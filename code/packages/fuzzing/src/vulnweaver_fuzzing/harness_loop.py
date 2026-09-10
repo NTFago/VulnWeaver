@@ -1,4 +1,5 @@
 """Bounded harness compile/diagnose/repair orchestration primitives."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
