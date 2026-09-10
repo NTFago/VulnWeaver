@@ -718,13 +718,14 @@ export interface ActionPlanProposal {
 }
 
 export interface SemanticAuditFinding {
-  cwe_id: string;
+  cwe_id: Identifier;
   title: string;
   severity: Severity;
-  path: string;
-  start_line: number;
-  end_line?: number;
   rationale: string;
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  address?: number;
 }
 
 export interface SemanticAuditReport {

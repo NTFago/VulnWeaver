@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from sqlalchemy import update
@@ -327,3 +327,97 @@ def _succeeded_result(job_id: str) -> WorkerResult:
         evidence_ids=[],
         failure=None,
     )
+
+
+async def _seed_binary(database: Database, suffix: str) -> tuple[str, str, str]:
+    project_id = f"project:{suffix}"
+    version_id = f"artifact-version:{suffix}"
+    task_id = f"task:{suffix}"
+    artifact_id = f"artifact:{suffix}"
+    async with database.transaction() as repositories:
+        await repositories.projects.add(project(project_id))
+        version = artifact_version(version_id, artifact_id=artifact_id)
+        version["digest"] = "sha256:" + "f" * 64
+        version["object_ref"] = "cas://sha256/" + "f" * 64
+        artifact_row = dict(
+            artifact(f"artifact:{suffix}", project_id=project_id, current_version_id=version_id)
+        )
+        artifact_row["kind"] = "elf"
+        await repositories.artifacts.add(cast(Any, artifact_row))
+        await repositories.artifacts.add_version(version)
+        await repositories.tasks.create(
+            task(
+                task_id,
+                project_id=project_id,
+                artifact_version_ids=[version_id],
+                idempotency_key=f"task-key:{suffix}",
+            )
+        )
+    return task_id, version_id, artifact_id
+
+
+def test_binary_pseudocode_finding_is_anchored_by_address(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        task_id, version_id, artifact_id = await _seed_binary(database, suffix)
+        address = 0x401000
+        async with database.transaction() as repositories:
+            function = pair_function(f"pair-fn:{suffix}", version_id, "src/unused.py")
+            function["source_location"] = None
+            function["binary_location"] = {
+                "artifact_version_id": version_id,
+                "image_base": 0x400000,
+                "virtual_address": address,
+                "file_offset": 0x1000,
+                "instruction_end": address + 16,
+            }
+            function["attributes"] = {
+                "pseudocode": "int handle(void) { char buf[8]; gets(buf); }"
+            }
+            await repositories.pair.import_graph([function], [], [], None, created_at=NOW)
+        model = FakeAuditModel(
+            {
+                "schema_version": "1.0.0",
+                "summary": "binary audit",
+                "findings": [
+                    {
+                        "cwe_id": "CWE-120",
+                        "title": "unchecked buffer copy",
+                        "severity": "high",
+                        "address": address,
+                        "rationale": "gets into stack buffer",
+                    },
+                    {
+                        "cwe_id": "CWE-476",
+                        "title": "ghost dereference",
+                        "severity": "medium",
+                        "address": 0x999999,
+                        "rationale": "hallucinated",
+                    },
+                ],
+            }
+        )
+        generator = SemanticAuditor(
+            database, model, LocalContentAddressedStore(cast(Any, tmp_path))
+        )
+        executor = SemanticAuditJobExecutor(database, generator)
+        audit_job = semantic_job(f"job:audit:{suffix}", task_id)
+        try:
+            result = await executor.execute(audit_job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+            assert len(findings) == 1
+            assert findings[0]["cwe_id"] == "CWE-120"
+            location = findings[0]["location"]
+            assert location["virtual_address"] == address
+            user_payload = model.messages[0][1]["content"]
+            assert "gets into stack buffer" not in user_payload
+            assert "handle" in user_payload
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

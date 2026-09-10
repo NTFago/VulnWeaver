@@ -1083,18 +1083,23 @@
         "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
       }
     },
-    "SemanticAuditFinding": {
+        "SemanticAuditFinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cwe_id", "title", "severity", "path", "start_line", "rationale"],
+      "required": ["cwe_id", "title", "severity", "rationale"],
+      "oneOf": [
+        {"required": ["path", "start_line"]},
+        {"required": ["address"]}
+      ],
       "properties": {
-        "cwe_id": {"type": "string", "pattern": "^CWE-[0-9]{1,4}$"},
+        "cwe_id": {"$ref": "#/$defs/Identifier"},
         "title": {"type": "string", "minLength": 1, "maxLength": 256},
         "severity": {"$ref": "#/$defs/Severity"},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 4096},
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},
         "start_line": {"type": "integer", "minimum": 1},
         "end_line": {"type": "integer", "minimum": 1},
-        "rationale": {"type": "string", "minLength": 1, "maxLength": 4096}
+        "address": {"type": "integer", "minimum": 0}
       }
     },
     "SemanticAuditReport": {
