@@ -126,6 +126,48 @@ class SafeArchiveImporter:
                 details={"filename": filename or "unknown"},
             ) from error
 
+    def read_member(
+        self,
+        source: BinaryIO,
+        path: str,
+        *,
+        filename: str | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Read one validated regular-file member without extracting the archive.
+
+        The archive metadata is validated with the same constraints as ``extract``.
+        Only the requested member is decompressed, which keeps source excerpts
+        bounded when a valid source archive is much larger than one code file.
+        """
+
+        target = self._safe_relative_path(path)
+        if not target.parts or target.as_posix() != path:
+            raise SourceImportError("invalid_archive_path", "archive member path is invalid")
+        member_limit = self._limits.max_file_bytes if max_bytes is None else max_bytes
+        if not 1 <= member_limit <= self._limits.max_file_bytes:
+            raise ValueError("archive member read limit is outside the safe range")
+        archive_bytes = self._stream_size(source)
+        source.seek(0)
+        if zipfile.is_zipfile(source):
+            source.seek(0)
+            return self._read_zip_member(source, target.as_posix(), archive_bytes, member_limit)
+        source.seek(0)
+        try:
+            with tarfile.open(fileobj=source, mode="r:*") as archive:
+                return self._read_tar_member(
+                    archive,
+                    target.as_posix(),
+                    archive_bytes,
+                    member_limit,
+                )
+        except (tarfile.ReadError, EOFError) as error:
+            raise SourceImportError(
+                "unsupported_archive",
+                "source input must be a valid ZIP or TAR archive",
+                details={"filename": filename or "unknown"},
+            ) from error
+
     def _extract_zip(self, source: BinaryIO, root: Path, archive_bytes: int) -> ImportSummary:
         try:
             with zipfile.ZipFile(source) as archive:
@@ -142,6 +184,22 @@ class SafeArchiveImporter:
                     with archive.open(info, "r") as stream:
                         total += self._write_file(root, entry, stream, total)
                 return ImportSummary(ArchiveFormat.ZIP, file_count, total, skipped)
+        except (zipfile.BadZipFile, RuntimeError) as error:
+            raise SourceImportError("invalid_zip", "ZIP archive could not be read") from error
+
+    def _read_zip_member(
+        self, source: BinaryIO, path: str, archive_bytes: int, member_limit: int
+    ) -> bytes:
+        try:
+            with zipfile.ZipFile(source) as archive:
+                entries = [self._zip_entry(info) for info in archive.infolist()]
+                selected, _, _ = self._validate_entries(entries)
+                self._check_archive_ratio(selected, archive_bytes)
+                entry = self._selected_file(selected, path)
+                info = entry.source
+                assert isinstance(info, zipfile.ZipInfo)
+                with archive.open(info, "r") as stream:
+                    return self._read_file(entry, stream, member_limit)
         except (zipfile.BadZipFile, RuntimeError) as error:
             raise SourceImportError("invalid_zip", "ZIP archive could not be read") from error
 
@@ -168,6 +226,25 @@ class SafeArchiveImporter:
             with stream:
                 total += self._write_file(root, entry, stream, total)
         return ImportSummary(ArchiveFormat.TAR, file_count, total, skipped)
+
+    def _read_tar_member(
+        self, archive: tarfile.TarFile, path: str, archive_bytes: int, member_limit: int
+    ) -> bytes:
+        entries = [self._tar_entry(member) for member in archive.getmembers()]
+        selected, _, _ = self._validate_entries(entries)
+        self._check_archive_ratio(selected, archive_bytes)
+        entry = self._selected_file(selected, path)
+        member = entry.source
+        assert isinstance(member, tarfile.TarInfo)
+        stream = archive.extractfile(member)
+        if stream is None:
+            raise SourceImportError(
+                "missing_archive_member",
+                "regular TAR member has no readable content",
+                details={"path": entry.name},
+            )
+        with stream:
+            return self._read_file(entry, stream, member_limit)
 
     @staticmethod
     def _stream_size(source: BinaryIO) -> int:
@@ -295,8 +372,31 @@ class SafeArchiveImporter:
                 raise SourceImportError(
                     "compression_ratio_exceeded",
                     "archive member compression ratio exceeds the safety limit",
+                details={"path": entry.name},
+            )
+
+    @staticmethod
+    def _selected_file(entries: Iterable[_Entry], path: str) -> _Entry:
+        for entry in entries:
+            if entry.name == path and not entry.is_directory:
+                return entry
+        raise SourceImportError(
+            "missing_archive_member",
+            "source file is unavailable",
+            details={"path": path},
+        )
+
+    def _read_file(self, entry: _Entry, source: _Readable, max_bytes: int) -> bytes:
+        content = bytearray()
+        while chunk := source.read(self._limits.copy_chunk_bytes):
+            content.extend(chunk)
+            if len(content) > max_bytes:
+                raise SourceImportError(
+                    "file_too_large",
+                    "archive member exceeded the per-file limit while reading",
                     details={"path": entry.name},
                 )
+        return bytes(content)
 
     def _safe_relative_path(self, value: str) -> PurePosixPath:
         if "\x00" in value:
