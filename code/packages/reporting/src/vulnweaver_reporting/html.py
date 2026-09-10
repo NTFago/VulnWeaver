@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from html import escape
 
-from vulnweaver_contracts import Finding, Poc
+from vulnweaver_contracts import Evidence, Finding, Poc
 
 
 def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, int]:
@@ -16,7 +16,11 @@ def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, i
     return counts
 
 
-def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
+def build_html(
+    findings: Sequence[Finding],
+    pocs: Sequence[Poc] = (),
+    evidence: dict[str, list[Evidence]] | None = None,
+) -> str:
     """Build a self-contained, escaped HTML report suitable for a PDF engine."""
     poc_counts = _poc_counts(findings, pocs)
     pocs_by_finding: dict[str, list[Poc]] = {}
@@ -24,6 +28,7 @@ def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
         pocs_by_finding.setdefault(poc["finding_id"], []).append(poc)
     items: list[str] = []
     for finding in findings:
+        finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
         path = escape(str(location.get("path", "unknown")))
         line = location.get("line", 1)
@@ -46,6 +51,13 @@ def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
                 f"{escape(str(getattr(poc['status'], 'value', poc['status'])))} / "
                 f"{escape(str(getattr(poc['result'], 'value', poc['result'])))}</p>"
                 for poc in pocs_by_finding.get(finding["id"], [])
+            )
+            + "".join(
+                f"<p><b>Evidence {escape(item['id'])}:</b> "
+                f"{escape(str(getattr(item['type'], 'value', item['type'])))}; "
+                f"artifact <code>{escape(item['artifact_ref'])}</code>; "
+                f"digest <code>{escape(item['digest'])}</code></p>"
+                for item in finding_evidence
             )
             + f"<p>{escape(finding['fix_suggestion'][:4096])}</p>"
             "</article>"

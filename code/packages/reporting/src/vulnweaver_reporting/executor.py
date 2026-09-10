@@ -96,7 +96,10 @@ class ReportJobExecutor:
             elif report_format == "pdf":
                 with tempfile.TemporaryDirectory(prefix="vulnweaver-report-") as directory:
                     output = render_pdf(
-                        findings, Path(directory) / "report.pdf", pocs=pocs
+                        findings,
+                        Path(directory) / "report.pdf",
+                        pocs=pocs,
+                        evidence=evidence_by_finding,
                     )
                     content = output.read_bytes()
             else:
