@@ -1,9 +1,6 @@
 """Versioned tool registration and policy enforcement primitives."""
 
-from vulnweaver_tool_runtime.budgets import (
-    RESOURCE_BUDGET_KEYS,
-    bounded_resource_budget,
-)
+from vulnweaver_tool_runtime.budgets import RESOURCE_BUDGET_KEYS
 from vulnweaver_tool_runtime.errors import (
     PolicyPermissionRequired,
     PolicyRejected,
@@ -42,5 +39,4 @@ __all__ = [
     "ToolRuntimeError",
     "ToolSpecError",
     "ToolSpecLoader",
-    "bounded_resource_budget",
 ]

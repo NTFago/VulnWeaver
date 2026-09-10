@@ -42,7 +42,6 @@ from vulnweaver_persistence import (
     EntityNotFound,
     PersistenceError,
 )
-from vulnweaver_tool_runtime import bounded_resource_budget
 
 from vulnweaver_source_analysis.archive import SafeArchiveImporter, SourceImportError
 from vulnweaver_source_analysis.finding_projection import StaticFindingProjector
@@ -378,9 +377,7 @@ class StaticAnalysisScheduler:
                     idempotency_key=_stable_identifier(
                         "static-analysis", import_job["id"], tool_name
                     ),
-                    resource_budget=bounded_resource_budget(
-                        import_job["resource_budget"], spec["resource_limits"]
-                    ),
+                    resource_budget=import_job["resource_budget"],
                     retry_policy=spec["retry_policy"],
                     attempt=0,
                     lease=None,

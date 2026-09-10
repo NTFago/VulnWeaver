@@ -145,7 +145,7 @@ class HarnessCompiler:
                 "arguments": {"profile": HARNESS_COMPILE_PROFILE},
                 "output_file_names": list(HARNESS_COMPILE_OUTPUT_NAMES),
                 "resource_budget": dict(budget),
-                "timeout_seconds": min(budget["timeout_seconds"], spec["timeout_seconds"]),
+                "timeout_seconds": budget["timeout_seconds"],
             },
         )
         validate_contract("SandboxRequest", request)

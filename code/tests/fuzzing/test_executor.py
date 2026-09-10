@@ -262,8 +262,8 @@ def test_executor_replaces_caller_arguments_and_publishes_crash_input(
     ]
 
 
-def test_sandbox_request_budget_is_clamped_to_the_tool_spec(tmp_path: Path) -> None:
-    """The Runner refuses a budget above the spec, so the executor must clamp it first."""
+def test_sandbox_request_forwards_the_budget_without_clamping(tmp_path: Path) -> None:
+    """Budgets are inert (ADR-025): oversized values pass through instead of clamping."""
 
     store = LocalContentAddressedStore(tmp_path / "cas")
     target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
@@ -288,11 +288,13 @@ def test_sandbox_request_budget_is_clamped_to_the_tool_spec(tmp_path: Path) -> N
 
     asyncio.run(service.run(oversized, asyncio.Event()))
 
-    limits = spec()["resource_limits"]
+    # Budgets pass through unclamped (ADR-025).
     request_budget = sandbox.requests[0]["resource_budget"]
-    for key in ("cpu_millis", "memory_bytes", "disk_bytes", "timeout_seconds"):
-        assert request_budget[key] == limits[key]
-    assert sandbox.requests[0]["timeout_seconds"] <= limits["timeout_seconds"]
+    assert request_budget["cpu_millis"] == 8000
+    assert request_budget["memory_bytes"] == 3 * 1024**3
+    assert request_budget["disk_bytes"] == 10 * 1024**3
+    # The request timeout passes through unchanged; the fixture default is 30s.
+    assert sandbox.requests[0]["timeout_seconds"] == 30
 
 
 def test_executor_returns_structured_failure_for_digest_mismatch(tmp_path: Path) -> None:
