@@ -14,3 +14,6 @@
 *.tar binary
 *.exe binary
 *.dll binary
+
+# Fixture dist artifacts are ELF binaries; never normalize their line endings.
+code/tests/fixtures/**/dist/** binary
