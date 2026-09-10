@@ -27,6 +27,9 @@ from vulnweaver_contracts import (
     BinaryXref,
     BinaryXrefType,
     JsonObject,
+    SandboxRequest,
+    SandboxResult,
+    SchemaVersion,
     StaticToolStatus,
 )
 
@@ -63,6 +66,10 @@ class BinaryToolAdapter(Protocol):
     ) -> ToolContribution: ...
 
 
+class ToolExecutionError(RuntimeError):
+    """Raised when an isolated tool cannot produce its declared result."""
+
+
 class UpxUnpacker(Protocol):
     async def unpack(
         self,
@@ -71,6 +78,93 @@ class UpxUnpacker(Protocol):
         limits: BinaryAnalysisLimits,
         cancellation: asyncio.Event,
     ) -> UpxOutcome: ...
+
+
+class BinaryFactsSandbox(Protocol):
+    async def run(
+        self, request: SandboxRequest, cancellation: asyncio.Event
+    ) -> SandboxResult: ...
+
+
+class BinaryFactsAdapter:
+    """Adapt the isolated binary-tools result to the normal tool contribution."""
+
+    name = "binary-facts"
+
+    def __init__(self, sandbox: BinaryFactsSandbox, store, *, image_digest: str, input_ref: str):
+        self._sandbox = sandbox
+        self._store = store
+        self._image_digest = image_digest
+        self._input_ref = input_ref
+
+    async def analyze(
+        self,
+        path: Path,
+        metadata: BinaryMetadata,
+        limits: BinaryAnalysisLimits,
+        cancellation: asyncio.Event,
+    ) -> ToolContribution:
+        request = SandboxRequest(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            id=f"binary-facts:{self._input_ref}",
+            tool_name="binary-facts",
+            tool_version="1.0.0",
+            image_digest=self._image_digest,
+            artifact_kind=metadata.format,
+            input_ref=self._input_ref,
+            arguments={
+                "max_functions": limits.max_functions,
+                "max_instructions": limits.max_instructions,
+                "max_pseudocode_functions": limits.max_pseudocode_functions,
+            },
+            output_file_names=["binary-facts.json"],
+            resource_budget=_sandbox_budget(limits),
+            timeout_seconds=min(600, int(limits.command_timeout_seconds)),
+        )
+        result = await self._sandbox.run(request, cancellation)
+        if result["status"].value != "succeeded":
+            raise ToolExecutionError("binary-facts sandbox execution failed")
+        output = next(
+            (item for item in result["outputs"] if item["path"] == "binary-facts.json"), None
+        )
+        if output is None:
+            raise ToolExecutionError("binary-facts output is missing")
+        with self._store.open(output["object_ref"]) as stream:
+            facts = json.load(stream)
+        tools = facts.get("tools", {})
+        objdump = tools.get("objdump", {})
+        die = tools.get("die", {})
+        fallback_run = {
+            "tool_name": self.name,
+            "tool_version": "1.0.0",
+            "status": "succeeded",
+            "exit_code": 0,
+            "reason": None,
+            "raw_output": None,
+        }
+        return ToolContribution(
+            run=cast(BinaryToolRun, objdump.get("run", fallback_run)),
+            functions=tuple(cast(list[BinaryFunction], facts.get("functions", []))),
+            instructions=tuple(cast(list[BinaryInstruction], facts.get("instructions", []))),
+            basic_blocks=tuple(cast(list[BinaryBasicBlock], facts.get("basic_blocks", []))),
+            xrefs=tuple(cast(list[BinaryXref], facts.get("xrefs", []))),
+            pseudocode=tuple(cast(list[BinaryPseudocode], facts.get("pseudocode", []))),
+            compiler=cast(str | None, die.get("compiler")),
+            packer=cast(str | None, die.get("packer")),
+            packed=cast(bool | None, die.get("packed")),
+        )
+
+
+def _sandbox_budget(limits: BinaryAnalysisLimits) -> dict[str, object]:
+    return {
+        "max_model_tokens": 0,
+        "cpu_millis": 4000,
+        "memory_bytes": 3 * 1024 * 1024 * 1024,
+        "disk_bytes": limits.max_tool_output_bytes,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 0,
+        "timeout_seconds": min(600, int(limits.command_timeout_seconds)),
+    }
 
 
 @dataclass(frozen=True, slots=True)
