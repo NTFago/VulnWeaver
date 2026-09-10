@@ -149,6 +149,7 @@ class BinaryFactsAdapter:
             basic_blocks=tuple(cast(list[BinaryBasicBlock], facts.get("basic_blocks", []))),
             xrefs=tuple(cast(list[BinaryXref], facts.get("xrefs", []))),
             pseudocode=tuple(cast(list[BinaryPseudocode], facts.get("pseudocode", []))),
+            imports=tuple(cast(list[BinaryImport], facts.get("imports", []))),
             compiler=cast(str | None, die.get("compiler")),
             packer=cast(str | None, die.get("packer")),
             packed=cast(bool | None, die.get("packed")),
