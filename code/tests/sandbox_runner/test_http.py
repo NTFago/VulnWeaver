@@ -78,3 +78,34 @@ def test_explicit_tool_digests_override_the_runner_registry() -> None:
     assert served["image_digest"] == override[("afl-casr", "1.0.0")]
     # The override is authoritative: identities it omits are not served.
     assert client.get("/v1/tools/proof-tool/1.0.0", headers=_TOKEN).status_code == 404
+
+
+def test_runner_factory_is_resolved_per_request() -> None:
+    """A runner factory lets the service hot-swap configuration per request."""
+
+    digests = {
+        "v1": {("afl-casr", "1.0.0"): "sha256:" + "a" * 64},
+        "v2": {("afl-casr", "1.0.0"): "sha256:" + "c" * 64},
+    }
+    calls = {"resolved": 0}
+
+    class _Swappable:
+        def __init__(self, generation: str) -> None:
+            self._generation = generation
+
+        def tool_digests(self) -> dict[tuple[str, str], str]:
+            return dict(digests[self._generation])
+
+    def _factory() -> object:
+        calls["resolved"] += 1
+        return _Swappable("v2" if calls["resolved"] > 1 else "v1")
+
+    client = TestClient(
+        create_sandbox_app(_factory, bearer_token="runner-secret")  # type: ignore[arg-type]
+    )
+
+    first = client.get("/v1/tools/afl-casr/1.0.0", headers=_TOKEN).json()["image_digest"]
+    second = client.get("/v1/tools/afl-casr/1.0.0", headers=_TOKEN).json()["image_digest"]
+    assert first == "sha256:" + "a" * 64
+    assert second == "sha256:" + "c" * 64
+    assert calls["resolved"] == 2

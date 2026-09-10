@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -15,26 +15,38 @@ from vulnweaver_contracts import SandboxRequest, SandboxResult, validate_contrac
 from vulnweaver_sandbox_runner.runner import SandboxRunner
 
 ToolDigests = Mapping[tuple[str, str], str] | Callable[[], Mapping[tuple[str, str], str]]
+RunnerSource = Callable[[], SandboxRunner | Awaitable[SandboxRunner]]
 
 
 def create_sandbox_app(
-    runner: SandboxRunner,
+    runner: SandboxRunner | RunnerSource,
     *,
     bearer_token: str | None = None,
     tool_digests: ToolDigests | None = None,
 ) -> FastAPI:
     """Create the private service boundary around one configured Runner.
 
-    ``tool_digests`` defaults to the Runner's own registry, so the served
-    identities are exactly the ones the Runner will enforce.
+    ``runner`` may be a fixed instance or a zero-argument factory (sync or
+    async); a factory is resolved on every request so callers can hot-swap
+    the underlying Runner, e.g. after installation settings changed.
+    ``tool_digests`` defaults to the current Runner's own registry, so the
+    served identities are exactly the ones the Runner will enforce.
     """
 
     if bearer_token is not None and not bearer_token:
         raise ValueError("sandbox bearer token must not be empty")
     app = FastAPI(title="VulnWeaver Sandbox Runner", docs_url=None, redoc_url=None)
 
-    def current_digests() -> Mapping[tuple[str, str], str]:
-        source = tool_digests if tool_digests is not None else runner.tool_digests
+    async def current_runner() -> SandboxRunner:
+        if not callable(runner):
+            return runner
+        resolved = runner()
+        if isinstance(resolved, Awaitable):
+            resolved = await resolved
+        return resolved
+
+    async def current_digests() -> Mapping[tuple[str, str], str]:
+        source = tool_digests if tool_digests is not None else (await current_runner()).tool_digests
         return source() if callable(source) else source
 
     @app.get("/health")
@@ -46,7 +58,7 @@ def create_sandbox_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, object]:
         _authorize(authorization, bearer_token)
-        digests = current_digests()
+        digests = await current_digests()
         return {
             "tools": [
                 {"tool_name": name, "tool_version": version, "image_digest": digest}
@@ -61,7 +73,7 @@ def create_sandbox_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, str]:
         _authorize(authorization, bearer_token)
-        digest = current_digests().get((tool_name, tool_version))
+        digest = (await current_digests()).get((tool_name, tool_version))
         if digest is None:
             raise HTTPException(status_code=404, detail="tool is not registered")
         return {"tool_name": tool_name, "tool_version": tool_version, "image_digest": digest}
@@ -80,7 +92,7 @@ def create_sandbox_app(
         cancellation = asyncio.Event()
         disconnect = asyncio.create_task(_watch_disconnect(request, cancellation))
         try:
-            return await runner.run(payload, cancellation)
+            return await (await current_runner()).run(payload, cancellation)
         finally:
             disconnect.cancel()
             await asyncio.gather(disconnect, return_exceptions=True)
