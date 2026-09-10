@@ -12,8 +12,54 @@ permissions:
   contents: read
 
 jobs:
+  change-scope:
+    name: Determine change scope
+    runs-on: ubuntu-24.04
+    outputs:
+      code_changed: ${{ steps.scope.outputs.code_changed }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Manual runs intentionally exercise the complete gate.
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          if [[ -z "$changed_files" ]]; then
+            echo "code_changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          code_changed=false
+          while IFS= read -r file; do
+            # Only Markdown documentation is eligible for the fast path.
+            if [[ "$file" != *.md ]]; then
+              code_changed=true
+              break
+            fi
+          done <<< "$changed_files"
+
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
+
   python-quality:
     name: Python quality gate
+    needs: change-scope
     # A WIP PR is allowed to be used as a draft integration branch. Keep the
     # job in the workflow (rather than filtering the workflow trigger) so a
     # required branch-protection check is reported as successful when skipped.
@@ -31,29 +77,6 @@ jobs:
       NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
       VULNWEAVER_TEST_ADMIN_DATABASE_URL: postgresql+psycopg://vulnweaver:vulnweaver_dev_only@127.0.0.1:5432/postgres
       VULNWEAVER_TEST_REDIS_URL: redis://127.0.0.1:6379/15
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: vulnweaver
-          POSTGRES_PASSWORD: vulnweaver_dev_only
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U vulnweaver -d postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -62,34 +85,69 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v7
+        if: needs.change-scope.outputs.code_changed == 'true'
         with:
           python-version: "3.12"
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
+        if: needs.change-scope.outputs.code_changed == 'true'
         with:
           node-version: "24"
           package-manager-cache: false
 
       - name: Install workspace tools from domestic mirrors
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: |
           python -m pip install --disable-pip-version-check "uv==0.10.0"
           npm install --global "pnpm@11.10.0"
 
       - name: Verify locks and install dependencies
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: |
           uv lock --check
           uv sync --frozen
           pnpm install --frozen-lockfile
 
       - name: Ruff lint
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: uv run --no-sync ruff check .
 
       - name: Pyright
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: pnpm run check:pyright
 
+      - name: Start integration services
+        if: needs.change-scope.outputs.code_changed == 'true'
+        working-directory: .
+        run: |
+          docker run --detach --name quality-gate-postgres --network host \
+            --env POSTGRES_USER=vulnweaver \
+            --env POSTGRES_PASSWORD=vulnweaver_dev_only \
+            --env POSTGRES_DB=postgres \
+            postgres:16-alpine
+          docker run --detach --name quality-gate-redis --network host redis:7-alpine
+          for attempt in {1..30}; do
+            if docker exec quality-gate-postgres pg_isready -U vulnweaver -d postgres >/dev/null 2>&1 \
+              && docker exec quality-gate-redis redis-cli ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Integration services did not become ready.' >&2
+          exit 1
+
       - name: pytest
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: pnpm run check:pytest
 
       - name: TypeScript workspace
+        if: needs.change-scope.outputs.code_changed == 'true'
         run: pnpm run check:typescript
+
+      - name: Markdown documentation gate
+        if: needs.change-scope.outputs.code_changed != 'true'
+        working-directory: .
+        run: |
+          git diff --check "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          echo "Documentation-only change: full code quality gate skipped."
