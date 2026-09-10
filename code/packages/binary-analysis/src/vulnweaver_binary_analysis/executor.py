@@ -6,11 +6,12 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import ArtifactStoreError, LocalContentAddressedStore, StoredObject
@@ -41,6 +42,7 @@ from vulnweaver_binary_analysis.headers import (
     extract_strings,
     inspect_binary,
 )
+from vulnweaver_binary_analysis.obfuscation import assess_control_flow_flattening
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
     BinaryFactsAdapter,
@@ -58,6 +60,8 @@ from vulnweaver_binary_analysis.types import (
     BinaryAnalysisLimits,
     BinaryMetadata,
 )
+
+LOGGER = logging.getLogger("vulnweaver.binary_analysis")
 
 
 class BinaryAnalysisExecutionError(RuntimeError):
@@ -77,6 +81,20 @@ class BinaryAnalysisExecutionError(RuntimeError):
         super().__init__(message)
 
 
+class AngrRunner(Protocol):
+    """Execute targeted symbolic analysis for the planning agent."""
+
+    async def __call__(self, target_addresses: tuple[int, ...]) -> JsonObject: ...
+
+
+class BinaryPlanningHook(Protocol):
+    """Model-driven planning step executed after the facts baseline."""
+
+    async def plan(
+        self, job: Job, facts: JsonObject, run_angr: AngrRunner
+    ) -> tuple[int, ...]: ...
+
+
 class BinaryImportExecutor:
     """Inspect one registered ELF/PE and publish immutable normalized analysis."""
 
@@ -92,6 +110,7 @@ class BinaryImportExecutor:
         scratch_root: str | Path | None = None,
         sandbox: BinaryFactsSandbox | None = None,
         sandbox_image_digest: str | None = None,
+        planning_hook: BinaryPlanningHook | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -102,6 +121,11 @@ class BinaryImportExecutor:
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
         self._sandbox = sandbox
         self._sandbox_image_digest = sandbox_image_digest
+        self._planning_hook = planning_hook
+        self._angr_adapter = next(
+            (adapter for adapter in self._adapters if isinstance(adapter, AngrAdapter)),
+            None,
+        )
 
     @classmethod
     def configured(
@@ -119,6 +143,7 @@ class BinaryImportExecutor:
         pair_importer: BinaryPairImporter | None = None,
         sandbox: BinaryFactsSandbox | None = None,
         sandbox_image_digest: str | None = None,
+        planning_hook: BinaryPlanningHook | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
@@ -134,6 +159,7 @@ class BinaryImportExecutor:
             scratch_root=scratch_root,
             sandbox=sandbox,
             sandbox_image_digest=sandbox_image_digest,
+            planning_hook=planning_hook,
         )
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
@@ -213,6 +239,53 @@ class BinaryImportExecutor:
                 retryable=False,
             )
 
+    async def _plan_with_agent(
+        self,
+        job: Job,
+        aggregate: BinaryAnalysisAggregate,
+        analyzed_path: Path,
+        metadata: BinaryMetadata,
+        cancellation: asyncio.Event,
+        produced: list[str],
+    ) -> tuple[int, ...] | None:
+        """Run the model planning hook; failures degrade instead of aborting."""
+        angr_adapter = self._angr_adapter
+        planning_hook = self._planning_hook
+        assert angr_adapter is not None
+        assert planning_hook is not None
+
+        async def run_angr(target_addresses: tuple[int, ...]) -> JsonObject:
+            _validate_symbolic_targets(target_addresses, metadata)
+            contribution = await angr_adapter.analyze_targets(
+                analyzed_path,
+                metadata,
+                self._limits,
+                cancellation,
+                target_addresses,
+            )
+            aggregate.merge(contribution, self._limits)
+            explored = [
+                fact
+                for fact in aggregate.symbolic_facts
+                if fact.get("address") in target_addresses
+            ]
+            return {
+                "targets": list(target_addresses),
+                "status": "completed",
+                "symbolic_facts": len(explored),
+            }
+
+        facts = _planning_facts(job, aggregate)
+        try:
+            return await planning_hook.plan(job, facts, run_angr)
+        except Exception as error:  # planning degrades, never aborts the job
+            LOGGER.warning(
+                "binary_planning_degraded",
+                extra={"job_id": job["id"], "error": str(error)[:200]},
+            )
+            return ()
+
+
     async def _execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] != JobKind.IMPORT:
             raise BinaryAnalysisExecutionError(
@@ -290,9 +363,14 @@ class BinaryImportExecutor:
                         input_ref=object_ref,
                     ),
                 )
+            planning_active = self._planning_hook is not None and self._angr_adapter is not None
             for adapter in adapters:
                 if cancellation.is_set():
                     return _cancelled_result(job["id"], produced)
+                if planning_active and adapter is self._angr_adapter:
+                    # With planning enabled angr runs after the model selected
+                    # its targets instead of the fixed empty-target pass.
+                    continue
                 if isinstance(adapter, AngrAdapter):
                     contribution = await adapter.analyze_targets(
                         analyzed_path,
@@ -306,6 +384,15 @@ class BinaryImportExecutor:
                         analyzed_path, metadata, self._limits, cancellation
                     )
                 aggregate.merge(contribution, self._limits)
+
+            if planning_active and not cancellation.is_set():
+                assert self._planning_hook is not None
+                planned = await self._plan_with_agent(
+                    job, aggregate, analyzed_path, metadata, cancellation, produced
+                )
+                if planned is None:
+                    return _cancelled_result(job["id"], produced)
+                target_addresses = _merge_target_addresses(target_addresses, planned)
 
             result = _build_result(
                 parent_version_id,
@@ -588,6 +675,48 @@ def _required_argument(job: Job, name: str) -> str:
             details={"argument": name},
         )
     return value
+
+
+def _merge_target_addresses(
+    current: tuple[int, ...], planned: tuple[int, ...]
+) -> tuple[int, ...]:
+    """Union job-supplied and model-planned targets, bounded and order-stable."""
+    merged = list(dict.fromkeys([*current, *planned]))
+    return tuple(merged[:16])
+
+
+def _planning_facts(job: Job, aggregate: BinaryAnalysisAggregate) -> JsonObject:
+    """Bounded, service-owned facts the planning agent may reason about."""
+    assessments = assess_control_flow_flattening(
+        aggregate.basic_blocks, aggregate.xrefs
+    )
+    return cast(
+        JsonObject,
+        {
+            "input_artifact_version_id": _required_argument(job, "artifact_version_id"),
+            "packed": aggregate.packed,
+            "packer": aggregate.packer,
+            "function_count": len(aggregate.functions),
+            "functions": [
+                {"name": item["name"], "address": item["address"]}
+                for item in aggregate.functions[:64]
+            ],
+            "obfuscation": [
+                {
+                    "function_name": item.function_name,
+                    "flattened": item.flattened,
+                    "score": item.score,
+                    "dispatcher_blocks": item.dispatcher_blocks,
+                    "indirect_jumps": item.indirect_jumps,
+                    "reason": item.reason,
+                }
+                for item in assessments[:16]
+            ],
+            "basic_block_count": len(aggregate.basic_blocks),
+            "xref_count": len(aggregate.xrefs),
+            "pseudocode_count": len(aggregate.pseudocode),
+        },
+    )
 
 
 def _target_addresses(job: Job, limits: BinaryAnalysisLimits) -> tuple[int, ...]:

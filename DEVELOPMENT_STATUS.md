@@ -49,7 +49,7 @@
 | T24 Web 工作台布局与可读性优化 | 已完成 | Codex | 桌面、响应式与字号调整完成；设置页复选框已从通用整宽输入规则中隔离，恢复与说明文字横向对齐 | 无 | 2026-09-10 |
 | T25 智能体规划执行框架 | 未开始 | 待认领 | — | 通用“规划—执行—观察”Agent 循环：LLM 输出结构化 ActionPlan → Policy Engine 校验 → 工具/Job 调度 → 结果回填 → 多步迭代；决策轨迹写 AgentRun；步数/token/时间预算与无模型结构化降级（定义见 3.1） | 2026-09-10 |
 | T26 二进制主管线收口（Ghidra 默认可用） | 已完成 | Codex | Sandbox Runner binary-tools 路径已接入 Worker；Runner 自动解析摘要，Worker 通过受保护端点获取摘要；binary-facts 完整事实转换为分析贡献并复用派生工件/PAIR 路径；真实 ELF 回放已成功产出 20 函数、96 指令、33 基本块、31 Xref、18 段伪代码；真实数据库 Job 回放已成功生成派生工件；facts 已补齐 imports/strings；API PAIR、地址定位和调用关系查询定向验收通过；资源/挂载配置已文档化 | 无 | 2026-09-10 |
-| T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
+| T27 逆向分析智能体与混淆特征识别 | 待验证 | Codex（`feat/t27-reverse-agent`） | 扁平化启发式识别器 + 新增 `orchestrator/reverse_planning.py`（ReversePlanningAgent 复用 T25 AgentLoop：angr-targeted-analysis 进程内 ToolSpec 经 PolicyEngine 校验、DatabaseAgentRunSink 持久化决策轨迹）；binary executor 新增 `planning_hook`：facts 阶段后由模型基于壳/混淆/函数事实规划 angr 定点目标（`_plan_with_agent` 经 run_angr 闭包真实执行 angr 并合并结果，规划失败结构化降级为固定管线不中断 Job），`target_addresses` 由规划合并进 generation_config；analysis-worker 已装配（模型未配置时自动关闭）；新增 4 项测试（规划执行/降级/Sink 持久化/执行器钩子全链），全量 376 passed | 真实模型差异化规划验收（加壳 vs 未加壳样本）归真实模型 E2E | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
 | T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed | 二进制伪代码侧在 T26 Ghidra 主管线接通后复用同一审计链路；AuditPlan-NO_FINDINGS 聚合门禁已落地（`feat/audit-plan-gate`）；真实模型端到端验收 | 2026-09-10 |
 | T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器，返回分数与证据关键词；已在 Dev Container 通过定向测试 | 接入 PAIR 持久化、LLM 确认、API 与前端展示 | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T27 逆向规划接入 AgentLoop（`feat/t27-reverse-agent`） | ReversePlanningAgent 经 T25 循环规划 angr 定点目标并真实执行；规划失败降级固定管线；新增 4 项测试，Dev Container 全量 376 passed（ruff/pyright 0 错误） | 真实模型差异化规划验收归 E2E |
 | 2026-09-10 | T31 漏洞自动利用智能体（`feat/t31-auto-exploit`） | 复核结算后自动投递 EXPLOIT Job；执行期模型生成脚本→安全红线校验→派生工件登记→沙箱执行→Poc 证据链；新增 `ExploitScript` 契约；测试 5 项新增，全量 370 passed（ruff/pyright 0 错误、契约 --check 无漂移） | 真实模型端到端验收（需 `PROOF_TOOL_IMAGE_DIGEST` 与产品模型配置） |
 | 2026-09-10 | T33 函数工作台与智能体轨迹渲染（`feat/t33-workbench`） | 任务页新增函数列表→caller/callee 双列联动→伪代码代码视图的工作台，及 agent-runs 轨迹区；svelte-check 0 错误 0 警告、Vite 生产构建成功 | 真实二进制样本浏览器回归（依赖 T26 伪代码产出） |
 | 2026-09-10 | ADR-021 NO_FINDINGS 聚合门禁（`feat/audit-plan-gate`） | 结算钩子从 Job 事实推导 AuditPlan（static_rules/semantic_function_audit），聚合结果为 NO_FINDINGS 且已配置语义审计调度器但必跑基线未完成时，阻断 COMPLETED 迁移并记录 `audit_plan_no_findings_blocked`（含缺失基线与覆盖度）；未配置审计调度器的降级部署保持原行为。新增测试 2 项，Dev Container 全量 365 passed | 真实模型 E2E；阻断时任务停留 ANALYZING 的运维语义随真实环境验收复核 |
@@ -162,12 +163,12 @@
 | 2026-09-10 | T16 DIE/Ghidra/UPX 工具镜像回放验收（`feat/t16-binary-tools`） | 新增 `apps/binary-tools` Dockerfile（DIE 3.21 deb + Ghidra 12.1.3 + openjdk-21-jdk + UPX）与 `vulnweaver-binary-entrypoint`（复用真实 binary-analysis 适配器）；`binary-analysis` 新增 `binary_tool_spec`/`binary_command_profile`，Runner 注册 BINARY_TOOLS_IMAGE_DIGEST profile 并为沙箱容器固定主机名解析。HTTP 回放：四工具全部 succeeded，binary-facts.json 25KB 入 CAS（含 Ghidra 真实伪代码）。修复 Ghidra 适配器项目目录未预创建缺陷。全量门禁 332 passed / 81.27% | P2 四语言真实模型端到端待模型接入 |
 | 2026-09-10 | T19 AFL++/CASR 镜像回放验收（`feat/t19-afl-replay`） | 构建 `vulnweaver-afl-casr:fixed`（AFL++ 4.33c source-only + clang/gdb）与 `vulnweaver-fuzz-entrypoint`；修复 ASAN_OPTIONS symbolize=0、/tmp noexec（新增 /work exec tmpfs）、showmap 逐文件测量三个问题后，独立 Runner 完成：3000 次执行 30.5s、2 个 SIGABRT 崩溃入 manifest、afl-tmin 最小化输入摘要一致、覆盖率 100%；worker 侧 FuzzExecutionService 校验 FuzzResult succeeded（2 crash_ids）。全量门禁 332 passed / 81.34% | T16 DIE/Ghidra/angr 工具验收待真实环境 |
 | 2026-09-10 | T22 浏览器全链路验收与最终验收报告 | 重建 web 镜像后经浏览器自动化验证：登录、任务页可观测性（状态汇总/Jobs/事件载荷展开）、Finding 详情（复现记录 EXPLOITABLE、Proof/Exploit 入口）、报告下载点击触发下载；验收报告归档 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑回归与 T16/T18/T19/P2 真实环境验收 |
-| 2026-09-10 | T20 全链路 + T21 真实数据库报告回放 | 重建 analysis-worker/api/migrate 镜像（补 `vulnweaver-proof` 依赖、WeasyPrint 系统库），配 `SANDBOX_RUNNER_URL` 后：API 提交 Proof Job 经 Dispatcher/Worker/Runner 全链路成功（Poc `completed/exploitable`）；Markdown/SARIF/PDF 报告 Job 真实数据库回放成功并可经 API 下载；修复报告渲染未纳入 Poc 的问题（Markdown/HTML 现显示 Proof runs）。Dev Container 门禁 329 passed | T22 浏览器全链路收口 |
 
 ## 9. 验证记录
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T27 定向门禁（worktree `feat/t27-reverse-agent`） | 规划智能体 3 项测试（执行/降级/Sink 持久化）+ 执行器钩子集成测试（facts 传递、run_angr 真实执行、targets 进 generation_config）通过；全量 376 passed、ruff/pyright 0 错误 | 真实模型规划质量验收（需 AUDIT/PLANNING 模型配置） |
 | 2026-09-10 | T31 定向门禁（worktree `feat/t31-auto-exploit`） | 新增 5 项测试（调度门禁×2、生成执行全链、危险脚本拒绝、钩子自动投递）通过；Dev Container 全量 370 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误、契约 --check 无漂移 | 真实模型生成与真实沙箱镜像的端到端回放 |
 | 2026-09-10 | T33 Web 定向门禁（worktree `feat/t33-workbench`） | Dev Container 内 `svelte-check` 0 错误 0 警告；`vite build` 成功（工作台/轨迹区进入产物 bundle） | 浏览器多视口回归与真实伪代码数据展示（依赖 T26） |
 | 2026-09-10 | 审计计划门禁定向测试（worktree `feat/audit-plan-gate`） | 新增 2 项集成测试（阻断与放行/降级兼容）通过；Dev Container 全量 365 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误 | 无 |
