@@ -254,10 +254,26 @@ services:
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
+      binary-tools:
+        condition: service_started
       migrate:
         condition: service_completed_successfully
     networks:
       - analysis-plane
+    restart: unless-stopped
+
+  binary-tools:
+    image: vulnweaver-binary-tools:fixed
+    build:
+      context: .
+      dockerfile: apps/binary-tools/Dockerfile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
+    networks: []
     restart: unless-stopped
 
   web:
