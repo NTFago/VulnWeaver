@@ -26,7 +26,7 @@ class SandboxRunnerClient:
         """Read a digest registered by the Runner without accessing Docker."""
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-                endpoint = f"{self._url.rsplit('/', 3)[0]}/tools/{tool_name}/{tool_version}"
+                endpoint = f"{self._url.rsplit('/', 2)[0]}/tools/{tool_name}/{tool_version}"
                 response = await client.get(endpoint)
             response.raise_for_status()
             payload = response.json()
