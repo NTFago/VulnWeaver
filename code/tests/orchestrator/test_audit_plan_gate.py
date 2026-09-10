@@ -13,11 +13,13 @@ from vulnweaver_contracts import (
     JobStatus,
     TaskResult,
     TaskStatus,
+    ToolIdentity,
     WorkerResult,
 )
-from vulnweaver_orchestrator import TaskAggregateSettlementHook
+from vulnweaver_orchestrator import SemanticAuditScheduler, TaskAggregateSettlementHook
 from vulnweaver_persistence import Database, DatabaseSettings, Repositories
 from vulnweaver_persistence.models import jobs as jobs_table
+from vulnweaver_reporting import ReportJobScheduler
 
 from tests.persistence.factories import artifact, artifact_version, job, project, task
 
@@ -136,6 +138,66 @@ def test_no_findings_completes_without_configured_audit_scheduler(
             # legacy fixed-pipeline behaviour.
             assert finished["status"] is TaskStatus.COMPLETED
             assert finished["result"] is TaskResult.NO_FINDINGS
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_binary_import_schedules_semantic_baseline(persistence_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        task_id = f"task:{suffix}"
+        version_id = f"artifact-version:{suffix}"
+        imported = _succeeded(f"job:binary:{suffix}", task_id, kind=JobKind.IMPORT)
+        imported["tool"] = ToolIdentity(
+            name="binary-import", version="1.0.0", image_digest=None
+        )
+        await _seed(database, suffix, version_id)
+        try:
+            async with database.transaction() as repositories:
+                await repositories.jobs.create_without_outbox(imported)
+                hook = TaskAggregateSettlementHook(None, SemanticAuditScheduler(database))
+                await hook.after_terminal(repositories, imported, _result(imported["id"]))
+                current_jobs = await repositories.jobs.list_for_task(task_id)
+                current = await repositories.tasks.get(task_id)
+            assert any(item["kind"] is JobKind.SEMANTIC_AUDIT for item in current_jobs)
+            assert current["status"] is TaskStatus.ANALYZING
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_default_report_is_queued_before_task_completion(
+    persistence_database_url: str,
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        task_id = f"task:{suffix}"
+        version_id = f"artifact-version:{suffix}"
+        static = _succeeded(f"job:static:{suffix}", task_id, kind=JobKind.SOURCE_ANALYSIS)
+        semantic = _succeeded(f"job:semantic:{suffix}", task_id, kind=JobKind.SEMANTIC_AUDIT)
+        await _seed(database, suffix, version_id)
+        report_scheduler = ReportJobScheduler(
+            tool=ToolIdentity(name="vulnweaver-report", version="1.0.0", image_digest=None)
+        )
+        hook = TaskAggregateSettlementHook(
+            None, cast(Any, NoopAuditScheduler()), None, None, report_scheduler
+        )
+        try:
+            async with database.transaction() as repositories:
+                await repositories.jobs.create_without_outbox(static)
+                await repositories.jobs.create_without_outbox(semantic)
+                await hook.after_terminal(repositories, semantic, _result(semantic["id"]))
+                current_jobs = await repositories.jobs.list_for_task(task_id)
+                current = await repositories.tasks.get(task_id)
+            reports = [item for item in current_jobs if item["kind"] is JobKind.REPORT]
+            assert len(reports) == 1
+            assert current["status"] is TaskStatus.REPORTING
+            assert current["result"] is None
         finally:
             await database.dispose()
 

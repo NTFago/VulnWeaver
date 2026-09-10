@@ -173,6 +173,7 @@ def test_planning_hook_receives_facts_and_targets_reach_generation_config(
                         artifact_version_ids=[version_id],
                         status=TaskStatus.CREATED,
                         result=None,
+                        failure=None,
                         idempotency_key=f"task-bp-{suffix}",
                         resource_budget=cast(ResourceBudget, budget()),
                         created_at=TIMESTAMP,

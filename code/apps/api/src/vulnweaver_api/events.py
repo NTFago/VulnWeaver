@@ -46,6 +46,7 @@ def task_cancelled(
             "previous_status": previous_status,
             "status": TaskStatus.CANCELLED,
             "result": None,
+            "failure": None,
         },
     )
 

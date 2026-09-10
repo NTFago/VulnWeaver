@@ -631,6 +631,7 @@ class Task(TypedDict):
     artifact_version_ids: list[Identifier]
     status: TaskStatus
     result: TaskResult | None
+    failure: StructuredFailure | None
     idempotency_key: IdempotencyKey
     resource_budget: ResourceBudget
     created_at: str
@@ -879,6 +880,7 @@ class TaskStatusChangedPayload(TypedDict):
     previous_status: TaskStatus
     status: TaskStatus
     result: TaskResult | None
+    failure: StructuredFailure | None
 
 class TaskRequestedPayload(TypedDict):
     task_id: Identifier
@@ -953,7 +955,7 @@ class CreateProjectRequest(TypedDict):
     input_scope: list[str]
     permission_mode: PermissionMode
     exploit_validation_enabled: bool
-    resource_budget: ResourceBudget
+    resource_budget: NotRequired[ResourceBudget]
 
 class CreateTaskRequest(TypedDict):
     schema_version: SchemaVersion

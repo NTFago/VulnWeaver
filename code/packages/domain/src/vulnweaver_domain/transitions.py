@@ -44,6 +44,7 @@ TASK_TRANSITIONS: Mapping[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.ANALYZING: frozenset(
         {
             TaskStatus.REVIEWING,
+            TaskStatus.REPORTING,
             TaskStatus.COMPLETED,
             TaskStatus.CANCELLED,
             TaskStatus.FAILED,

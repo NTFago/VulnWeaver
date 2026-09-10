@@ -27,6 +27,7 @@ from vulnweaver_contracts import (
     FuzzStatus,
     FuzzToolSummary,
     JsonObject,
+    ResourceBudget,
     SandboxRequest,
     SandboxResult,
     SandboxStatus,
@@ -35,7 +36,11 @@ from vulnweaver_contracts import (
     ToolSpec,
     validate_contract,
 )
-from vulnweaver_tool_runtime import ToolRegistry, ToolRuntimeError
+from vulnweaver_tool_runtime import (
+    ToolRegistry,
+    ToolRuntimeError,
+    bounded_resource_budget,
+)
 
 from vulnweaver_fuzzing.profiles import (
     AFL_CASR_OUTPUT_NAMES,
@@ -290,6 +295,11 @@ class FuzzExecutionService:
             "max_crashes": request["max_crashes"],
             "collect_coverage": request["collect_coverage"],
         }
+        # The Runner refuses a request whose budget exceeds the registered ToolSpec, so the
+        # job/project budget must be clamped before it is forwarded.
+        budget = bounded_resource_budget(
+            cast(ResourceBudget, dict(original["resource_budget"])), spec["resource_limits"]
+        )
         return cast(
             SandboxRequest,
             {
@@ -301,7 +311,8 @@ class FuzzExecutionService:
                 "input_ref": bundle_ref,
                 "arguments": arguments,
                 "output_file_names": list(AFL_CASR_OUTPUT_NAMES),
-                "timeout_seconds": min(original["timeout_seconds"], spec["timeout_seconds"]),
+                "resource_budget": budget,
+                "timeout_seconds": min(original["timeout_seconds"], budget["timeout_seconds"]),
             },
         )
 

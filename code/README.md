@@ -50,7 +50,7 @@ Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`�
 
 空数据库首次启动后，从 Web 页面创建至少 12 个字符密码的管理员账号。注册由数据库唯一约束保证只成功一次；账号存在后接口关闭。密码仅以 Argon2id 哈希保存，不进入 `.env`。
 
-浏览器登录使用 `HttpOnly` 会话 Cookie；登录响应同时返回 `csrf_token`，写请求须和可读的 `vulnweaver_csrf` 同站 Cookie 一样，通过 `X-CSRF-Token` 回传。认证请求必须携带 `schema_version: "1.0.0"`，改密还必须携带 `Idempotency-Key`。本地纯 HTTP 调试需设置 `SECURE_COOKIE=false`。
+浏览器登录使用 `HttpOnly` 会话 Cookie；登录响应同时返回 `csrf_token`，写请求须和可读的 `vulnweaver_csrf` 同站 Cookie 一样，通过 `X-CSRF-Token` 回传。认证请求必须携带 `schema_version: "1.0.0"`，改密还必须携带 `Idempotency-Key`。Compose 默认仅把 Web 暴露到本机回环地址并使用纯 HTTP Cookie；部署到 HTTPS 反向代理后必须设置 `SECURE_COOKIE=true`。
 
 复核模型端点、模型名、API Key、超时、重试和节流参数改由 Web“设置”管理并保存到 PostgreSQL，分析 Worker 下次启动时生效。API Key 按产品约定明文落库，但 API 永不回显，只显示是否已配置；数据库管理员和备份读取者仍可看到它。跨主机访问必须配置 HTTPS/TLS，本机纯 HTTP 仅用于 `localhost`。数据库/Redis/Runner 地址、Cookie 策略、代理和资源安全上限继续由部署配置注入。
 

@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
 import signal
 import sys
 from dataclasses import dataclass
 from types import FrameType
-from typing import Any
+from typing import Any, cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
 from vulnweaver_contracts import (
+    ArtifactKind,
     CrashRecord,
     Finding,
     FindingCategory,
+    JsonObject,
     ResourceBudget,
     Task,
     ToolIdentity,
@@ -29,6 +32,9 @@ from vulnweaver_fuzzing import (
     CASR_TOOL_VERSION,
     FuzzExecutionService,
     FuzzJobExecutor,
+    HarnessCompiler,
+    HarnessGenerator,
+    HarnessPipeline,
     afl_casr_tool_spec,
 )
 from vulnweaver_model_gateway import (
@@ -63,9 +69,11 @@ from vulnweaver_proof import (
     SandboxRunnerClient,
 )
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
-from vulnweaver_reporting import ReportJobExecutor
+from vulnweaver_reporting import ReportJobExecutor, ReportJobScheduler
 from vulnweaver_source_analysis import (
     AnalysisJobExecutor,
+    SourceExcerptReader,
+    SourceImportError,
     SourceImportExecutor,
     StaticAnalysisExecutor,
     StaticAnalysisScheduler,
@@ -123,6 +131,13 @@ async def _run() -> None:
             image_digest=None,
         ),
     )
+    report_scheduler = ReportJobScheduler(
+        tool=ToolIdentity(
+            name="vulnweaver-report",
+            version=os.environ.get("REPORT_TOOL_VERSION", "1.0.0"),
+            image_digest=None,
+        )
+    )
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -145,9 +160,13 @@ async def _run() -> None:
             database, store, settings
         )
         proof_executor = _proof_executor(database, store, model_gateway, config)
-        fuzz_executor = await _fuzz_executor(database, store, tool_registry, config)
+        fuzz_executor = await _fuzz_executor(
+            database, store, tool_registry, model_gateway, config
+        )
         exploit_scheduler = _auto_exploit_scheduler(database, config)
-        fuzz_scheduler = _fuzz_scheduler(database, config)
+        fuzz_scheduler = _fuzz_scheduler(
+            database, store, config, harness_enabled=model_gateway is not None
+        )
         binary_sandbox, binary_digest = await _binary_sandbox(config)
         binary_planning_hook = (
             _ReversePlanningHook(
@@ -204,7 +223,11 @@ async def _run() -> None:
             executor=executor,
             gateway=model_gateway,
             settlement=TaskAggregateSettlementHook(
-                review_scheduler, audit_scheduler, exploit_scheduler, fuzz_scheduler
+                review_scheduler,
+                audit_scheduler,
+                exploit_scheduler,
+                fuzz_scheduler,
+                report_scheduler,
             ),
         )
 
@@ -229,6 +252,8 @@ async def _run() -> None:
             lease_seconds=_environment_int("WORKER_LEASE_SECONDS", 120),
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
+            retry_base_seconds=float(os.environ.get("WORKER_RETRY_BASE_SECONDS", "1.0")),
+            retry_max_seconds=float(os.environ.get("WORKER_RETRY_MAX_SECONDS", "30.0")),
         ),
         settlement_hook=HotReloadSettlementHook(
             assemblies,
@@ -324,9 +349,13 @@ def _model_executors(
     endpoint = ModelEndpoint(
         name="review-model",
         base_url=base_url,
-        # The configured product model serves both the REVIEW and AUDIT tiers
-        # until dedicated audit-model settings exist.
-        models={ModelTier.REVIEW: model, ModelTier.AUDIT: model},
+        # The configured product model serves planning, review and audit until
+        # dedicated per-tier settings exist.
+        models={
+            ModelTier.REVIEW: model,
+            ModelTier.AUDIT: model,
+            ModelTier.PLANNING: model,
+        },
         api_key=stored_api_key,
         timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
         max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
@@ -336,6 +365,7 @@ def _model_executors(
             routes={
                 ModelTier.REVIEW: ModelRoute(primary=endpoint),
                 ModelTier.AUDIT: ModelRoute(primary=endpoint),
+                ModelTier.PLANNING: ModelRoute(primary=endpoint),
             },
             proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
             max_repair_attempts=_setting_int(
@@ -386,6 +416,7 @@ def _proof_executor(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+        resource_limits=_proof_resource_budget(),
     )
     generator = (
         ExploitScriptGenerator(database, model_gateway, store)
@@ -400,7 +431,9 @@ def _auto_exploit_scheduler(
 ) -> AutoExploitScheduler | None:
     image_digest = (
         config.digests.proof_tool
+        # Legacy alias still honoured by the deployments that predate the settings page.
         or os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
+        or os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
     )
     if not image_digest:
         # Without a pinned proof image the automatic exploit pipeline stays off.
@@ -415,6 +448,25 @@ def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
         runner_url,
         timeout_seconds=timeout,
         bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None,
+    )
+
+
+def _proof_resource_budget() -> ResourceBudget:
+    """Mirror the budget the Sandbox Runner registers for the proof tool.
+
+    Proof and exploit requests carry the whole project budget, which exceeds the proof tool's
+    limits and would be refused as ``sandbox.resource_budget_exceeded``. The executor clamps to
+    these values, so they must track the Runner's ``PROOF_*`` deployment configuration.
+    """
+
+    return ResourceBudget(
+        max_model_tokens=0,
+        cpu_millis=int(os.environ.get("PROOF_CPU_MILLIS", "1000")),
+        memory_bytes=int(os.environ.get("PROOF_MEMORY_BYTES", str(256 * 1024 * 1024))),
+        disk_bytes=int(os.environ.get("PROOF_DISK_BYTES", str(256 * 1024 * 1024))),
+        max_tool_concurrency=1,
+        max_dynamic_runs=1,
+        timeout_seconds=int(os.environ.get("PROOF_TIMEOUT_SECONDS", "120")),
     )
 
 
@@ -434,6 +486,7 @@ async def _fuzz_executor(
     database: Database,
     store: LocalContentAddressedStore,
     tool_registry: ToolRegistry,
+    model_gateway: ModelGateway | None,
     config: ResolvedDeploymentConfig,
 ) -> FuzzJobExecutor | None:
     """Assemble the fuzz executor from the digest the Runner actually enforces.
@@ -478,24 +531,43 @@ async def _fuzz_executor(
             ),
         ),
         crash_sink=_CrashEvidenceSink(database),
+        harness_pipeline=(
+            HarnessPipeline(
+                HarnessCompiler(store, tool_registry, client),
+                generator=HarnessGenerator(model_gateway),
+                repairer=HarnessGenerator(model_gateway),
+            )
+            if model_gateway is not None
+            else None
+        ),
     )
 
 
 def _fuzz_scheduler(
-    database: Database, config: ResolvedDeploymentConfig
+    database: Database,
+    store: LocalContentAddressedStore,
+    config: ResolvedDeploymentConfig,
+    *,
+    harness_enabled: bool,
 ) -> FuzzJobScheduler | None:
     """Enable automatic fuzz dispatch; the resolver declines when it cannot run."""
     if not (config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()):
         # Without a pinned fuzz image the scheduler would only ever decline.
         return None
-    return FuzzJobScheduler(database, target_resolver=_fuzz_target_for(config))
 
+    async def resolve(
+        repositories: Repositories, finding: Finding, task: Task
+    ) -> FuzzTarget | None:
+        return await _fuzz_target(
+            repositories,
+            finding,
+            task,
+            config,
+            store=store,
+            harness_enabled=harness_enabled,
+        )
 
-def _fuzz_target_for(config: ResolvedDeploymentConfig) -> Any:
-    def _resolve(repositories: Repositories, finding: Finding, task: Task) -> Any:
-        return _fuzz_target(repositories, finding, task, config)
-
-    return _resolve
+    return FuzzJobScheduler(database, target_resolver=resolve)
 
 
 async def _fuzz_target(
@@ -503,6 +575,9 @@ async def _fuzz_target(
     finding: Finding,
     task: Task,
     config: ResolvedDeploymentConfig,
+    *,
+    store: LocalContentAddressedStore,
+    harness_enabled: bool,
 ) -> FuzzTarget | None:
     """Resolve a bounded fuzz target for one Finding, or decline.
 
@@ -524,14 +599,50 @@ async def _fuzz_target(
         # would run dynamic analysis outside the authorized scope.
         return None
     version = await repositories.artifacts.get_version(artifact_version_id)
+    artifact = await repositories.artifacts.get(version["artifact_id"])
+    if artifact["kind"] not in {
+        ArtifactKind.ELF,
+        ArtifactKind.SOURCE_ARCHIVE,
+        ArtifactKind.SOURCE_REPOSITORY,
+    }:
+        return None
+    if artifact["kind"] is not ArtifactKind.ELF and not harness_enabled:
+        return None
+    seed = store.put_stream(io.BytesIO(b"A"), max_bytes=1).object_ref
+    harness_context = None
+    if artifact["kind"] is not ArtifactKind.ELF:
+        location = finding["location"]
+        if "path" not in location:
+            return None
+        try:
+            excerpt = await asyncio.to_thread(
+                SourceExcerptReader(store).read,
+                version,
+                location,
+            )
+        except (SourceImportError, OSError, ValueError):
+            return None
+        harness_context = cast(JsonObject, {
+            "finding_title": finding["title"],
+            "category": finding["category"],
+            "cwe_id": finding["cwe_id"],
+            "location": dict(finding["location"]),
+            "source_excerpt": excerpt.text,
+            "instruction": (
+                "Generate a self-contained C/C++ fuzz harness for this authorized source finding. "
+                "The executable must read the input file path from argv[1], use no network, and "
+                "return normally when the input does not trigger the condition."
+            ),
+        })
     return FuzzTarget(
         artifact_version_id=artifact_version_id,
         target_ref=version["object_ref"],
-        seed_refs=(version["object_ref"],),
+        seed_refs=(seed,),
         image_digest=digest,
         max_executions=config.fuzz_max_executions or 10_000,
         max_duration_seconds=config.fuzz_max_duration_seconds or 60,
         max_crashes=config.fuzz_max_crashes or 16,
+        harness_context=harness_context,
     )
 
 

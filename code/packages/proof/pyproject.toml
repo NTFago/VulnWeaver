@@ -10,6 +10,7 @@ dependencies = [
     "vulnweaver-model-gateway",
     "vulnweaver-persistence",
     "vulnweaver-sandbox-runner",
+    "vulnweaver-tool-runtime",
     "httpx>=0.28,<1",
 ]
 
@@ -24,6 +25,7 @@ vulnweaver-model-gateway = { workspace = true }
 vulnweaver-domain = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_proof"

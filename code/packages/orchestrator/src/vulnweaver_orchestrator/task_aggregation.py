@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Sequence
 from typing import Protocol
 
 from vulnweaver_contracts import (
@@ -12,6 +13,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     SchemaVersion,
+    StructuredFailure,
     TaskResult,
     TaskStatus,
     TaskStatusChangedEvent,
@@ -73,6 +75,17 @@ class FuzzDispatchScheduler(Protocol):
     ) -> str | None: ...
 
 
+class ReportDispatchScheduler(Protocol):
+    async def schedule_default(
+        self,
+        repositories: Repositories,
+        task_id: str,
+        parent_version_id: str,
+        *,
+        causation_id: str | None = None,
+    ) -> Job: ...
+
+
 class TaskAggregateSettlementHook:
     def __init__(
         self,
@@ -80,11 +93,13 @@ class TaskAggregateSettlementHook:
         audit_scheduler: SemanticAuditScheduler | None = None,
         exploit_scheduler: ExploitDispatchScheduler | None = None,
         fuzz_scheduler: FuzzDispatchScheduler | None = None,
+        report_scheduler: ReportDispatchScheduler | None = None,
     ) -> None:
         self._review_scheduler = review_scheduler
         self._audit_scheduler = audit_scheduler
         self._exploit_scheduler = exploit_scheduler
         self._fuzz_scheduler = fuzz_scheduler
+        self._report_scheduler = report_scheduler
 
     async def after_terminal(
         self, repositories: Repositories, job: Job, result: WorkerResult
@@ -96,7 +111,10 @@ class TaskAggregateSettlementHook:
         findings = await repositories.findings.list_for_task(task["id"])
         if (
             self._audit_scheduler is not None
-            and job["kind"] is JobKind.SOURCE_ANALYSIS
+            and (
+                job["kind"] is JobKind.SOURCE_ANALYSIS
+                or job["kind"] is JobKind.IMPORT
+            )
             and not any(
                 item["kind"] is JobKind.SOURCE_ANALYSIS and item["status"] in _ACTIVE
                 for item in jobs
@@ -155,6 +173,28 @@ class TaskAggregateSettlementHook:
                         await self._fuzz_scheduler.schedule_finding_in_transaction(
                             repositories, finding["id"]
                         )
+        # Dynamic schedulers run in this transaction. Reload their durable Jobs
+        # before aggregation so a newly queued proof/fuzz Job cannot be skipped.
+        jobs = await repositories.jobs.list_for_task(task["id"])
+        non_report_pending = any(
+            item["kind"] is not JobKind.REPORT and item["status"] in _ACTIVE for item in jobs
+        )
+        if (
+            self._report_scheduler is not None
+            and not non_report_pending
+            and not any(
+                item["id"] == f"job:report:{task['id']}:markdown" for item in jobs
+            )
+            and task["artifact_version_ids"]
+            and _has_reportable_result(jobs)
+        ):
+            await self._report_scheduler.schedule_default(
+                repositories,
+                task["id"],
+                task["artifact_version_ids"][0],
+                causation_id=job["id"],
+            )
+            jobs = await repositories.jobs.list_for_task(task["id"])
         aggregate = aggregate_task(
             [JobSnapshot(kind=item["kind"], status=item["status"]) for item in jobs],
             [item["status"] for item in findings],
@@ -195,7 +235,12 @@ class TaskAggregateSettlementHook:
                 )
                 continue
             transition_task(task["status"], status)
-            updated = await repositories.tasks.set_status(task["id"], status, result=task_result)
+            # A task that ends as FAILED must say which job failed and why, otherwise the API
+            # and UI can only report that something went wrong.
+            task_failure = _task_failure(jobs) if status is TaskStatus.FAILED else None
+            updated = await repositories.tasks.set_status(
+                task["id"], status, result=task_result, failure=task_failure
+            )
             if not updated.changed:
                 task = updated.task
                 continue
@@ -208,6 +253,7 @@ class TaskAggregateSettlementHook:
                 sequence=sequence,
                 occurred_at=updated.task["updated_at"],
                 causation_id=job["id"],
+                failure=task_failure,
             )
             await repositories.task_events.append(event)
             await repositories.outbox.add(event)
@@ -216,12 +262,26 @@ class TaskAggregateSettlementHook:
 
 def _audit_plan(jobs: list[Job]) -> AuditPlan:
     """Derive the durable audit-plan completion from settled Job facts."""
-    plan = build_baseline_plan(*_AUDIT_BASELINES)
+    required = (
+        ("semantic_function_audit",)
+        if any(_is_binary_import(item) for item in jobs)
+        else _AUDIT_BASELINES
+    )
+    plan = build_baseline_plan(*required)
     completed: list[str] = []
     if any(
         item["kind"] is JobKind.SOURCE_ANALYSIS and item["status"] is JobStatus.SUCCEEDED
         for item in jobs
     ):
+        completed.append("static_rules")
+    elif any(
+        item["kind"] is JobKind.IMPORT
+        and not _is_binary_import(item)
+        and item["status"] is JobStatus.SUCCEEDED
+        for item in jobs
+    ) and not any(item["kind"] is JobKind.SOURCE_ANALYSIS for item in jobs):
+        # A source import with no applicable scanner Jobs records the static
+        # baseline as not applicable; semantic audit remains mandatory.
         completed.append("static_rules")
     if any(
         item["kind"] is JobKind.SEMANTIC_AUDIT and item["status"] is JobStatus.SUCCEEDED
@@ -229,6 +289,33 @@ def _audit_plan(jobs: list[Job]) -> AuditPlan:
     ):
         completed.append("semantic_function_audit")
     return complete_baselines(plan, completed)
+
+
+def _is_binary_import(job: Job) -> bool:
+    tool = job.get("tool")
+    return (
+        job["kind"] is JobKind.IMPORT
+        and isinstance(tool, dict)
+        and tool.get("name") == "binary-import"
+    )
+
+
+def _has_reportable_result(jobs: list[Job]) -> bool:
+    return any(
+        item["status"] is JobStatus.SUCCEEDED
+        and item["kind"]
+        in {
+            JobKind.IMPORT,
+            JobKind.SOURCE_ANALYSIS,
+            JobKind.SEMANTIC_AUDIT,
+            JobKind.BINARY_ANALYSIS,
+            JobKind.REVIEW,
+            JobKind.FUZZ,
+            JobKind.PROOF,
+            JobKind.EXPLOIT,
+        }
+        for item in jobs
+    )
 
 
 def _transition_path(
@@ -266,6 +353,23 @@ def _transition_path(
     return [(item, result if item is TaskStatus.COMPLETED else None) for item in selected]
 
 
+def _task_failure(jobs: Sequence[Job]) -> StructuredFailure | None:
+    """Return the earliest job failure as the task-level reason, tagged with its job."""
+
+    for item in jobs:
+        failure = item["failure"]
+        if item["status"] is not JobStatus.FAILED or failure is None:
+            continue
+        return StructuredFailure(
+            code=failure["code"],
+            kind=failure["kind"],
+            message=failure["message"],
+            retryable=failure["retryable"],
+            details={**failure["details"], "job_id": item["id"], "job_kind": str(item["kind"])},
+        )
+    return None
+
+
 def _status_event(
     *,
     task_id: str,
@@ -275,6 +379,7 @@ def _status_event(
     sequence: int,
     occurred_at: str,
     causation_id: str,
+    failure: StructuredFailure | None = None,
 ) -> TaskStatusChangedEvent:
     event_id = (
         "event:" + hashlib.sha256(f"{task_id}\0{sequence}\0{current}".encode()).hexdigest()[:32]
@@ -293,5 +398,6 @@ def _status_event(
             "previous_status": previous,
             "status": current,
             "result": result,
+            "failure": failure,
         },
     )

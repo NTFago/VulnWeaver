@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-from collections.abc import Callable, Mapping
+import logging
+from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, TypedDict, cast
@@ -29,7 +32,7 @@ from vulnweaver_contracts import (
 from vulnweaver_domain import IllegalTransitionError, transition_task
 from vulnweaver_model_gateway import ModelGateway
 from vulnweaver_persistence import Database, EntityNotFound, PersistenceError
-from vulnweaver_queue import RedisStreamsClient, StreamMessage
+from vulnweaver_queue import QueueUnavailable, RedisStreamsClient, StreamMessage
 from vulnweaver_tool_runtime import (
     PolicyContext,
     PolicyDecisionStatus,
@@ -39,6 +42,8 @@ from vulnweaver_tool_runtime import (
 )
 
 from vulnweaver_orchestrator.checkpoints import CheckpointStore
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FlowState(TypedDict):
@@ -86,6 +91,8 @@ class OrchestratorSettings:
     consumer_group: str = "orchestrators"
     read_block_milliseconds: int = 1000
     pending_idle_milliseconds: int = 30_000
+    retry_base_seconds: float = 1.0
+    retry_max_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         if not self.consumer_name or not self.consumer_group:
@@ -94,6 +101,16 @@ class OrchestratorSettings:
             raise ValueError("orchestrator read block must be between 1 and 60000 ms")
         if self.pending_idle_milliseconds < 1:
             raise ValueError("orchestrator pending idle duration must be positive")
+        if self.retry_base_seconds < 0:
+            raise ValueError("orchestrator queue retry base must not be negative")
+        if self.retry_max_seconds < self.retry_base_seconds:
+            raise ValueError("orchestrator queue retry maximum must cover the base delay")
+
+    def retry_delay_seconds(self, attempt: int) -> float:
+        """Exponential backoff for repeated queue failures, capped by the configured maximum."""
+
+        exponent = min(max(attempt - 1, 0), 30)
+        return min(self.retry_max_seconds, self.retry_base_seconds * (2**exponent))
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +157,33 @@ class Orchestrator:
         self._stale_cursor = "0-0"
         self._prefer_fresh = False
         self._graph: Any = self._build_graph()
+
+    async def run(self, stop: asyncio.Event) -> AsyncIterator[tuple[OrchestrationResult, ...]]:
+        """Yield one processed batch at a time, absorbing transient queue failures.
+
+        A Redis stall longer than the client socket timeout surfaces as ``QueueUnavailable``.
+        That is a transient infrastructure fault, so the loop backs off and keeps polling
+        instead of letting the process exit and relying on the container restart policy.
+        """
+
+        attempt = 0
+        while not stop.is_set():
+            try:
+                results = await self.process_once()
+            except QueueUnavailable as error:
+                attempt += 1
+                delay_seconds = self._settings.retry_delay_seconds(attempt)
+                LOGGER.warning(
+                    "orchestrator_queue_unavailable attempt=%s delay_seconds=%s details=%s",
+                    attempt,
+                    delay_seconds,
+                    error.as_dict(),
+                )
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
+                continue
+            attempt = 0
+            yield results
 
     async def process_once(self) -> tuple[OrchestrationResult, ...]:
         """Process one bounded event batch; permanent poison events are ACKed."""
@@ -514,7 +558,9 @@ class Orchestrator:
                 return
             previous = task["status"]
             _ensure_task_transition(previous, TaskStatus.FAILED)
-            updated = await repositories.tasks.set_status(task_id, TaskStatus.FAILED)
+            updated = await repositories.tasks.set_status(
+                task_id, TaskStatus.FAILED, failure=failure
+            )
             sequence = await repositories.task_events.next_sequence(task_id)
             await repositories.task_events.append(
                 _task_status_event(
@@ -524,6 +570,7 @@ class Orchestrator:
                     sequence,
                     _timestamp(self._clock()),
                     causation_id,
+                    failure,
                 )
             )
 
@@ -570,6 +617,7 @@ def _task_status_event(
     sequence: int,
     occurred_at: str,
     causation_id: str | None,
+    failure: StructuredFailure | None = None,
 ) -> TaskStatusChangedEvent:
     return TaskStatusChangedEvent(
         schema_version=SchemaVersion.VALUE_1_0_0,
@@ -585,6 +633,7 @@ def _task_status_event(
             "previous_status": previous,
             "status": status,
             "result": None,
+            "failure": failure,
         },
     )
 

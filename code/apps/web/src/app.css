@@ -13,6 +13,7 @@
 .page-heading>div{min-width:0}
 .page-heading h1{max-width:16ch;text-wrap:balance}
 .page-heading>div>p:last-child{max-width:68ch}
+.page-heading .task-failure{margin:10px 0 0;max-width:68ch;color:var(--danger);font-size:13px;line-height:1.6}
 .metric-strip{grid-template-columns:repeat(3,minmax(0,1fr));background:rgba(255,255,255,.008)}
 .metric-strip>div{min-width:0}
 .metric-strip strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

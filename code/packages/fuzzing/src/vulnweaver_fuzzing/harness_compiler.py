@@ -15,7 +15,7 @@ import tarfile
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError, StoredObject
 from vulnweaver_contracts import (
@@ -45,6 +45,7 @@ BUNDLE_MANIFEST_NAME = "vulnweaver-bundle.json"
 MAX_HARNESS_SOURCE_BYTES = 65536
 MAX_COMPILE_INPUT_BYTES = 512 * 1024 * 1024
 MAX_COMPILE_REPORT_BYTES = 64 * 1024
+MAX_COMPILED_HARNESS_BYTES = 64 * 1024 * 1024
 _FIXTURE_NAME = re.compile(r"^fixtures/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -171,12 +172,39 @@ class HarnessCompiler:
             return HarnessCompileOutcome(False, str(error)[:512])
         if not succeeded:
             return HarnessCompileOutcome(False, message, None, diagnostics or (message,))
-        compiled_ref = _single_output_ref(result, COMPILED_HARNESS_NAME)
+        try:
+            compiled_ref = self._extract_compiled_harness(result)
+        except (ArtifactStoreError, HarnessCompileError, tarfile.TarError) as error:
+            return HarnessCompileOutcome(False, str(error)[:512])
         if compiled_ref is None:
             return HarnessCompileOutcome(
                 False, "compiled harness artifact is missing from the sandbox outputs"
             )
         return HarnessCompileOutcome(True, message, compiled_ref, diagnostics)
+
+    def _extract_compiled_harness(self, result: SandboxResult) -> str | None:
+        archive_ref = _single_output_ref(result, COMPILED_HARNESS_NAME)
+        if archive_ref is None:
+            return None
+        stored = self._store.verify(archive_ref)
+        if stored.size_bytes > MAX_COMPILE_INPUT_BYTES:
+            raise HarnessCompileError("compiled harness archive exceeds its size limit")
+        with self._store.open(archive_ref) as source, tarfile.open(
+            fileobj=source, mode="r:*"
+        ) as archive:
+            members = archive.getmembers()
+            if len(members) != 1 or members[0].name != "harness" or not members[0].isreg():
+                raise HarnessCompileError("compiled harness archive has an unsafe layout")
+            member = members[0]
+            if member.size <= 0 or member.size > MAX_COMPILED_HARNESS_BYTES:
+                raise HarnessCompileError("compiled harness exceeds its size limit")
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                raise HarnessCompileError("compiled harness could not be read")
+            with extracted:
+                return self._store.put_stream(
+                    cast(BinaryIO, extracted), max_bytes=MAX_COMPILED_HARNESS_BYTES
+                ).object_ref
 
     def _read_json(self, result: SandboxResult, name: str) -> Mapping[str, object]:
         matches = [item for item in result["outputs"] if item["path"] == name]

@@ -14,6 +14,7 @@ dependencies = [
     "vulnweaver-persistence",
     "vulnweaver-proof",
     "vulnweaver-reporting",
+    "vulnweaver-tool-runtime",
 ]
 
 [project.scripts]
@@ -31,6 +32,7 @@ vulnweaver-orchestrator = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-proof = { workspace = true }
 vulnweaver-reporting = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
 
 [tool.uv.build-backend]
 module-name = "vulnweaver_api"

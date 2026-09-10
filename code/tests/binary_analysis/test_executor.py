@@ -218,6 +218,7 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             artifact_version_ids=[version_id],
             status=TaskStatus.CREATED,
             result=None,
+            failure=None,
             idempotency_key=f"task-binary-{suffix}",
             resource_budget=cast(ResourceBudget, budget()),
             created_at=TIMESTAMP,
