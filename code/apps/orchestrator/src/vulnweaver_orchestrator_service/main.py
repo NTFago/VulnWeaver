@@ -62,6 +62,8 @@ async def _run() -> None:
             pending_idle_milliseconds=_environment_int(
                 "ORCHESTRATOR_PENDING_IDLE_MILLISECONDS", 30_000
             ),
+            retry_base_seconds=_environment_float("ORCHESTRATOR_RETRY_BASE_SECONDS", 1.0),
+            retry_max_seconds=_environment_float("ORCHESTRATOR_RETRY_MAX_SECONDS", 30.0),
         ),
     )
     stop = asyncio.Event()
@@ -70,15 +72,17 @@ async def _run() -> None:
         await database.healthcheck()
         await queue.healthcheck()
         LOGGER.info("orchestrator_started")
-        while not stop.is_set():
-            results = await orchestrator.process_once()
+        async for results in orchestrator.run(stop):
             for result in results:
                 LOGGER.info(
-                    "orchestration_result task_id=%s job_id=%s status=%s acknowledged=%s",
+                    "orchestration_result task_id=%s job_id=%s status=%s acknowledged=%s "
+                    "failure_code=%s failure_details=%s",
                     result.task_id,
                     result.job_id,
                     result.status,
                     result.acknowledged,
+                    result.failure["code"] if result.failure is not None else None,
+                    result.failure["details"] if result.failure is not None else None,
                 )
     finally:
         await queue.close()
@@ -96,6 +100,11 @@ def _required_environment(name: str) -> str:
 def _environment_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     return default if value is None else int(value)
+
+
+def _environment_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    return default if value is None else float(value)
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

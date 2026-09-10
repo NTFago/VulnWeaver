@@ -109,7 +109,7 @@ class CreateProjectBody(StrictModel):
     input_scope: list[str] = Field(min_length=1)
     permission_mode: Literal["request_permission", "full_access"]
     exploit_validation_enabled: bool
-    resource_budget: ResourceBudgetModel
+    resource_budget: ResourceBudgetModel | None = None
 
 
 class CreateTaskBody(StrictModel):

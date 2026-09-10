@@ -1850,6 +1850,7 @@ dependencies = [
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-proof" },
     { name = "vulnweaver-reporting" },
+    { name = "vulnweaver-tool-runtime" },
 ]
 
 [package.metadata]
@@ -1864,6 +1865,7 @@ requires-dist = [
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-proof", editable = "packages/proof" },
     { name = "vulnweaver-reporting", editable = "packages/reporting" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
 ]
 
 [[package]]
@@ -2075,6 +2077,7 @@ dependencies = [
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-sandbox-runner" },
+    { name = "vulnweaver-tool-runtime" },
 ]
 
 [package.metadata]
@@ -2086,6 +2089,7 @@ requires-dist = [
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
 ]
 
 [[package]]
@@ -2182,6 +2186,7 @@ dependencies = [
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
+    { name = "vulnweaver-tool-runtime" },
     { name = "vulnweaver-worker" },
 ]
 
@@ -2196,6 +2201,7 @@ requires-dist = [
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
+    { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
     { name = "vulnweaver-worker", editable = "packages/worker" },
 ]
 

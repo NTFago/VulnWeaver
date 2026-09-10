@@ -209,6 +209,8 @@ async def _run() -> None:
             lease_seconds=_environment_int("WORKER_LEASE_SECONDS", 120),
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
+            retry_base_seconds=float(os.environ.get("WORKER_RETRY_BASE_SECONDS", "1.0")),
+            retry_max_seconds=float(os.environ.get("WORKER_RETRY_MAX_SECONDS", "30.0")),
         ),
         settlement_hook=TaskAggregateSettlementHook(
             review_scheduler,
@@ -360,6 +362,7 @@ def _proof_executor(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+        resource_limits=_proof_resource_budget(),
     )
     generator = (
         ExploitScriptGenerator(database, model_gateway, store)
@@ -387,6 +390,25 @@ def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
         runner_url,
         timeout_seconds=timeout,
         bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None,
+    )
+
+
+def _proof_resource_budget() -> ResourceBudget:
+    """Mirror the budget the Sandbox Runner registers for the proof tool.
+
+    Proof and exploit requests carry the whole project budget, which exceeds the proof tool's
+    limits and would be refused as ``sandbox.resource_budget_exceeded``. The executor clamps to
+    these values, so they must track the Runner's ``PROOF_*`` deployment configuration.
+    """
+
+    return ResourceBudget(
+        max_model_tokens=0,
+        cpu_millis=int(os.environ.get("PROOF_CPU_MILLIS", "1000")),
+        memory_bytes=int(os.environ.get("PROOF_MEMORY_BYTES", str(256 * 1024 * 1024))),
+        disk_bytes=int(os.environ.get("PROOF_DISK_BYTES", str(256 * 1024 * 1024))),
+        max_tool_concurrency=1,
+        max_dynamic_runs=1,
+        timeout_seconds=int(os.environ.get("PROOF_TIMEOUT_SECONDS", "120")),
     )
 
 

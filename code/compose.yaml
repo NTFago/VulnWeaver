@@ -125,8 +125,10 @@ services:
       MAX_PASSWORD_CONCURRENCY: ${MAX_PASSWORD_CONCURRENCY:-2}
       MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-8}
       SECURE_COOKIE: ${SECURE_COOKIE:-false}
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
       migrate:
         condition: service_completed_successfully

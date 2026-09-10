@@ -834,7 +834,7 @@
     "Task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "id", "project_id", "artifact_version_ids", "status", "result", "idempotency_key", "resource_budget", "created_at", "updated_at"],
+      "required": ["schema_version", "id", "project_id", "artifact_version_ids", "status", "result", "failure", "idempotency_key", "resource_budget", "created_at", "updated_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "id": {"$ref": "#/$defs/Identifier"},
@@ -842,6 +842,7 @@
         "artifact_version_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
         "status": {"$ref": "#/$defs/TaskStatus"},
         "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
         "idempotency_key": {"$ref": "#/$defs/IdempotencyKey"},
         "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
         "created_at": {"type": "string", "format": "date-time"},
@@ -1231,12 +1232,13 @@
     "TaskStatusChangedPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["task_id", "previous_status", "status", "result"],
+      "required": ["task_id", "previous_status", "status", "result", "failure"],
       "properties": {
         "task_id": {"$ref": "#/$defs/Identifier"},
         "previous_status": {"$ref": "#/$defs/TaskStatus"},
         "status": {"$ref": "#/$defs/TaskStatus"},
-        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]}
+        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
       }
     },
     "TaskRequestedPayload": {
@@ -1350,7 +1352,7 @@
     "CreateProjectRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "name", "input_scope", "permission_mode", "exploit_validation_enabled", "resource_budget"],
+      "required": ["schema_version", "name", "input_scope", "permission_mode", "exploit_validation_enabled"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "name": {"type": "string", "minLength": 1, "maxLength": 256},

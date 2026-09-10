@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -23,7 +24,7 @@ from vulnweaver_persistence import (
     PersistenceInvariantError,
     Repositories,
 )
-from vulnweaver_queue import RedisStreamsClient, StreamMessage
+from vulnweaver_queue import QueueUnavailable, RedisStreamsClient, StreamMessage
 
 LOGGER = logging.getLogger("vulnweaver.worker")
 
@@ -48,6 +49,8 @@ class WorkerSettings:
     lease_seconds: int = 30
     heartbeat_interval_seconds: int = 10
     shutdown_grace_seconds: float = 30.0
+    retry_base_seconds: float = 1.0
+    retry_max_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         if not self.consumer_name:
@@ -64,6 +67,16 @@ class WorkerSettings:
             raise ValueError("worker lease duration must exceed its heartbeat interval")
         if self.shutdown_grace_seconds <= 0:
             raise ValueError("worker shutdown grace duration must be positive")
+        if self.retry_base_seconds < 0:
+            raise ValueError("worker queue retry base must not be negative")
+        if self.retry_max_seconds < self.retry_base_seconds:
+            raise ValueError("worker queue retry maximum must cover the base delay")
+
+    def retry_delay_seconds(self, attempt: int) -> float:
+        """Exponential backoff for repeated queue failures, capped by the configured maximum."""
+
+        exponent = min(max(attempt - 1, 0), 30)
+        return min(self.retry_max_seconds, self.retry_base_seconds * (2**exponent))
 
 
 class _LeaseHeartbeatFailed(Exception):
@@ -89,10 +102,10 @@ class ReliableWorker:
         """Consume until stopped, then drain or safely release in-flight leases."""
 
         stream = self._queue.streams.jobs
-        await self._queue.ensure_group(stream, self._settings.consumer_group)
         running: set[asyncio.Task[None]] = set()
         stale_cursor = "0-0"
         prefer_fresh = False
+        attempt = 0
         while not stop.is_set():
             running = {task for task in running if not task.done()}
             capacity = self._settings.concurrency - len(running)
@@ -104,51 +117,83 @@ class ReliableWorker:
                 )
                 continue
 
-            messages: list[StreamMessage] = []
-            if prefer_fresh:
-                messages.extend(
-                    await self._queue.read_group(
-                        stream,
-                        self._settings.consumer_group,
-                        self._settings.consumer_name,
-                        count=capacity,
-                        block_milliseconds=None,
-                    )
+            try:
+                messages, stale_cursor = await self._claim_batch(
+                    stream, capacity, stale_cursor, prefer_fresh=prefer_fresh
                 )
-            if len(messages) < capacity:
-                claimed = await self._queue.claim_stale(
-                    stream,
-                    self._settings.consumer_group,
-                    self._settings.consumer_name,
-                    min_idle_milliseconds=self._settings.pending_idle_milliseconds,
-                    count=capacity - len(messages),
-                    start_id=stale_cursor,
+            except QueueUnavailable as error:
+                # A Redis stall beyond the client socket timeout is transient: keep the consumer
+                # alive and retry with backoff rather than exiting for a container restart.
+                attempt += 1
+                delay_seconds = self._settings.retry_delay_seconds(attempt)
+                LOGGER.warning(
+                    "worker_queue_unavailable attempt=%s delay_seconds=%s details=%s",
+                    attempt,
+                    delay_seconds,
+                    error.as_dict(),
                 )
-                stale_cursor = claimed.next_start_id
-                messages.extend(claimed.messages)
-            if not prefer_fresh and len(messages) < capacity:
-                messages.extend(
-                    await self._queue.read_group(
-                        stream,
-                        self._settings.consumer_group,
-                        self._settings.consumer_name,
-                        count=capacity - len(messages),
-                        block_milliseconds=None,
-                    )
-                )
-            if not messages:
-                messages = await self._queue.read_group(
-                    stream,
-                    self._settings.consumer_group,
-                    self._settings.consumer_name,
-                    count=capacity,
-                    block_milliseconds=self._settings.read_block_milliseconds,
-                )
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
+                continue
+            attempt = 0
             prefer_fresh = not prefer_fresh
             for message in messages:
                 running.add(asyncio.create_task(self._process(message, stop)))
 
         await self._drain(running)
+
+    async def _claim_batch(
+        self,
+        stream: str,
+        capacity: int,
+        stale_cursor: str,
+        *,
+        prefer_fresh: bool,
+    ) -> tuple[list[StreamMessage], str]:
+        """Read up to ``capacity`` jobs, preferring fresh messages and reclaiming stale ones."""
+
+        await self._queue.ensure_group(stream, self._settings.consumer_group)
+        messages: list[StreamMessage] = []
+        if prefer_fresh:
+            messages.extend(
+                await self._queue.read_group(
+                    stream,
+                    self._settings.consumer_group,
+                    self._settings.consumer_name,
+                    count=capacity,
+                    block_milliseconds=None,
+                )
+            )
+        if len(messages) < capacity:
+            claimed = await self._queue.claim_stale(
+                stream,
+                self._settings.consumer_group,
+                self._settings.consumer_name,
+                min_idle_milliseconds=self._settings.pending_idle_milliseconds,
+                count=capacity - len(messages),
+                start_id=stale_cursor,
+            )
+            stale_cursor = claimed.next_start_id
+            messages.extend(claimed.messages)
+        if not prefer_fresh and len(messages) < capacity:
+            messages.extend(
+                await self._queue.read_group(
+                    stream,
+                    self._settings.consumer_group,
+                    self._settings.consumer_name,
+                    count=capacity - len(messages),
+                    block_milliseconds=None,
+                )
+            )
+        if not messages:
+            messages = await self._queue.read_group(
+                stream,
+                self._settings.consumer_group,
+                self._settings.consumer_name,
+                count=capacity,
+                block_milliseconds=self._settings.read_block_milliseconds,
+            )
+        return messages, stale_cursor
 
     async def _drain(self, running: set[asyncio.Task[None]]) -> None:
         if not running:

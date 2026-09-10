@@ -22,7 +22,7 @@
   "output_schema": {"type": "object"},
   "network_policy": {"access": "none", "allowed_hosts": []},
   "filesystem_policy": {"input_read_only": true, "isolated_output": true, "allow_host_paths": false},
-  "resource_limits": {"max_model_tokens": 0, "cpu_millis": 8000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "max_tool_concurrency": 1, "max_dynamic_runs": 0, "timeout_seconds": 600},
+  "resource_limits": {"max_model_tokens": 0, "cpu_millis": 4000, "memory_bytes": 3221225472, "disk_bytes": 1073741824, "max_tool_concurrency": 1, "max_dynamic_runs": 0, "timeout_seconds": 600},
   "approval_required": false,
   "timeout_seconds": 600,
   "retry_policy": {"max_attempts": 2, "backoff_seconds": 5.0, "retryable_failure_kinds": ["timeout", "environment", "dependency"]}

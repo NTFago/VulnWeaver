@@ -20,6 +20,7 @@ class ApiSettings:
     max_upload_concurrency: int = 2
     json_body_max_bytes: int = 1024 * 1024
     secure_cookie: bool = True
+    tool_spec_directory: Path | None = None
 
     def __post_init__(self) -> None:
         if self.upload_max_bytes < 1:
@@ -66,7 +67,15 @@ class ApiSettings:
             max_upload_concurrency=int(os.environ.get("MAX_UPLOAD_CONCURRENCY", "2")),
             json_body_max_bytes=int(os.environ.get("JSON_BODY_MAX_BYTES", str(1024 * 1024))),
             secure_cookie=_boolean_env("SECURE_COOKIE", default=True),
+            tool_spec_directory=_optional_path_env("TOOL_SPEC_DIRECTORY"),
         )
+
+
+def _optional_path_env(name: str) -> Path | None:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return None
+    return Path(value.strip())
 
 
 def _boolean_env(name: str, *, default: bool) -> bool:

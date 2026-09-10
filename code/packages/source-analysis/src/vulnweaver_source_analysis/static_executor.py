@@ -25,7 +25,6 @@ from vulnweaver_contracts import (
     JobRequestedEvent,
     JobStatus,
     JsonObject,
-    ResourceBudget,
     SchemaVersion,
     SourceImportResult,
     StaticAnalysisDiagnostic,
@@ -43,6 +42,7 @@ from vulnweaver_persistence import (
     EntityNotFound,
     PersistenceError,
 )
+from vulnweaver_tool_runtime import bounded_resource_budget
 
 from vulnweaver_source_analysis.archive import SafeArchiveImporter, SourceImportError
 from vulnweaver_source_analysis.finding_projection import StaticFindingProjector
@@ -378,7 +378,7 @@ class StaticAnalysisScheduler:
                     idempotency_key=_stable_identifier(
                         "static-analysis", import_job["id"], tool_name
                     ),
-                    resource_budget=_bounded_budget(
+                    resource_budget=bounded_resource_budget(
                         import_job["resource_budget"], spec["resource_limits"]
                     ),
                     retry_policy=spec["retry_policy"],
@@ -407,18 +407,6 @@ class StaticAnalysisScheduler:
                 await repositories.jobs.enqueue_with_outbox(job, event)
                 created.append(job_id)
         return tuple(created)
-
-
-def _bounded_budget(outer: ResourceBudget, inner: ResourceBudget) -> ResourceBudget:
-    return ResourceBudget(
-        max_model_tokens=min(outer["max_model_tokens"], inner["max_model_tokens"]),
-        cpu_millis=min(outer["cpu_millis"], inner["cpu_millis"]),
-        memory_bytes=min(outer["memory_bytes"], inner["memory_bytes"]),
-        disk_bytes=min(outer["disk_bytes"], inner["disk_bytes"]),
-        max_tool_concurrency=min(outer["max_tool_concurrency"], inner["max_tool_concurrency"]),
-        max_dynamic_runs=min(outer["max_dynamic_runs"], inner["max_dynamic_runs"]),
-        timeout_seconds=min(outer["timeout_seconds"], inner["timeout_seconds"]),
-    )
 
 
 def _result(

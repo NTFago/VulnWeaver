@@ -93,6 +93,7 @@ def task(
         artifact_version_ids=artifact_version_ids or ["artifact-version:t03"],
         status=TaskStatus.CREATED,
         result=None,
+        failure=None,
         idempotency_key=idempotency_key,
         resource_budget=cast(ResourceBudget, budget()),
         created_at=TIMESTAMP,
@@ -165,5 +166,6 @@ def task_event(
             "previous_status": TaskStatus.CREATED,
             "status": TaskStatus.VALIDATING,
             "result": None,
+            "failure": None,
         },
     )

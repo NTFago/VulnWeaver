@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Sequence
 from typing import Protocol
 
 from vulnweaver_contracts import (
@@ -12,6 +13,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     SchemaVersion,
+    StructuredFailure,
     TaskResult,
     TaskStatus,
     TaskStatusChangedEvent,
@@ -233,7 +235,12 @@ class TaskAggregateSettlementHook:
                 )
                 continue
             transition_task(task["status"], status)
-            updated = await repositories.tasks.set_status(task["id"], status, result=task_result)
+            # A task that ends as FAILED must say which job failed and why, otherwise the API
+            # and UI can only report that something went wrong.
+            task_failure = _task_failure(jobs) if status is TaskStatus.FAILED else None
+            updated = await repositories.tasks.set_status(
+                task["id"], status, result=task_result, failure=task_failure
+            )
             if not updated.changed:
                 task = updated.task
                 continue
@@ -246,6 +253,7 @@ class TaskAggregateSettlementHook:
                 sequence=sequence,
                 occurred_at=updated.task["updated_at"],
                 causation_id=job["id"],
+                failure=task_failure,
             )
             await repositories.task_events.append(event)
             await repositories.outbox.add(event)
@@ -345,6 +353,23 @@ def _transition_path(
     return [(item, result if item is TaskStatus.COMPLETED else None) for item in selected]
 
 
+def _task_failure(jobs: Sequence[Job]) -> StructuredFailure | None:
+    """Return the earliest job failure as the task-level reason, tagged with its job."""
+
+    for item in jobs:
+        failure = item["failure"]
+        if item["status"] is not JobStatus.FAILED or failure is None:
+            continue
+        return StructuredFailure(
+            code=failure["code"],
+            kind=failure["kind"],
+            message=failure["message"],
+            retryable=failure["retryable"],
+            details={**failure["details"], "job_id": item["id"], "job_kind": str(item["kind"])},
+        )
+    return None
+
+
 def _status_event(
     *,
     task_id: str,
@@ -354,6 +379,7 @@ def _status_event(
     sequence: int,
     occurred_at: str,
     causation_id: str,
+    failure: StructuredFailure | None = None,
 ) -> TaskStatusChangedEvent:
     event_id = (
         "event:" + hashlib.sha256(f"{task_id}\0{sequence}\0{current}".encode()).hexdigest()[:32]
@@ -372,5 +398,6 @@ def _status_event(
             "previous_status": previous,
             "status": current,
             "result": result,
+            "failure": failure,
         },
     )
