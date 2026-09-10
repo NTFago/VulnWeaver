@@ -56,7 +56,7 @@
 | T31 漏洞自动利用智能体 | 待验证 | Codex（`feat/t31-auto-exploit`） | 新增 `ExploitScript` 公共契约与 `AutoExploitScheduler`：复核结算后对 confirmed 且项目开启利用验证的 Finding 自动投递 EXPLOIT Job（幂等，未确认/未开启自动跳过）；`ExploitScriptGenerator` 执行期按 Finding 事实调用 PLANNING 档模型生成脚本，经 `validate_generated_script` 安全红线校验后登记为输入工件的派生版本（可追溯 produced_by/parent），再走既有沙箱 Proof 链路并落 Poc 证据链；5 项新测试覆盖投递门禁、生成执行全链、危险脚本拒绝、钩子自动投递。全量 370 passed | 真实模型端到端（配置 `PROOF_TOOL_IMAGE_DIGEST` + 模型后对教学样本验收） | 2026-09-10 |
 | T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex（`feat/t32-fuzz-auto`） | 已增加 `JobKind.FUZZ`、幂等 Fuzz Job 调度、结构化 harness 源码生成、编译修正循环、受限 `FuzzRequest` 构造器、FuzzJobExecutor、analysis-worker 条件化 Sandbox 装配，以及从实际 crash outcome 到 Finding Evidence 的事务性持久化；自动链路尚缺 harness 编译产物/种子的持久化编排。当前 Dev Container 未配置 `SANDBOX_RUNNER_URL`，且无可解析 AFL/CASR 固定镜像，不能进行真实 E2E | 完成工件编排；部署 Runner 与登记 AFL/CASR 镜像后执行教学样本受限 E2E、全量门禁、台账收口 | 2026-09-10 |
 | T33 前端逆向工作台与人工复核 | 待验证 | Codex | 任务页新增「函数与调用链」工作台：函数列表点击选中、caller/callee 双列联动跳转、二进制伪代码代码视图；新增「智能体运行轨迹」区（模型、决策数、token、耗时、失败码）渲染 agent-runs；人工复核与标注入口此前已并入 Finding 详情 | 真实二进制样本浏览器回归验证（依赖 T26 沙箱链路产出伪代码） | 2026-09-10 |
-| T34 报告证据链写实 | 进行中 | Codex | Markdown/HTML(PDF源) 增加证据与复核引用、严重等级/状态；SARIF 增加 fixes 修复建议 | 二进制地址/调用路径/工件摘要明细及真实 PDF/SARIF Schema 验收 | 2026-09-10 |
+| T34 报告证据链写实 | 进行中 | Codex（`feat/t32-fuzz-auto`） | Markdown/PDF/SARIF 已增加严重等级、修复建议、Evidence 工件引用/摘要、crash stack 摘要、复核/PoC 引用；二进制 Finding 显式输出 `0x…` 地址，SARIF 使用 `binary://` URI；模块测试、实际 WeasyPrint 渲染和项目 SARIF 结构校验通过 | 调用路径需先在 Finding/Evidence 投影中提供稳定数据源；随后做独立 SARIF Schema 与真实报告 Job 验收 | 2026-09-10 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
