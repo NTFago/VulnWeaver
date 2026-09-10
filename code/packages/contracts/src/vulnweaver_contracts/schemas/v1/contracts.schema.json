@@ -1063,6 +1063,16 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "ActionPlanProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "steps", "rationale"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/ActionStep"}},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
+      }
+    },
     "ToolSpec": {
       "type": "object",
       "additionalProperties": false,

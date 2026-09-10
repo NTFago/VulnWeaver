@@ -705,6 +705,12 @@ export interface ActionPlan {
   created_at: string;
 }
 
+export interface ActionPlanProposal {
+  schema_version: SchemaVersion;
+  steps: Array<ActionStep>;
+  rationale: string;
+}
+
 export interface ToolSpec {
   schema_version: SchemaVersion;
   name: Identifier;
