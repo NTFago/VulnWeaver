@@ -22,8 +22,7 @@ def build_markdown(
     for finding in findings:
         finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
-        path = location.get("path", "unknown")
-        line = location.get("line", 1)
+        location_text = _location_text(location)
         lines.extend(
             [
                 f"## {finding['title'][:256]}",
@@ -33,7 +32,7 @@ def build_markdown(
                 f"- Severity: `{_value(finding['severity'])}`",
                 f"- Status: `{_value(finding['status'])}`",
                 f"- Confidence: `{finding['confidence']:.2f}`",
-                f"- Location: `{str(path)[:4096]}:{line}`",
+                f"- Location: `{location_text}`",
                 f"- Evidence: {len(finding['evidence_ids'])} referenced artifact(s)",
                 f"- Reviews: {len(finding['review_ids'])}",
                 f"- Proof runs: {len(poc_by_finding.get(finding['id'], []))}",
@@ -83,3 +82,11 @@ def build_markdown(
 def _value(value: object) -> str:
     member = getattr(value, "value", value)
     return member if isinstance(member, str) else str(member)
+
+
+def _location_text(location: dict[str, object]) -> str:
+    address = location.get("address")
+    if isinstance(address, int):
+        return f"0x{address:x}"
+    path = location.get("path", "unknown")
+    return f"{str(path)[:4096]}:{location.get('line', 1)}"

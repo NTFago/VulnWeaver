@@ -147,6 +147,9 @@ def _result(
 
 def _location_uri(finding: Finding) -> str:
     location = finding["location"]
+    address = location.get("address")
+    if isinstance(address, int):
+        return f"binary://0x{address:x}"
     value = location.get("path")
     return value[:4096] if isinstance(value, str) and value else "unknown"
 
