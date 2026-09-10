@@ -23,6 +23,9 @@ from vulnweaver_orchestrator import (
     IndependentModelReviewer,
     ReviewJobExecutor,
     ReviewJobScheduler,
+    SemanticAuditJobExecutor,
+    SemanticAuditor,
+    SemanticAuditScheduler,
     TaskAggregateSettlementHook,
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
@@ -71,7 +74,8 @@ async def _run() -> None:
     }
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
-    review_executor, model_gateway = await _review_executor(database, store)
+    audit_scheduler = SemanticAuditScheduler(database)
+    review_executor, audit_executor, model_gateway = await _model_executors(database, store)
     report_executor = ReportJobExecutor(
         database,
         ArtifactRegistrationService(store, database),
@@ -113,6 +117,7 @@ async def _run() -> None:
         binary_executor,
         proof=proof_executor,
         report=report_executor,
+        semantic_audit=audit_executor,
     )
     worker = ReliableWorker(
         database,
@@ -128,7 +133,7 @@ async def _run() -> None:
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
-        settlement_hook=TaskAggregateSettlementHook(review_scheduler),
+        settlement_hook=TaskAggregateSettlementHook(review_scheduler, audit_scheduler),
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -170,15 +175,15 @@ def _environment_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
-async def _review_executor(
+async def _model_executors(
     database: Database, store: LocalContentAddressedStore
-) -> tuple[ReviewJobExecutor, ModelGateway | None]:
+) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
     async with database.transaction() as repositories:
         product_settings = await repositories.product_settings.get()
     base_url = str(product_settings.get("review_model_base_url", "")).strip()
     model = str(product_settings.get("review_model_name", "")).strip()
     if not base_url and not model:
-        return ReviewJobExecutor(None), None
+        return ReviewJobExecutor(None), None, None
     if not base_url or not model:
         raise RuntimeError(
             "REVIEW_MODEL_BASE_URL and REVIEW_MODEL_NAME must be configured together"
@@ -189,14 +194,19 @@ async def _review_executor(
     endpoint = ModelEndpoint(
         name="review-model",
         base_url=base_url,
-        models={ModelTier.REVIEW: model},
+        # The configured product model serves both the REVIEW and AUDIT tiers
+        # until dedicated audit-model settings exist.
+        models={ModelTier.REVIEW: model, ModelTier.AUDIT: model},
         api_key=stored_api_key,
         timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
         max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
     )
     gateway = ModelGateway(
         ModelGatewaySettings(
-            routes={ModelTier.REVIEW: ModelRoute(primary=endpoint)},
+            routes={
+                ModelTier.REVIEW: ModelRoute(primary=endpoint),
+                ModelTier.AUDIT: ModelRoute(primary=endpoint),
+            },
             proxy_url=os.environ.get("REVIEW_MODEL_PROXY_URL") or None,
             max_repair_attempts=_setting_int(
                 product_settings, "review_model_repair_attempts", 1
@@ -207,7 +217,12 @@ async def _review_executor(
         )
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
-    return ReviewJobExecutor(reviewer), gateway
+    auditor = SemanticAuditor(database, gateway, store)
+    return (
+        ReviewJobExecutor(reviewer),
+        SemanticAuditJobExecutor(database, auditor),
+        gateway,
+    )
 
 
 def _setting_int(settings: dict[str, object], name: str, default: int) -> int:

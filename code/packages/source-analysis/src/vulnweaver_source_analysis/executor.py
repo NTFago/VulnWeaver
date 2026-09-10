@@ -411,6 +411,7 @@ class AnalysisJobExecutor:
         binary: JobExecutor | None = None,
         proof: JobExecutor | None = None,
         report: JobExecutor | None = None,
+        semantic_audit: JobExecutor | None = None,
     ) -> None:
         self._source = source
         self._static = static
@@ -418,6 +419,7 @@ class AnalysisJobExecutor:
         self._binary = binary
         self._proof = proof
         self._report = report
+        self._semantic_audit = semantic_audit
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is JobKind.REVIEW:
@@ -430,6 +432,16 @@ class AnalysisJobExecutor:
                     retryable=False,
                 )
             return await self._review.execute(job, cancellation)
+        if job["kind"] is JobKind.SEMANTIC_AUDIT:
+            if self._semantic_audit is None:
+                return _failed_result(
+                    job["id"],
+                    code="semantic_audit.executor_unconfigured",
+                    kind=FailureKind.DEPENDENCY,
+                    message="semantic audit executor is not configured",
+                    retryable=False,
+                )
+            return await self._semantic_audit.execute(job, cancellation)
         if job["kind"] in {JobKind.PROOF, JobKind.EXPLOIT}:
             if self._proof is None:
                 return _failed_result(
