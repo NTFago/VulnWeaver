@@ -54,7 +54,6 @@ from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, I
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
-from vulnweaver_tool_runtime import ToolSpecLoader
 
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
@@ -110,11 +109,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
     upload_slots = asyncio.Semaphore(configuration.max_upload_concurrency)
     review_gate = FindingReviewGate(database)
-    tool_registry = (
-        ToolSpecLoader.load_directory(configuration.tool_spec_directory)
-        if configuration.tool_spec_directory is not None
-        else None
-    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -374,15 +368,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
     ) -> Project:
         key = normalize_idempotency_key(idempotency_key)
-        # An omitted budget is resolved from the registered tool specs rather than sent as null,
-        # because the contract types the property as a ResourceBudget when it is present.
+        # An omitted budget stays omitted in the contract payload; the stored row is
+        # resolved server-side because budgets are inert bookkeeping (ADR-025).
         payload = body.model_dump(mode="json", exclude_none=True)
         validate_contract("CreateProjectRequest", payload)
-        payload["resource_budget"] = resolve_project_budget(
-            tool_registry,
-            payload.get("resource_budget"),
-            exploit_validation_enabled=bool(payload["exploit_validation_enabled"]),
-        )
+        payload["resource_budget"] = resolve_project_budget()
         fingerprint = request_fingerprint(payload)
         async with database.transaction() as repositories:
             await repositories.api_requests.lock(scope="projects:create", key=key)
@@ -578,25 +568,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
     ) -> Task:
         key = normalize_idempotency_key(idempotency_key)
-        payload = body.model_dump(mode="json")
+        payload = body.model_dump(mode="json", exclude_none=True)
         validate_contract("CreateTaskRequest", payload)
         now = _now()
-        task = Task(
-            schema_version=SchemaVersion.VALUE_1_0_0,
-            id=_identifier("task"),
-            project_id=project_id,
-            artifact_version_ids=payload["artifact_version_ids"],
-            status=TaskStatus.CREATED,
-            result=None,
-            failure=None,
-            idempotency_key=key,
-            resource_budget=cast(ResourceBudget, payload["resource_budget"]),
-            created_at=now,
-            updated_at=now,
-        )
         async with database.transaction() as repositories:
-            await repositories.projects.get(project_id)
-            for version_id in task["artifact_version_ids"]:
+            project = await repositories.projects.get(project_id)
+            for version_id in payload["artifact_version_ids"]:
                 version = await repositories.artifacts.get_version(version_id)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
                 if artifact["project_id"] != project_id:
@@ -605,6 +582,22 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                         "artifact version does not belong to this project",
                         "artifact_version_ids",
                     )
+            task = Task(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=_identifier("task"),
+                project_id=project_id,
+                artifact_version_ids=payload["artifact_version_ids"],
+                status=TaskStatus.CREATED,
+                result=None,
+                failure=None,
+                idempotency_key=key,
+                # Omitted budgets inherit the project row; budgets are inert bookkeeping.
+                resource_budget=cast(
+                    ResourceBudget, payload.get("resource_budget") or project["resource_budget"]
+                ),
+                created_at=now,
+                updated_at=now,
+            )
             result = await repositories.tasks.create(task)
             if not result.created:
                 response.status_code = 200
@@ -828,25 +821,37 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         _: Annotated[str, Depends(require_write)],
     ) -> Job:
         job_id = f"job:proof:{uuid4().hex}"
-        request = cast(
-            ProofRequest,
-            {
-                "schema_version": SchemaVersion.VALUE_1_0_0,
-                "id": f"proof:{uuid4().hex}",
-                "job_id": job_id,
-                "finding_id": finding_id,
-                "script_ref": body.script_ref,
-                "image_digest": body.image_digest,
-                "permission_mode": body.permission_mode,
-                "resource_budget": body.resource_budget.model_dump(mode="json"),
-                "timeout_seconds": body.resource_budget.timeout_seconds,
-            },
-        )
-        validate_contract("ProofRequest", request)
-        scheduler = ProofJobScheduler(
-            tool=ToolIdentity(name="proof-tool", version="1.0.0", image_digest=body.image_digest)
-        )
         async with database.transaction() as repositories:
+            finding = await repositories.findings.get(finding_id)
+            task = await repositories.tasks.get(finding["task_id"])
+            project = await repositories.projects.get(task["project_id"])
+            # Budgets are inert bookkeeping (ADR-025): an omitted budget inherits the
+            # project row, and a supplied timeout keeps its operational meaning only.
+            budget = (
+                body.resource_budget.model_dump(mode="json")
+                if body.resource_budget is not None
+                else dict(project["resource_budget"])
+            )
+            request = cast(
+                ProofRequest,
+                {
+                    "schema_version": SchemaVersion.VALUE_1_0_0,
+                    "id": f"proof:{uuid4().hex}",
+                    "job_id": job_id,
+                    "finding_id": finding_id,
+                    "script_ref": body.script_ref,
+                    "image_digest": body.image_digest,
+                    "permission_mode": body.permission_mode,
+                    "resource_budget": budget,
+                    "timeout_seconds": int(cast(int, budget["timeout_seconds"])),
+                },
+            )
+            validate_contract("ProofRequest", request)
+            scheduler = ProofJobScheduler(
+                tool=ToolIdentity(
+                    name="proof-tool", version="1.0.0", image_digest=body.image_digest
+                )
+            )
             return await scheduler.schedule(
                 repositories,
                 request,
@@ -1163,6 +1168,7 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         review_model_max_attempts=parsed.review_model_max_attempts,
         review_model_repair_attempts=parsed.review_model_repair_attempts,
         review_model_min_interval_seconds=parsed.review_model_min_interval_seconds,
+        review_model_context_window_tokens=parsed.review_model_context_window_tokens,
         api_key_configured="review_model_api_key" in values,
         tool_image_digests=parsed.tool_image_digests,
         sandbox_budgets=parsed.sandbox_budgets,

@@ -1,8 +1,8 @@
-"""A project budget must cover the ToolSpecs the deployment actually ships.
+"""Project budgets are inert bookkeeping resolved server-side (ADR-025).
 
-The Policy Engine refuses an initial analysis step whose ToolSpec limits exceed the project
-budget, so a default below the shipped specs makes every task fail with no visible reason.
-These tests pin the two sides together by loading the real ``deploy/tool-specs`` directory.
+Compute-resource gating was removed: the server stores an effectively unbounded
+budget row, ignores client-supplied numbers, and task creation accepts an
+omitted budget. These tests pin the new behavior against the real API.
 """
 
 from __future__ import annotations
@@ -13,96 +13,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from vulnweaver_api import ApiSettings, create_app
-from vulnweaver_api.budgets import (
-    DEFAULT_MODEL_TOKENS,
-    MINIMUM_DYNAMIC_RUNS,
-    RESOURCE_BUDGET_KEYS,
-    minimum_resource_budget,
-    resolve_project_budget,
-)
-from vulnweaver_api.errors import ApiInputError
-from vulnweaver_contracts import ResourceBudget
-from vulnweaver_tool_runtime import ToolSpecLoader
+from vulnweaver_api.budgets import UNBOUNDED_RESOURCE_BUDGET, resolve_project_budget
 
 SHIPPED_TOOL_SPECS = Path(__file__).resolve().parents[2] / "deploy" / "tool-specs"
 
 
-@pytest.fixture(scope="module")
-def shipped_registry() -> ToolSpecLoader:
-    return ToolSpecLoader.load_directory(SHIPPED_TOOL_SPECS)
-
-
-def test_shipped_tool_specs_are_loadable(shipped_registry: ToolSpecLoader) -> None:
-    assert len(shipped_registry.snapshot()) > 0
-
-
-def test_omitted_budget_defaults_to_the_shipped_floor(
-    shipped_registry: ToolSpecLoader,
-) -> None:
-    resolved = resolve_project_budget(
-        shipped_registry, None, exploit_validation_enabled=False
-    )
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
-    for key in RESOURCE_BUDGET_KEYS:
-        assert resolved[key] >= floor[key]
-    # Dynamic execution is a first-class capability, so the default must leave runs available.
-    assert resolved["max_dynamic_runs"] >= MINIMUM_DYNAMIC_RUNS
-    # Model-driven stages (semantic audit, review, planning) are not represented by a ToolSpec,
-    # so a default derived only from the specs would leave them without any model budget.
-    assert resolved["max_model_tokens"] >= DEFAULT_MODEL_TOKENS
-    assert DEFAULT_MODEL_TOKENS > 0
-
-
-def test_budget_below_the_shipped_floor_is_rejected(
-    shipped_registry: ToolSpecLoader,
-) -> None:
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
-    undersized = ResourceBudget(**{**floor, "cpu_millis": floor["cpu_millis"] - 1})
-    with pytest.raises(ApiInputError) as caught:
-        resolve_project_budget(
-            shipped_registry, undersized, exploit_validation_enabled=False
-        )
-    assert caught.value.code == "resource_budget_below_tool_requirements"
-    assert "cpu_millis" in caught.value.message
-
-
-def test_budget_at_the_shipped_floor_is_accepted(
-    shipped_registry: ToolSpecLoader,
-) -> None:
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
-    resolved = resolve_project_budget(
-        shipped_registry, floor, exploit_validation_enabled=False
-    )
-    assert resolved == floor
-
-
-def test_exploit_validation_requires_a_dynamic_run(
-    shipped_registry: ToolSpecLoader,
-) -> None:
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
-    blocked = ResourceBudget(**{**floor, "max_dynamic_runs": 0})
-    with pytest.raises(ApiInputError) as caught:
-        resolve_project_budget(
-            shipped_registry, blocked, exploit_validation_enabled=True
-        )
-    assert caught.value.code == "resource_budget_blocks_dynamic_runs"
-    # The same budget is acceptable when the project does not enable exploit validation.
-    assert (
-        resolve_project_budget(
-            shipped_registry, blocked, exploit_validation_enabled=False
-        )["max_dynamic_runs"]
-        == 0
-    )
-
-
-def test_missing_tool_spec_directory_requires_an_explicit_budget() -> None:
-    with pytest.raises(ApiInputError) as caught:
-        resolve_project_budget(None, None, exploit_validation_enabled=False)
-    assert caught.value.code == "resource_budget_required"
+def test_resolved_budget_is_the_unbounded_constant() -> None:
+    assert resolve_project_budget() is UNBOUNDED_RESOURCE_BUDGET
+    # max_model_tokens 0 is the "no output cap" convention consumed by model callers.
+    assert UNBOUNDED_RESOURCE_BUDGET["max_model_tokens"] == 0
+    assert UNBOUNDED_RESOURCE_BUDGET["max_dynamic_runs"] > 0
+    assert UNBOUNDED_RESOURCE_BUDGET["timeout_seconds"] > 0
 
 
 @pytest.fixture
@@ -162,29 +83,52 @@ def _create_project(client: TestClient, csrf: str, budget: dict[str, int] | None
     )
 
 
-def test_project_without_a_budget_gets_one_that_covers_every_shipped_tool(
-    spec_aware_client: TestClient, shipped_registry: ToolSpecLoader
+def test_project_without_a_budget_stores_the_unbounded_row(
+    spec_aware_client: TestClient,
 ) -> None:
     csrf = _register(spec_aware_client)
     response = _create_project(spec_aware_client, csrf, None)
     assert response.status_code == 201
-
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
-    stored = response.json()["resource_budget"]
-    for key in RESOURCE_BUDGET_KEYS:
-        assert stored[key] >= floor[key]
+    assert response.json()["resource_budget"] == dict(UNBOUNDED_RESOURCE_BUDGET)
 
 
-def test_project_with_a_budget_below_the_shipped_tools_is_rejected(
-    spec_aware_client: TestClient, shipped_registry: ToolSpecLoader
+def test_client_supplied_budgets_are_ignored(
+    spec_aware_client: TestClient,
 ) -> None:
-    floor = minimum_resource_budget(shipped_registry)
-    assert floor is not None
     csrf = _register(spec_aware_client)
-    response = _create_project(
-        spec_aware_client, csrf, {**floor, "cpu_millis": floor["cpu_millis"] - 1}
+    tiny = {**dict(UNBOUNDED_RESOURCE_BUDGET), "cpu_millis": 1, "max_dynamic_runs": 0}
+    response = _create_project(spec_aware_client, csrf, tiny)
+    assert response.status_code == 201
+    # The stored row stays the unbounded constant; nothing downstream can gate on it.
+    assert response.json()["resource_budget"] == dict(UNBOUNDED_RESOURCE_BUDGET)
+
+
+def test_task_creation_accepts_an_omitted_budget(spec_aware_client: TestClient) -> None:
+    csrf = _register(spec_aware_client)
+    project = _create_project(spec_aware_client, csrf, None)
+    assert project.status_code == 201  # type: ignore[attr-defined]
+    project_id = str(project.json()["id"])  # type: ignore[attr-defined]
+
+    upload = spec_aware_client.post(
+        f"/api/projects/{project_id}/artifacts?kind=source_archive",
+        headers={
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "artifact:budget-audit",
+            "X-Artifact-Filename": "sample.zip",
+            "Content-Type": "application/octet-stream",
+        },
+        content=b"PK\x03\x04AUTHORIZED-SAMPLE",
     )
-    assert response.status_code == 422
-    assert response.json()["error_code"] == "resource_budget_below_tool_requirements"
-    assert "cpu_millis" in response.json()["message"]
+    assert upload.status_code == 201
+    version_id = str(upload.json()["artifact"]["current_version_id"])
+
+    task = spec_aware_client.post(
+        f"/api/projects/{project_id}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:budget-audit"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version_id],
+        },
+    )
+    assert task.status_code == 201
+    assert task.json()["resource_budget"] == dict(UNBOUNDED_RESOURCE_BUDGET)
