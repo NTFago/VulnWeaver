@@ -7,7 +7,7 @@ from vulnweaver_fuzzing.harness_loop import (
     HarnessLoopResult,
     compile_repair_loop,
 )
-from vulnweaver_fuzzing.job_executor import FuzzJobExecutor
+from vulnweaver_fuzzing.job_executor import FuzzJobExecutor, build_fuzz_request
 from vulnweaver_fuzzing.profiles import (
     AFL_CASR_OUTPUT_NAMES,
     AFL_CASR_PROFILE,
@@ -31,6 +31,7 @@ __all__ = [
     "CrashTriageService",
     "FuzzExecutionService",
     "FuzzJobExecutor",
+    "build_fuzz_request",
     "FuzzBudgetGate",
     "FuzzBudgetLimits",
     "AFL_CASR_OUTPUT_NAMES",

@@ -5,12 +5,15 @@ import asyncio
 from typing import cast
 
 from vulnweaver_contracts import (
+    ArtifactKind,
     FailureKind,
     FuzzRequest,
     FuzzStatus,
     Job,
     JobKind,
     JobStatus,
+    ResourceBudget,
+    SandboxRequest,
     SchemaVersion,
     StructuredFailure,
     WorkerResult,
@@ -70,3 +73,49 @@ def _failed(
             code=code, kind=kind, message=message, retryable=False, details={}
         ),
     )
+
+
+def build_fuzz_request(
+    job: Job,
+    *,
+    artifact_version_id: str,
+    target_ref: str,
+    seed_refs: list[str],
+    image_digest: str,
+    max_executions: int,
+    max_duration_seconds: int,
+    max_crashes: int,
+    collect_coverage: bool = True,
+) -> FuzzRequest:
+    """Build the fixed request shape without accepting executable commands."""
+    if job["kind"] is not JobKind.FUZZ:
+        raise ValueError("only fuzz Jobs can construct fuzz requests")
+    if not all((artifact_version_id, target_ref, image_digest)) or not seed_refs:
+        raise ValueError("fuzz target, artifact version, image digest and seeds are required")
+    budget = cast(ResourceBudget, dict(job["resource_budget"]))
+    request = FuzzRequest(
+        schema_version=SchemaVersion.VALUE_1_0_0,
+        id=f"fuzz-request:{job['id']}",
+        job_id=job["id"],
+        sandbox_request=SandboxRequest(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            id=f"sandbox-request:{job['id']}",
+            tool_name="afl-casr",
+            tool_version="1.0.0",
+            image_digest=image_digest,
+            artifact_kind=ArtifactKind.ELF,
+            input_ref=target_ref,
+            arguments={},
+            output_file_names=[],
+            resource_budget=budget,
+            timeout_seconds=min(budget["timeout_seconds"], max_duration_seconds),
+        ),
+        artifact_version_id=artifact_version_id,
+        seed_refs=seed_refs,
+        max_executions=max_executions,
+        max_duration_seconds=max_duration_seconds,
+        max_crashes=max_crashes,
+        collect_coverage=collect_coverage,
+    )
+    validate_contract("FuzzRequest", request)
+    return request
