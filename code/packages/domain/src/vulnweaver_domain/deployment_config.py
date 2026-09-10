@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 Digest = str
 
@@ -207,11 +208,13 @@ def resolve_deployment_config(
 
 
 def _mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else {}
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
 
 
-def _first(*candidates: object) -> object:
-    for candidate in candidates:
+def _first[T](primary: T | None, *fallbacks: object) -> T | None:
+    """Return the first non-None candidate; fallbacks share primary's type slot."""
+
+    for candidate in (primary, *fallbacks):
         if candidate is not None:
-            return candidate
+            return cast("T", candidate)
     return None

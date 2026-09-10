@@ -178,6 +178,66 @@ def test_product_settings_require_auth_and_never_echo_api_key(
     assert cleared.json()["api_key_configured"] is False
 
 
+def test_product_settings_accept_and_reject_tool_image_digests(
+    client: TestClient,
+) -> None:
+    csrf = _login_and_change_password(client)
+    good = "sha256:" + "a" * 64
+
+    saved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "tool_image_digests": {"binary_tools": good, "proof_tool": None, "afl_casr": None},
+            "sandbox_budgets": {"afl": {"cpu_millis": 5000, "timeout_seconds": 90}},
+            "fuzz_budgets": {
+                "max_executions": 500,
+                "max_duration_seconds": 60,
+                "max_crashes": 8,
+            },
+            "sandbox_runner_timeout_seconds": 45,
+            "fuzz_runner_timeout_seconds": 900,
+            "angr_enabled": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["tool_image_digests"] == {
+        "binary_tools": good,
+        "proof_tool": None,
+        "afl_casr": None,
+    }
+    assert body["sandbox_budgets"]["afl"]["cpu_millis"] == 5000
+    assert body["sandbox_budgets"]["afl"]["timeout_seconds"] == 90
+    assert body["fuzz_budgets"]["max_executions"] == 500
+    assert body["sandbox_runner_timeout_seconds"] == 45
+    assert body["angr_enabled"] is True
+    assert client.get("/api/settings").json() == body
+
+    malformed = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={**body, "tool_image_digests": {"binary_tools": "sha256:xyz"}},
+    )
+    assert malformed.status_code == 422
+    out_of_range = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            **body,
+            "fuzz_budgets": {
+                "max_executions": 2_000_000_000,
+                "max_duration_seconds": 0,
+                "max_crashes": 0,
+            },
+        },
+    )
+    assert out_of_range.status_code == 422
+
+
 def test_websocket_disconnect_listener_consumes_until_disconnect() -> None:
     class FakeWebSocket:
         def __init__(self) -> None:
