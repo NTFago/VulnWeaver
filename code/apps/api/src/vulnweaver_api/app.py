@@ -91,6 +91,7 @@ from vulnweaver_api.uploads import remove_stale_uploads, stage_upload
 
 LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
+_TIER_NAMES = ("planning", "audit", "review", "report")
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
 
 
@@ -270,6 +271,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "schema_version",
                 "review_model_api_key",
                 "clear_review_model_api_key",
+                "tier_api_keys",
+                "clear_tier_api_keys",
             },
         )
         validate_contract("ProductSettings", body.model_dump(mode="json"))
@@ -293,6 +296,32 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "API key cannot be replaced and cleared in the same request",
                 "clear_review_model_api_key",
             )
+        for tier_name, tier in values["model_tiers"].items():
+            tier_base_url = str(tier["base_url"]).strip().rstrip("/")
+            tier_model = str(tier["model_name"]).strip()
+            if bool(tier_base_url) != bool(tier_model):
+                raise ApiInputError(
+                    "incomplete_model_configuration",
+                    "model endpoint and model name must be configured together",
+                    f"model_tiers.{tier_name}",
+                )
+            if tier_base_url and not tier_base_url.startswith(("https://", "http://")):
+                raise ApiInputError(
+                    "invalid_model_endpoint",
+                    "model endpoint must use HTTP or HTTPS",
+                    f"model_tiers.{tier_name}.base_url",
+                )
+            if (
+                tier["thinking_mode"] == "custom"
+                and int(tier["thinking_budget_tokens"] or 0) < 1024
+            ):
+                raise ApiInputError(
+                    "invalid_thinking_budget",
+                    "custom thinking mode requires a budget of at least 1024 tokens",
+                    f"model_tiers.{tier_name}.thinking_budget_tokens",
+                )
+            tier["base_url"] = tier_base_url
+            tier["model_name"] = tier_model
         values["review_model_base_url"] = base_url
         values["review_model_name"] = model_name
         async with database.transaction() as repositories:
@@ -304,6 +333,20 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 stored_key = body.review_model_api_key
             if stored_key is not None:
                 values["review_model_api_key"] = stored_key
+            previous_tier_keys = cast(
+                dict[str, object], previous.get("tier_api_keys") or {}
+            )
+            tier_keys: dict[str, object] = {
+                key: value
+                for key, value in previous_tier_keys.items()
+                if key in _TIER_NAMES and key not in body.clear_tier_api_keys
+            }
+            for tier_name in _TIER_NAMES:
+                supplied = getattr(body.tier_api_keys, tier_name)
+                if supplied is not None:
+                    tier_keys[tier_name] = supplied
+            if tier_keys:
+                values["tier_api_keys"] = tier_keys
             await repositories.product_settings.replace(values)
         return _product_settings_response(values)
 
@@ -1056,8 +1099,21 @@ def _personal_author_id(username: str) -> str:
 
 
 def _product_settings_response(values: dict[str, object]) -> ProductSettingsResponse:
-    public_values = {key: value for key, value in values.items() if key != "review_model_api_key"}
+    public_values = {
+        key: value
+        for key, value in values.items()
+        if key not in {"review_model_api_key", "tier_api_keys"}
+    }
     parsed = ProductSettingsBody.model_validate({"schema_version": "1.0.0", **public_values})
+    stored_tier_keys = values.get("tier_api_keys")
+    stored_key_map: dict[str, object] = (
+        {str(k): v for k, v in cast(dict[str, object], stored_tier_keys).items()}
+        if isinstance(stored_tier_keys, dict)
+        else {}
+    )
+    configured: dict[str, bool] = {
+        tier: tier in stored_key_map for tier in _TIER_NAMES
+    }
     return ProductSettingsResponse(
         review_model_base_url=parsed.review_model_base_url,
         review_model_name=parsed.review_model_name,
@@ -1072,6 +1128,8 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         sandbox_runner_timeout_seconds=parsed.sandbox_runner_timeout_seconds,
         fuzz_runner_timeout_seconds=parsed.fuzz_runner_timeout_seconds,
         angr_enabled=parsed.angr_enabled,
+        model_tiers=parsed.model_tiers,
+        tier_api_keys_configured=configured,
     )
 
 

@@ -1430,6 +1430,13 @@
         "review_model_api_key": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
         "clear_review_model_api_key": {"type": "boolean"},
         "tool_image_digests": {"$ref": "#/$defs/ToolImageDigests"},
+        "model_tiers": {"$ref": "#/$defs/ModelTierSettings"},
+        "tier_api_keys": {"$ref": "#/$defs/TierApiKeys"},
+        "clear_tier_api_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["planning", "audit", "review", "report"]}
+        },
         "sandbox_budgets": {"$ref": "#/$defs/SandboxBudgets"},
         "fuzz_budgets": {"$ref": "#/$defs/FuzzBudgets"},
         "sandbox_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
@@ -1472,6 +1479,40 @@
         "max_executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
         "max_duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "max_crashes": {"type": "integer", "minimum": 0, "maximum": 10000}
+      }
+    },
+    "ModelTierSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planning": {"$ref": "#/$defs/TierModelConfig"},
+        "audit": {"$ref": "#/$defs/TierModelConfig"},
+        "review": {"$ref": "#/$defs/TierModelConfig"},
+        "report": {"$ref": "#/$defs/TierModelConfig"}
+      }
+    },
+    "TierModelConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"type": "string", "enum": ["openai", "anthropic"]},
+        "base_url": {"type": "string", "maxLength": 2048},
+        "model_name": {"type": "string", "maxLength": 256},
+        "context_window_tokens": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "thinking_mode": {"type": "string", "enum": ["off", "default", "custom"]},
+        "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "timeout_seconds": {"type": "number", "minimum": 0, "maximum": 600},
+        "max_attempts": {"type": "integer", "minimum": 0, "maximum": 8}
+      }
+    },
+    "TierApiKeys": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planning": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "audit": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "review": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "report": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
       }
     },
     "PasswordChangeRequest": {

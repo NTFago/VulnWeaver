@@ -927,6 +927,9 @@ export interface ProductSettings {
   review_model_api_key?: string | null;
   clear_review_model_api_key?: boolean;
   tool_image_digests?: ToolImageDigests;
+  model_tiers?: ModelTierSettings;
+  tier_api_keys?: TierApiKeys;
+  clear_tier_api_keys?: Array<"planning" | "audit" | "review" | "report">;
   sandbox_budgets?: SandboxBudgets;
   fuzz_budgets?: FuzzBudgets;
   sandbox_runner_timeout_seconds?: number;
@@ -957,6 +960,31 @@ export interface FuzzBudgets {
   max_executions?: number;
   max_duration_seconds?: number;
   max_crashes?: number;
+}
+
+export interface ModelTierSettings {
+  planning?: TierModelConfig;
+  audit?: TierModelConfig;
+  review?: TierModelConfig;
+  report?: TierModelConfig;
+}
+
+export interface TierModelConfig {
+  protocol?: "openai" | "anthropic";
+  base_url?: string;
+  model_name?: string;
+  context_window_tokens?: number;
+  thinking_mode?: "off" | "default" | "custom";
+  thinking_budget_tokens?: number;
+  timeout_seconds?: number;
+  max_attempts?: number;
+}
+
+export interface TierApiKeys {
+  planning?: string | null;
+  audit?: string | null;
+  review?: string | null;
+  report?: string | null;
 }
 
 export interface PasswordChangeRequest {

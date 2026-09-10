@@ -75,6 +75,36 @@ class ToolImageDigestsModel(StrictModel):
     afl_casr: DigestPattern | None = None
 
 
+ModelProtocol = Literal["openai", "anthropic"]
+TierName = Literal["planning", "audit", "review", "report"]
+ThinkingMode = Literal["off", "default", "custom"]
+
+
+class TierModelConfigModel(StrictModel):
+    protocol: ModelProtocol = "openai"
+    base_url: str = Field(default="", max_length=2048)
+    model_name: str = Field(default="", max_length=256)
+    context_window_tokens: int = Field(default=0, ge=0, le=100_000_000)
+    thinking_mode: ThinkingMode = "off"
+    thinking_budget_tokens: int = Field(default=0, ge=0, le=1_000_000)
+    timeout_seconds: float = Field(default=0, ge=0, le=600)
+    max_attempts: int = Field(default=0, ge=0, le=8)
+
+
+class TierApiKeysModel(StrictModel):
+    planning: str | None = Field(default=None, min_length=1, max_length=4096)
+    audit: str | None = Field(default=None, min_length=1, max_length=4096)
+    review: str | None = Field(default=None, min_length=1, max_length=4096)
+    report: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
+class ModelTiersModel(StrictModel):
+    planning: TierModelConfigModel = Field(default_factory=TierModelConfigModel)
+    audit: TierModelConfigModel = Field(default_factory=TierModelConfigModel)
+    review: TierModelConfigModel = Field(default_factory=TierModelConfigModel)
+    report: TierModelConfigModel = Field(default_factory=TierModelConfigModel)
+
+
 class ProductSettingsBody(StrictModel):
     schema_version: Literal["1.0.0"] = "1.0.0"
     review_model_base_url: str = Field(default="", max_length=2048)
@@ -91,6 +121,9 @@ class ProductSettingsBody(StrictModel):
     sandbox_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     fuzz_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     angr_enabled: bool | None = None
+    model_tiers: ModelTiersModel = Field(default_factory=ModelTiersModel)
+    tier_api_keys: TierApiKeysModel = Field(default_factory=TierApiKeysModel)
+    clear_tier_api_keys: list[str] = Field(default_factory=list)
 
 
 class ProductSettingsResponse(StrictModel):
@@ -108,6 +141,8 @@ class ProductSettingsResponse(StrictModel):
     sandbox_runner_timeout_seconds: int
     fuzz_runner_timeout_seconds: int
     angr_enabled: bool | None
+    model_tiers: ModelTiersModel
+    tier_api_keys_configured: dict[str, bool]
 
 
 class PasswordChangeRequest(StrictModel):
