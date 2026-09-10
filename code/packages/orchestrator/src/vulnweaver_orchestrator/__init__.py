@@ -31,7 +31,7 @@ from vulnweaver_orchestrator.flow import (
     Orchestrator,
     OrchestratorSettings,
 )
-from vulnweaver_orchestrator.fuzz_jobs import FuzzJobScheduler
+from vulnweaver_orchestrator.fuzz_jobs import FuzzJobScheduler, link_fuzz_evidence
 from vulnweaver_orchestrator.key_logic import CriticalLogicConfirmer
 from vulnweaver_orchestrator.model_reviews import IndependentModelReviewer, ModelReviewResult
 from vulnweaver_orchestrator.reverse_planning import (
@@ -96,4 +96,5 @@ __all__ = [
     "complete_baselines",
     "CriticalLogicConfirmer",
     "FuzzJobScheduler",
+    "link_fuzz_evidence",
 ]
