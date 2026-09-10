@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 from types import FrameType
+from typing import Any
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
@@ -20,7 +21,9 @@ from vulnweaver_model_gateway import (
     ModelTier,
 )
 from vulnweaver_orchestrator import (
+    DatabaseAgentRunSink,
     IndependentModelReviewer,
+    ReversePlanningAgent,
     ReviewJobExecutor,
     ReviewJobScheduler,
     SemanticAuditJobExecutor,
@@ -102,6 +105,13 @@ async def _run() -> None:
         pair_importer=pair_importer,
     )
     binary_sandbox, binary_digest = await _binary_sandbox()
+    binary_planning_hook = (
+        _ReversePlanningHook(
+            ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
+        )
+        if model_gateway is not None
+        else None
+    )
     binary_executor = BinaryImportExecutor.configured(
         database,
         store,
@@ -115,6 +125,7 @@ async def _run() -> None:
         pair_importer=BinaryPairImporter(database),
         sandbox=binary_sandbox,
         sandbox_image_digest=binary_digest,
+        planning_hook=binary_planning_hook,
     )
     executor = AnalysisJobExecutor(
         source_executor,
@@ -161,6 +172,24 @@ async def _run() -> None:
         await queue.close()
         await database.dispose()
         LOGGER.info("analysis_worker_stopped")
+
+
+class _ReversePlanningHook:
+    """Bridge the orchestrator planning agent to the binary executor hook."""
+
+    def __init__(self, agent: ReversePlanningAgent) -> None:
+        self._agent = agent
+
+    async def plan(
+        self, job: Any, facts: Any, run_angr: Any
+    ) -> tuple[int, ...]:
+        planned = await self._agent.plan(
+            task_id=str(job["task_id"]),
+            job_id=str(job["id"]),
+            facts=facts,
+            run_angr=run_angr,
+        )
+        return planned.targets
 
 
 def _required_environment(name: str) -> str:
