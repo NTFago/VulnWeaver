@@ -41,6 +41,7 @@ def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
     assert report["version"] == "2.1.0"
     assert result["ruleId"] == "CWE-078"
     assert result["properties"]["findingId"] == "finding:1"
+    assert result["properties"]["category"] == "command_injection"
     assert len(result["message"]["text"]) == 4096
     region = result["locations"][0]["physicalLocation"]["region"]
     assert region == {

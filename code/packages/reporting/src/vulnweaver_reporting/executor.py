@@ -1,4 +1,4 @@
-"""Worker adapter for durable Markdown and SARIF report jobs."""
+"""Worker adapter for durable Markdown, PDF, and SARIF report jobs."""
 
 from __future__ import annotations
 
@@ -10,21 +10,27 @@ from typing import cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService
 from vulnweaver_contracts import (
+    ArtifactKind,
     Evidence,
     FailureKind,
+    Finding,
     Job,
     JobKind,
     JobStatus,
     JsonObject,
     Poc,
+    Review,
     SchemaVersion,
     StructuredFailure,
+    Task,
     ToolIdentity,
     WorkerResult,
 )
-from vulnweaver_persistence import Database
+from vulnweaver_persistence import Database, EntityNotFound, Repositories
 
 from vulnweaver_reporting.artifacts import register_report
+from vulnweaver_reporting.chinese import raw_value
+from vulnweaver_reporting.context import ReportContext, SampleSummary
 from vulnweaver_reporting.markdown import build_markdown
 from vulnweaver_reporting.pdf import render_pdf
 from vulnweaver_reporting.sarif import build_sarif, validate_sarif
@@ -89,6 +95,12 @@ class ReportJobExecutor:
                     or artifact["project_id"] != task["project_id"]
                 ):
                     return _failure(job, "report.artifact_mismatch", FailureKind.POLICY)
+                # SARIF stays a pure machine exchange format and needs no context.
+                context = (
+                    None
+                    if report_format == "sarif"
+                    else await self._report_context(repositories, task, findings)
+                )
             if report_format == "sarif":
                 document = build_sarif(findings, pocs, evidence_by_finding)
                 validate_sarif(document)
@@ -100,10 +112,11 @@ class ReportJobExecutor:
                         Path(directory) / "report.pdf",
                         pocs=pocs,
                         evidence=evidence_by_finding,
+                        context=context,
                     )
                     content = output.read_bytes()
             else:
-                content = build_markdown(findings, pocs, evidence_by_finding).encode()
+                content = build_markdown(findings, pocs, evidence_by_finding, context).encode()
             result = await register_report(
                 self._registration,
                 artifact,
@@ -125,6 +138,60 @@ class ReportJobExecutor:
             evidence_ids=[],
             failure=None,
         )
+
+    async def _report_context(
+        self,
+        repositories: Repositories,
+        task: Task,
+        findings: list[Finding],
+    ) -> ReportContext:
+        """Gather task-level report facts; every field stays optional."""
+        context = ReportContext(
+            task_id=task["id"],
+            task_created_at=task["created_at"],
+            task_updated_at=task["updated_at"],
+            task_result=task["result"].value if task["result"] is not None else None,
+            produced_by=_produced_by(self._tool),
+        )
+        failure = task["failure"]
+        if failure is not None:
+            context["failure_code"] = failure["code"]
+            context["failure_kind"] = raw_value(failure["kind"])
+            context["failure_message"] = failure["message"]
+        context["samples"] = await _sample_summaries(repositories, task["project_id"])
+        reviews: dict[str, list[Review]] = {}
+        for finding in findings:
+            reviews[finding["id"]] = await repositories.findings.list_reviews(finding["id"])
+        context["reviews"] = reviews
+        return context
+
+
+async def _sample_summaries(repositories: Repositories, project_id: str) -> list[SampleSummary]:
+    """Summarize the project's input artifacts (everything not derived)."""
+    samples: list[SampleSummary] = []
+    for artifact in await repositories.artifacts.list_for_project(project_id):
+        if artifact["kind"] is ArtifactKind.DERIVED:
+            continue
+        try:
+            version = await repositories.artifacts.get_version(artifact["current_version_id"])
+        except EntityNotFound:
+            continue
+        filename = version["generation_config"].get("filename")
+        samples.append(
+            SampleSummary(
+                name=filename if isinstance(filename, str) else "",
+                digest=version["digest"],
+                kind=raw_value(artifact["kind"]),
+            )
+        )
+    return samples
+
+
+def _produced_by(tool: ToolIdentity) -> str:
+    """Render the producing tool identity without leaking internal details."""
+    produced = f"{tool['name']}@{tool['version']}"
+    digest = tool.get("image_digest")
+    return f"{produced}（镜像 {digest}）" if digest else produced
 
 
 def _failure(
