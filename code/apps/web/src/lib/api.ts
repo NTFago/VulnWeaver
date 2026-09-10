@@ -31,6 +31,25 @@ export interface InstallationStatus {
   registration_open: boolean;
 }
 
+export interface SandboxResourceBudget {
+  cpu_millis: number;
+  memory_bytes: number;
+  disk_bytes: number;
+  timeout_seconds: number;
+}
+
+export interface ToolImageDigests {
+  binary_tools: string | null;
+  proof_tool: string | null;
+  afl_casr: string | null;
+}
+
+export interface FuzzBudgets {
+  max_executions: number;
+  max_duration_seconds: number;
+  max_crashes: number;
+}
+
 export interface ProductSettings {
   schema_version: "1.0.0";
   review_model_base_url: string;
@@ -40,6 +59,16 @@ export interface ProductSettings {
   review_model_repair_attempts: number;
   review_model_min_interval_seconds: number;
   api_key_configured: boolean;
+  tool_image_digests: ToolImageDigests;
+  sandbox_budgets: {
+    afl: SandboxResourceBudget;
+    proof: SandboxResourceBudget;
+    binary: SandboxResourceBudget;
+  };
+  fuzz_budgets: FuzzBudgets;
+  sandbox_runner_timeout_seconds: number;
+  fuzz_runner_timeout_seconds: number;
+  angr_enabled: boolean | null;
 }
 
 

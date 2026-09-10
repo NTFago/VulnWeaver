@@ -85,6 +85,7 @@
   let productSettings: ProductSettings | null = null;
   let reviewApiKey = "";
   let clearReviewApiKey = false;
+  let showAdvancedSettings = false;
   let annotationNote = "";
   let reviewRationale = "";
   let reviewOutcome: FindingStatus = "candidate";
@@ -285,9 +286,26 @@
     projects = await api.projects();
   }
 
+  function withDeploymentDefaults(raw: ProductSettings): ProductSettings {
+    // Older installations may not have the deployment fields persisted yet.
+    return {
+      ...raw,
+      tool_image_digests: raw.tool_image_digests ?? { binary_tools: null, proof_tool: null, afl_casr: null },
+      sandbox_budgets: raw.sandbox_budgets ?? {
+        afl: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
+        proof: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
+        binary: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
+      },
+      fuzz_budgets: raw.fuzz_budgets ?? { max_executions: 0, max_duration_seconds: 0, max_crashes: 0 },
+      sandbox_runner_timeout_seconds: raw.sandbox_runner_timeout_seconds ?? 0,
+      fuzz_runner_timeout_seconds: raw.fuzz_runner_timeout_seconds ?? 0,
+      angr_enabled: raw.angr_enabled ?? null,
+    };
+  }
+
   async function openSettings(): Promise<void> {
     begin();
-    try { socket?.close(); view = "settings"; productSettings = await api.settings(); done(); }
+    try { socket?.close(); view = "settings"; productSettings = withDeploymentDefaults(await api.settings()); done(); }
     catch (caught) { busy = false; showError(caught); }
   }
 
@@ -296,13 +314,13 @@
     begin();
     try {
       const { schema_version: _schema, api_key_configured: _configured, ...values } = productSettings;
-      productSettings = await api.updateSettings({
+      productSettings = withDeploymentDefaults(await api.updateSettings({
         ...values,
         review_model_api_key: reviewApiKey || null,
         clear_review_model_api_key: clearReviewApiKey,
-      });
+      }));
       reviewApiKey = ""; clearReviewApiKey = false;
-      done("设置已保存；模型连接设置会在分析 Worker 下次启动时生效");
+      done("设置已保存；模型与执行配置由 Worker 在下一次任务时自动生效");
     } catch (caught) { busy = false; showError(caught); }
   }
 
@@ -586,6 +604,40 @@
           <label>API Key<input bind:value={reviewApiKey} type="password" autocomplete="new-password" placeholder={productSettings.api_key_configured ? "留空以保留现有值" : "输入 API Key"} /></label>
           {#if productSettings.api_key_configured}<label class="check"><input type="checkbox" bind:checked={clearReviewApiKey} /><span><b>清除已保存的 API Key</b><small>保存后立即删除；输入新值会在未勾选时替换旧值。</small></span></label>{/if}
           <div class="settings-grid"><label>超时（秒）<input bind:value={productSettings.review_model_timeout_seconds} type="number" min="1" max="600" /></label><label>最大尝试次数<input bind:value={productSettings.review_model_max_attempts} type="number" min="1" max="10" /></label><label>结构修复次数<input bind:value={productSettings.review_model_repair_attempts} type="number" min="0" max="5" /></label><label>请求最小间隔（秒）<input bind:value={productSettings.review_model_min_interval_seconds} type="number" min="0" max="3600" step="0.1" /></label></div>
+          <div class="section-head digest-head"><div><span>TOOL IMAGE REGISTRATION</span><h2>工具镜像登记</h2></div><small>留空 = 自动发现（Runner 端点 / 本地镜像）</small></div>
+          <label>binary-tools 摘要（Ghidra / 关键逻辑 / 调用路径）<input bind:value={productSettings.tool_image_digests.binary_tools} placeholder="sha256:…（留空自动发现）" /></label>
+          <label>proof-tool 摘要（自动利用 / Proof）<input bind:value={productSettings.tool_image_digests.proof_tool} placeholder="sha256:…（留空自动发现）" /></label>
+          <label>afl-casr 摘要（模糊测试 / Harness 编译）<input bind:value={productSettings.tool_image_digests.afl_casr} placeholder="sha256:…（留空自动发现）" /></label>
+          <div class="capability-strip" aria-label="执行能力状态">
+            <span class:enabled={!!productSettings.tool_image_digests.binary_tools}><i></i>二进制管线</span>
+            <span class:enabled={!!productSettings.tool_image_digests.proof_tool}><i></i>Proof / 自动利用</span>
+            <span class:enabled={!!productSettings.tool_image_digests.afl_casr}><i></i>模糊测试</span>
+            <span class:enabled={!!productSettings.review_model_name}><i></i>模型分析</span>
+          </div>
+          <button type="button" class="secondary adv-toggle" on:click={() => showAdvancedSettings = !showAdvancedSettings}>{showAdvancedSettings ? "收起高级设置" : "高级设置：沙箱资源与预算"}</button>
+          {#if showAdvancedSettings}
+            <div class="advanced-settings">
+              <p class="muted">0 表示未设置，沿用环境变量或代码默认值；更改在下一次任务执行时生效。</p>
+              {#each [["afl", "AFL++/CASR（模糊测试）"], ["proof", "Proof 工具"], ["binary", "二进制工具"]] as [tool, label]}
+                <div class="settings-grid">
+                  <label>{label} CPU（毫秒核）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].cpu_millis} type="number" min="0" /></label>
+                  <label>{label} 内存（字节）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].memory_bytes} type="number" min="0" /></label>
+                  <label>{label} 磁盘（字节）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].disk_bytes} type="number" min="0" /></label>
+                  <label>{label} 超时（秒）<input bind:value={productSettings.sandbox_budgets[tool as "afl" | "proof" | "binary"].timeout_seconds} type="number" min="0" max="86400" /></label>
+                </div>
+              {/each}
+              <div class="settings-grid">
+                <label>Fuzz 最大执行次数<input bind:value={productSettings.fuzz_budgets.max_executions} type="number" min="0" /></label>
+                <label>Fuzz 最长时长（秒）<input bind:value={productSettings.fuzz_budgets.max_duration_seconds} type="number" min="0" max="86400" /></label>
+                <label>Fuzz 崩溃上限<input bind:value={productSettings.fuzz_budgets.max_crashes} type="number" min="0" max="10000" /></label>
+              </div>
+              <div class="settings-grid">
+                <label>Sandbox Runner 超时（秒）<input bind:value={productSettings.sandbox_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
+                <label>Fuzz Runner 超时（秒）<input bind:value={productSettings.fuzz_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
+              </div>
+              <label class="check"><input type="checkbox" checked={productSettings.angr_enabled ?? false} on:change={(e) => (productSettings!.angr_enabled = e.currentTarget.checked ? true : null)} /><span><b>启用 angr 符号执行</b><small>仅在二进制沙箱可用时实际生效；关闭时回退环境变量。</small></span></label>
+            </div>
+          {/if}
           <button class="primary" disabled={busy}>保存设置</button>
         </form>
         <form class="settings-form section-block full" on:submit|preventDefault={updatePasswordFromSettings}>

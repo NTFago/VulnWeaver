@@ -991,6 +991,33 @@ class ProductSettings(TypedDict):
     review_model_min_interval_seconds: float
     review_model_api_key: NotRequired[str | None]
     clear_review_model_api_key: NotRequired[bool]
+    tool_image_digests: NotRequired[ToolImageDigests]
+    sandbox_budgets: NotRequired[SandboxBudgets]
+    fuzz_budgets: NotRequired[FuzzBudgets]
+    sandbox_runner_timeout_seconds: NotRequired[int]
+    fuzz_runner_timeout_seconds: NotRequired[int]
+    angr_enabled: NotRequired[bool | None]
+
+class ToolImageDigests(TypedDict):
+    binary_tools: NotRequired[Sha256Digest | None]
+    proof_tool: NotRequired[Sha256Digest | None]
+    afl_casr: NotRequired[Sha256Digest | None]
+
+class SandboxResourceBudget(TypedDict):
+    cpu_millis: NotRequired[int]
+    memory_bytes: NotRequired[int]
+    disk_bytes: NotRequired[int]
+    timeout_seconds: NotRequired[int]
+
+class SandboxBudgets(TypedDict):
+    afl: NotRequired[SandboxResourceBudget]
+    proof: NotRequired[SandboxResourceBudget]
+    binary: NotRequired[SandboxResourceBudget]
+
+class FuzzBudgets(TypedDict):
+    max_executions: NotRequired[int]
+    max_duration_seconds: NotRequired[int]
+    max_crashes: NotRequired[int]
 
 class PasswordChangeRequest(TypedDict):
     schema_version: SchemaVersion

@@ -7,6 +7,8 @@ dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn>=0.34,<1",
     "vulnweaver-artifact-store",
+    "vulnweaver-domain",
+    "vulnweaver-persistence",
     "vulnweaver-binary-analysis",
     "vulnweaver-fuzzing",
     "vulnweaver-proof",
@@ -20,6 +22,8 @@ build-backend = "uv_build"
 
 [tool.uv.sources]
 vulnweaver-artifact-store = { workspace = true }
+vulnweaver-domain = { workspace = true }
+vulnweaver-persistence = { workspace = true }
 vulnweaver-binary-analysis = { workspace = true }
 vulnweaver-fuzzing = { workspace = true }
 vulnweaver-proof = { workspace = true }

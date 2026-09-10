@@ -249,6 +249,7 @@ services:
       ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
       TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
       SANDBOX_ROOT: /var/lib/vulnweaver/sandbox
+      DATABASE_URL: ${SANDBOX_RUNNER_DATABASE_URL:-${DATABASE_URL:-}}
       DOCKER_HOST_SANDBOX_ROOT: ${DOCKER_HOST_SANDBOX_ROOT:-/var/lib/docker/volumes/${COMPOSE_PROJECT_NAME:-vulnweaver}_sandbox-runtime/_data}
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       BINARY_TOOLS_IMAGE_REF: ${BINARY_TOOLS_IMAGE_REF:-vulnweaver-binary-tools:fixed}

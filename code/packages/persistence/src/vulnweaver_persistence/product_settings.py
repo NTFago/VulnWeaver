@@ -19,6 +19,24 @@ class ProductSettingsRepository:
         )
         return {} if value is None else dict(value)
 
+    async def get_row(self) -> dict[str, object]:
+        """Return the raw row (values plus updated_at) for change detection."""
+
+        row = (
+            (
+                await self._connection.execute(
+                    select(
+                        product_settings.c["values"], product_settings.c.updated_at
+                    ).where(product_settings.c.id == "installation")
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            return {"values": {}, "updated_at": None}
+        return {"values": dict(row["values"]), "updated_at": row["updated_at"]}
+
     async def replace(self, values: dict[str, object]) -> dict[str, object]:
         await self._connection.execute(
             insert(product_settings)

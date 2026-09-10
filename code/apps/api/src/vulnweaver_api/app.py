@@ -1066,6 +1066,12 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         review_model_repair_attempts=parsed.review_model_repair_attempts,
         review_model_min_interval_seconds=parsed.review_model_min_interval_seconds,
         api_key_configured="review_model_api_key" in values,
+        tool_image_digests=parsed.tool_image_digests,
+        sandbox_budgets=parsed.sandbox_budgets,
+        fuzz_budgets=parsed.fuzz_budgets,
+        sandbox_runner_timeout_seconds=parsed.sandbox_runner_timeout_seconds,
+        fuzz_runner_timeout_seconds=parsed.fuzz_runner_timeout_seconds,
+        angr_enabled=parsed.angr_enabled,
     )
 
 

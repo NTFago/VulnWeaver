@@ -1428,7 +1428,50 @@
         "review_model_repair_attempts": {"type": "integer", "minimum": 0, "maximum": 5},
         "review_model_min_interval_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
         "review_model_api_key": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
-        "clear_review_model_api_key": {"type": "boolean"}
+        "clear_review_model_api_key": {"type": "boolean"},
+        "tool_image_digests": {"$ref": "#/$defs/ToolImageDigests"},
+        "sandbox_budgets": {"$ref": "#/$defs/SandboxBudgets"},
+        "fuzz_budgets": {"$ref": "#/$defs/FuzzBudgets"},
+        "sandbox_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "fuzz_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "angr_enabled": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
+      }
+    },
+    "ToolImageDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binary_tools": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "proof_tool": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "afl_casr": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]}
+      }
+    },
+    "SandboxResourceBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu_millis": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 0},
+        "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}
+      }
+    },
+    "SandboxBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "afl": {"$ref": "#/$defs/SandboxResourceBudget"},
+        "proof": {"$ref": "#/$defs/SandboxResourceBudget"},
+        "binary": {"$ref": "#/$defs/SandboxResourceBudget"}
+      }
+    },
+    "FuzzBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "max_duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "max_crashes": {"type": "integer", "minimum": 0, "maximum": 10000}
       }
     },
     "PasswordChangeRequest": {

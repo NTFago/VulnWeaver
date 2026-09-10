@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+from dataclasses import dataclass
 from types import FrameType
 from typing import Any, cast
 
@@ -23,6 +24,7 @@ from vulnweaver_contracts import (
     Task,
     ToolIdentity,
 )
+from vulnweaver_domain import ResolvedDeploymentConfig, resolve_deployment_config
 from vulnweaver_fuzzing import (
     AFL_CASR_TOOL_NAME,
     AFL_CASR_TOOL_VERSION,
@@ -80,6 +82,11 @@ from vulnweaver_tool_runtime import ToolRegistry, ToolSpecLoader
 from vulnweaver_tool_runtime.errors import ToolRuntimeError
 from vulnweaver_worker import ReliableWorker, WorkerSettings
 
+from vulnweaver_analysis_worker.hot_reload import (
+    HotReloadExecutor,
+    HotReloadSettlementHook,
+    ReconfigurableAssembly,
+)
 from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
 
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
@@ -115,8 +122,6 @@ async def _run() -> None:
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
     audit_scheduler = SemanticAuditScheduler(database)
-    exploit_scheduler = _auto_exploit_scheduler(database)
-    review_executor, audit_executor, model_gateway = await _model_executors(database, store)
     report_executor = ReportJobExecutor(
         database,
         ArtifactRegistrationService(store, database),
@@ -133,9 +138,6 @@ async def _run() -> None:
             image_digest=None,
         )
     )
-    proof_executor = _proof_executor(database, store, model_gateway)
-    fuzz_executor = await _fuzz_executor(database, store, tool_registry, model_gateway)
-    fuzz_scheduler = _fuzz_scheduler(database, store, harness_enabled=model_gateway is not None)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -144,62 +146,103 @@ async def _run() -> None:
         static_scheduler=scheduler,
         pair_importer=pair_importer,
     )
-    binary_sandbox, binary_digest = await _binary_sandbox()
-    binary_planning_hook = (
-        _ReversePlanningHook(
-            ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
-        )
-        if model_gateway is not None
-        else None
-    )
-    critical_logic_hook = (
-        CriticalLogicConfirmer(
-            model_gateway, sink=DatabaseAgentRunSink(database)
-        )
-        if model_gateway is not None
-        else None
-    )
-    binary_executor = BinaryImportExecutor.configured(
+    static_executor = StaticAnalysisExecutor(
         database,
         store,
-        scratch_root=os.environ.get("BINARY_SCRATCH_ROOT", "/tmp"),
-        die_executable=os.environ.get("DIE_EXECUTABLE", "diec"),
-        objdump_executable=os.environ.get("OBJDUMP_EXECUTABLE", "objdump"),
-        ghidra_executable=os.environ.get("GHIDRA_HEADLESS_EXECUTABLE") or None,
-        ghidra_script_directory=os.environ.get("GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"),
-        # Symbolic execution is dynamic analysis and may only run through the
-        # independent Sandbox Runner; never enable the worker-local adapter.
-        angr_enabled=(
-            _environment_bool("ANGR_ENABLED", False) and binary_sandbox is not None
-        ),
-        upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
-        pair_importer=BinaryPairImporter(database),
-        sandbox=binary_sandbox,
-        sandbox_image_digest=binary_digest,
-        planning_hook=binary_planning_hook,
-        critical_logic_hook=critical_logic_hook,
-        readable_pseudocode_hook=(
-            ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
-        ),
+        scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
     )
-    executor = AnalysisJobExecutor(
-        source_executor,
-        StaticAnalysisExecutor(
+
+    async def _build_assembly(settings: dict[str, object]) -> _WorkerAssembly:
+        """Build every settings-dependent component from one settings row."""
+
+        config = resolve_deployment_config(settings, os.environ)
+        review_executor, audit_executor, model_gateway = _model_executors(
+            database, store, settings
+        )
+        proof_executor = _proof_executor(database, store, model_gateway, config)
+        fuzz_executor = await _fuzz_executor(
+            database, store, tool_registry, model_gateway, config
+        )
+        exploit_scheduler = _auto_exploit_scheduler(database, config)
+        fuzz_scheduler = _fuzz_scheduler(
+            database, store, config, harness_enabled=model_gateway is not None
+        )
+        binary_sandbox, binary_digest = await _binary_sandbox(config)
+        binary_planning_hook = (
+            _ReversePlanningHook(
+                ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
+            )
+            if model_gateway is not None
+            else None
+        )
+        critical_logic_hook = (
+            CriticalLogicConfirmer(
+                model_gateway, sink=DatabaseAgentRunSink(database)
+            )
+            if model_gateway is not None
+            else None
+        )
+        angr_setting = config.angr_enabled
+        angr_enabled = (
+            _environment_bool("ANGR_ENABLED", False) if angr_setting is None else angr_setting
+        )
+        binary_executor = BinaryImportExecutor.configured(
             database,
             store,
-            scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
-        ),
-        review_executor,
-        binary_executor,
-        proof=proof_executor,
-        report=report_executor,
-        semantic_audit=audit_executor,
-        fuzz=fuzz_executor,
+            scratch_root=os.environ.get("BINARY_SCRATCH_ROOT", "/tmp"),
+            die_executable=os.environ.get("DIE_EXECUTABLE", "diec"),
+            objdump_executable=os.environ.get("OBJDUMP_EXECUTABLE", "objdump"),
+            ghidra_executable=os.environ.get("GHIDRA_HEADLESS_EXECUTABLE") or None,
+            ghidra_script_directory=os.environ.get(
+                "GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"
+            ),
+            # Symbolic execution is dynamic analysis and may only run through the
+            # independent Sandbox Runner; never enable the worker-local adapter.
+            angr_enabled=angr_enabled and binary_sandbox is not None,
+            upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
+            pair_importer=BinaryPairImporter(database),
+            sandbox=binary_sandbox,
+            sandbox_image_digest=binary_digest,
+            planning_hook=binary_planning_hook,
+            critical_logic_hook=critical_logic_hook,
+            readable_pseudocode_hook=(
+                ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
+            ),
+        )
+        executor = AnalysisJobExecutor(
+            source_executor,
+            static_executor,
+            review_executor,
+            binary_executor,
+            proof=proof_executor,
+            report=report_executor,
+            semantic_audit=audit_executor,
+            fuzz=fuzz_executor,
+        )
+        return _WorkerAssembly(
+            executor=executor,
+            gateway=model_gateway,
+            settlement=TaskAggregateSettlementHook(
+                review_scheduler,
+                audit_scheduler,
+                exploit_scheduler,
+                fuzz_scheduler,
+                report_scheduler,
+            ),
+        )
+
+    async def _retire_assembly(assembly: _WorkerAssembly) -> None:
+        if assembly.gateway is not None:
+            await assembly.gateway.close()
+
+    assemblies = ReconfigurableAssembly(
+        database, _build_assembly, retire=_retire_assembly
     )
+    await assemblies.current()
     worker = ReliableWorker(
         database,
         queue,
-        executor,
+        HotReloadExecutor(assemblies, lambda a, job, cancel: a.executor.execute(job, cancel)),
         WorkerSettings(
             consumer_name=os.environ.get("WORKER_CONSUMER_NAME", "analysis-worker-1"),
             consumer_group=os.environ.get("WORKER_CONSUMER_GROUP", "analysis-workers"),
@@ -212,12 +255,11 @@ async def _run() -> None:
             retry_base_seconds=float(os.environ.get("WORKER_RETRY_BASE_SECONDS", "1.0")),
             retry_max_seconds=float(os.environ.get("WORKER_RETRY_MAX_SECONDS", "30.0")),
         ),
-        settlement_hook=TaskAggregateSettlementHook(
-            review_scheduler,
-            audit_scheduler,
-            exploit_scheduler,
-            fuzz_scheduler,
-            report_scheduler,
+        settlement_hook=HotReloadSettlementHook(
+            assemblies,
+            lambda a, repositories, job, result: a.settlement.after_terminal(
+                repositories, job, result
+            ),
         ),
     )
     stop = asyncio.Event()
@@ -229,11 +271,21 @@ async def _run() -> None:
         LOGGER.info("analysis_worker_started")
         await worker.run(stop)
     finally:
-        if model_gateway is not None:
-            await model_gateway.close()
+        current = assemblies.assembly
+        if current is not None and current.gateway is not None:
+            await current.gateway.close()
         await queue.close()
         await database.dispose()
         LOGGER.info("analysis_worker_stopped")
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerAssembly:
+    """One settings-dependent bundle rebuilt when installation settings change."""
+
+    executor: AnalysisJobExecutor
+    gateway: ModelGateway | None
+    settlement: TaskAggregateSettlementHook
 
 
 class _ReversePlanningHook:
@@ -278,11 +330,11 @@ def _environment_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
-async def _model_executors(
-    database: Database, store: LocalContentAddressedStore
+def _model_executors(
+    database: Database,
+    store: LocalContentAddressedStore,
+    product_settings: dict[str, object],
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
-    async with database.transaction() as repositories:
-        product_settings = await repositories.product_settings.get()
     base_url = str(product_settings.get("review_model_base_url", "")).strip()
     model = str(product_settings.get("review_model_name", "")).strip()
     if not base_url and not model:
@@ -351,13 +403,15 @@ def _proof_executor(
     database: Database,
     store: LocalContentAddressedStore,
     model_gateway: ModelGateway | None,
+    config: ResolvedDeploymentConfig,
 ) -> ProofJobExecutor | None:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
-    client = _sandbox_client(
-        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60"))
+    timeout = config.sandbox_runner_timeout_seconds or float(
+        os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")
     )
+    client = _sandbox_client(runner_url, float(timeout))
     service = ProofExecutionService(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
@@ -372,9 +426,13 @@ def _proof_executor(
     return ProofJobExecutor(database, service, script_generator=generator)
 
 
-def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
+def _auto_exploit_scheduler(
+    database: Database, config: ResolvedDeploymentConfig
+) -> AutoExploitScheduler | None:
     image_digest = (
-        os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
+        config.digests.proof_tool
+        # Legacy alias still honoured by the deployments that predate the settings page.
+        or os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
         or os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
     )
     if not image_digest:
@@ -429,6 +487,7 @@ async def _fuzz_executor(
     store: LocalContentAddressedStore,
     tool_registry: ToolRegistry,
     model_gateway: ModelGateway | None,
+    config: ResolvedDeploymentConfig,
 ) -> FuzzJobExecutor | None:
     """Assemble the fuzz executor from the digest the Runner actually enforces.
 
@@ -440,13 +499,19 @@ async def _fuzz_executor(
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
-    client = _sandbox_client(
-        runner_url, float(os.environ.get("FUZZ_RUNNER_TIMEOUT_SECONDS", "600"))
+    timeout = config.fuzz_runner_timeout_seconds or float(
+        os.environ.get("FUZZ_RUNNER_TIMEOUT_SECONDS", "600")
     )
+    client = _sandbox_client(runner_url, float(timeout))
+    pinned_digest = config.digests.afl_casr
     try:
         spec = tool_registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+        if pinned_digest is not None and spec["image_digest"] != pinned_digest:
+            raise ToolRuntimeError("settings pinned a new fuzz digest")
     except ToolRuntimeError:
-        digest = await client.tool_digest(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+        digest = pinned_digest or await client.tool_digest(
+            AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION
+        )
         if digest is None:
             # No pinned fuzz image on either side: leave the executor unconfigured
             # rather than let an unpinned request reach the Runner.
@@ -481,18 +546,25 @@ async def _fuzz_executor(
 def _fuzz_scheduler(
     database: Database,
     store: LocalContentAddressedStore,
+    config: ResolvedDeploymentConfig,
     *,
     harness_enabled: bool,
 ) -> FuzzJobScheduler | None:
     """Enable automatic fuzz dispatch; the resolver declines when it cannot run."""
-    if not os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip():
+    if not (config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()):
         # Without a pinned fuzz image the scheduler would only ever decline.
         return None
+
     async def resolve(
         repositories: Repositories, finding: Finding, task: Task
     ) -> FuzzTarget | None:
         return await _fuzz_target(
-            repositories, finding, task, store=store, harness_enabled=harness_enabled
+            repositories,
+            finding,
+            task,
+            config,
+            store=store,
+            harness_enabled=harness_enabled,
         )
 
     return FuzzJobScheduler(database, target_resolver=resolve)
@@ -502,6 +574,7 @@ async def _fuzz_target(
     repositories: Repositories,
     finding: Finding,
     task: Task,
+    config: ResolvedDeploymentConfig,
     *,
     store: LocalContentAddressedStore,
     harness_enabled: bool,
@@ -515,7 +588,7 @@ async def _fuzz_target(
     builder keeps the total seed budget bounded. When the deployment has not
     pinned a fuzz digest, no target is produced and dispatch is skipped.
     """
-    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
+    digest = config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     if not digest:
         return None
     if finding["category"] not in _FUZZABLE_CATEGORIES:
@@ -566,9 +639,9 @@ async def _fuzz_target(
         target_ref=version["object_ref"],
         seed_refs=(seed,),
         image_digest=digest,
-        max_executions=int(os.environ.get("AFL_MAX_EXECUTIONS", "10000")),
-        max_duration_seconds=int(os.environ.get("AFL_MAX_DURATION_SECONDS", "60")),
-        max_crashes=int(os.environ.get("AFL_MAX_CRASHES", "16")),
+        max_executions=config.fuzz_max_executions or 10_000,
+        max_duration_seconds=config.fuzz_max_duration_seconds or 60,
+        max_crashes=config.fuzz_max_crashes or 16,
         harness_context=harness_context,
     )
 
@@ -591,14 +664,21 @@ class _CrashEvidenceSink:
             )
 
 
-async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
+async def _binary_sandbox(
+    config: ResolvedDeploymentConfig,
+) -> tuple[SandboxRunnerClient | None, str | None]:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None, None
-    client = _sandbox_client(
-        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600"))
+    timeout = config.sandbox_runner_timeout_seconds or float(
+        os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")
     )
-    digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None
+    client = _sandbox_client(runner_url, float(timeout))
+    digest = (
+        config.digests.binary_tools
+        or os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip()
+        or None
+    )
     if digest is None:
         digest = await client.tool_digest("binary-facts", "1.0.0")
     return client, digest
