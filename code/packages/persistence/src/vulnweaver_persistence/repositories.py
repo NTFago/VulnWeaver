@@ -31,6 +31,7 @@ from vulnweaver_contracts import (
     JobKind,
     JobRequestedEvent,
     JobStatus,
+    JsonObject,
     Lease,
     PairEdge,
     PairEdgeType,
@@ -2581,9 +2582,10 @@ def _compat_event_payload(event_type: object, payload: object) -> object:
 
     if event_type != "task.status_changed" or not isinstance(payload, dict):
         return payload
-    if "failure" in payload:
-        return payload
-    return {**payload, "failure": None}
+    typed_payload = cast(JsonObject, payload)
+    if "failure" in typed_payload:
+        return typed_payload
+    return {**typed_payload, "failure": None}
 
 
 def _parse_datetime(value: str) -> datetime:
