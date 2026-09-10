@@ -6,6 +6,7 @@ import type {
   CreateTaskRequest,
   ErrorResponse,
   Finding,
+  PairFunction,
   Evidence,
   FindingEvidence,
   Poc,
@@ -172,6 +173,19 @@ export const api = {
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  pair: (taskId: string) => request<PairFunction[]>(`/api/tasks/${encodeURIComponent(taskId)}/pair`),
+  agentRuns: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`),
+  pairNeighborhood: (taskId: string, functionId: string, depth = 1) =>
+    request<Record<string, unknown>>(`/api/tasks/${encodeURIComponent(taskId)}/pair/function/${encodeURIComponent(functionId)}/neighborhood?depth=${depth}`),
+  annotations: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/annotations`),
+  createAnnotation: (taskId: string, payload: { target_kind: string; target_id: string; labels: string[]; note: string; severity_override?: string | null }) =>
+    request<Record<string, unknown>>(`/api/tasks/${encodeURIComponent(taskId)}/annotations`, {
+      method: "POST", headers: writeHeaders(true), body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
+    }),
+  reviewFinding: (findingId: string, outcome: string, rationale: string) =>
+    request<Finding>(`/api/findings/${encodeURIComponent(findingId)}/review`, {
+      method: "PATCH", headers: writeHeaders(true), body: JSON.stringify({ schema_version: schemaVersion, outcome, rationale }),
+    }),
   findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
   findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
   observability: (taskId: string) => request<Record<string, unknown>>(`/api/tasks/${taskId}/observability`),

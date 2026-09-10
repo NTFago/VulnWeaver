@@ -9,6 +9,11 @@ from vulnweaver_binary_analysis.headers import (
     extract_strings,
     inspect_binary,
 )
+from vulnweaver_binary_analysis.obfuscation import (
+    ObfuscationAssessment,
+    assess_control_flow_flattening,
+)
+from vulnweaver_binary_analysis.critical_logic import CriticalLogicCandidate, discover_critical_logic
 from vulnweaver_binary_analysis.profiles import (
     binary_command_profile,
     binary_tool_spec,
@@ -47,6 +52,8 @@ __all__ = [
     "BinaryImportExecutor",
     "BinaryInspectionError",
     "BinaryMetadata",
+    "ObfuscationAssessment",
+    "CriticalLogicCandidate",
     "BoundedCommandRunner",
     "DetectItEasyAdapter",
     "GhidraHeadlessAdapter",
@@ -64,4 +71,6 @@ __all__ = [
     "parse_objdump_disassembly",
     "parse_objdump_imports",
     "parse_objdump_symbols",
+    "assess_control_flow_flattening",
+    "discover_critical_logic",
 ]

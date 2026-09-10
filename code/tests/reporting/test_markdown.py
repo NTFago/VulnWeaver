@@ -34,5 +34,6 @@ def test_markdown_report_references_evidence_without_embedding_logs() -> None:
     )
     report = build_markdown([finding])
     assert "finding:1" in report
-    assert "evidence:1" not in report
+    assert "evidence:1" in report
+    assert "Raw tool output" in report
     assert "1 referenced artifact" in report

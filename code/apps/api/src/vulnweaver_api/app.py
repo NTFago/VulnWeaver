@@ -664,6 +664,29 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
             return functions
 
+    @app.get("/api/tasks/{task_id}/pair/function/{function_id}/neighborhood")
+    async def task_pair_neighborhood(
+        task_id: str,
+        function_id: str,
+        depth: int = 1,
+        _: Annotated[str, Depends(require_account)] = "",
+    ) -> dict[str, list[Any]]:
+        """Return bounded caller/callee edges for a function in the task."""
+        if depth < 1 or depth > 3:
+            raise ApiInputError(
+                "invalid_pair_depth", "pair neighborhood depth must be between 1 and 3", "depth"
+            )
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            for version_id in task["artifact_version_ids"]:
+                functions = await repositories.pair.list_functions(version_id)
+                if any(function["id"] == function_id for function in functions):
+                    neighborhood = await repositories.pair.neighborhood(
+                        version_id, function_id, depth=depth
+                    )
+                    return neighborhood
+        raise ApiInputError("pair_function_not_found", "pair function is not part of the task", "function_id")
+
     @app.get("/api/tasks/{task_id}/observability")
     async def task_observability(
         task_id: str, _: Annotated[str, Depends(require_account)]

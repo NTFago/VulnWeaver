@@ -10,9 +10,9 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
-- **当前阶段**：P2 四语言真实 REVIEW 模型端到端验收已完成；P3/P4/P5 及工具链（T16-T24）全部验收通过。全系统仅剩部署级事项（TLS 部署后浏览器首次启动验收，见 T23）。
+- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，但课设核心要求——多智能体自主协作、二进制逆向自主规划与伪代码漏洞检测、关键逻辑标定、自动利用生成、证据链报告——尚未实现。已建立补齐任务包 T25-T34（定义见第 3.1 节，均未开始）。
 - **当前分支**：`main`。
-- **当前负责人**：Codex。全部任务包已完成。P2 端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
+- **当前负责人**：Codex（T01-T24）；T25-T34 待认领。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
 
@@ -47,6 +47,70 @@
 | T22 全链路 UI、可观测性与 E2E | 待验证 | Codex | 浏览器全链路验收完成：登录→项目→任务页→Finding 详情（证据/POC/复现记录、Proof/Exploit 入口）→报告下载；可观测性（Job 汇总、事件时间线载荷展开、LIVE）已验证；最终验收报告见 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑全量回归与真实模型/工具验收归 P2/T16/T18/T19 | 2026-09-10 |
 | T23 Web 首次注册与产品设置 | 已完成 | Codex（独立 worktree） | Web 一次性管理员注册、事务竞争裁决、认证/CSRF 设置 API、模型 URL/名称/API Key/重试参数设置页、API Key 写后不回显/显式清除、Worker DB 配置读取、迁移、Compose 与升级文档已完成 | 合并后在独立 TLS 部署完成真实浏览器首次启动验收；API Key 按用户选择明文落库，数据库/备份读取者可见 | 2026-09-10 |
 | T24 Web 工作台布局与可读性优化 | 已完成 | Codex | 桌面、响应式与字号调整完成；设置页复选框已从通用整宽输入规则中隔离，恢复与说明文字横向对齐 | 无 | 2026-09-10 |
+| T25 智能体规划执行框架 | 未开始 | 待认领 | — | 通用“规划—执行—观察”Agent 循环：LLM 输出结构化 ActionPlan → Policy Engine 校验 → 工具/Job 调度 → 结果回填 → 多步迭代；决策轨迹写 AgentRun；步数/token/时间预算与无模型结构化降级（定义见 3.1） | 2026-09-10 |
+| T26 二进制主管线收口（Ghidra 默认可用） | 未开始 | 待认领 | — | 默认部署启用 Ghidra 反编译（worker 镜像安装或接通 binary-tools 死路径，二选一记录决策）；伪代码/函数/调用关系入 PAIR 并经 API 可查（定义见 3.1） | 2026-09-10 |
+| T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
+| T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
+| T29 语义审计智能体（源码+二进制） | 未开始 | 待认领 | — | 落地 ADR-021 AuditPlan 必跑基线与覆盖度门禁；LLM 按函数邻域（源码）/伪代码+调用邻域（二进制）语义审计产出候选 Finding，进入既有独立复核链路，打通二进制端到端（定义见 3.1） | 2026-09-10 |
+| T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器，返回分数与证据关键词；已在 Dev Container 通过定向测试 | 接入 PAIR 持久化、LLM 确认、API 与前端展示 | 2026-09-10 |
+| T31 漏洞自动利用智能体 | 进行中 | Codex | 新增自动生成脚本内容安全校验器，拒绝持久化、横向移动和外部网络行为并限制大小；Dev Container 定向测试通过 | 接入模型生成、脚本工件登记、Proof Scheduler 自动投递及结果证据链 | 2026-09-10 |
+| T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex | 新增不执行命令的有界 harness 编译—诊断—修正循环抽象，支持结构化诊断与预算耗尽结果；Dev Container 定向测试待提交前复核 | 接入 LLM harness 生成、Sandbox 编译执行、fuzz Job 自动调度和 Finding 证据挂接 | 2026-09-10 |
+| T33 前端逆向工作台与人工复核 | 进行中 | Codex | API 新增受限函数调用邻域端点；Finding 详情已加入人工复核意见与标注提交入口，Web API 客户端已接入 | 前端函数浏览/高亮、伪代码联动与浏览器回归验证 | 2026-09-10 |
+| T34 报告证据链写实 | 进行中 | Codex | Markdown/HTML(PDF源) 增加证据与复核引用、严重等级/状态；SARIF 增加 fixes 修复建议 | 二进制地址/调用路径/工件摘要明细及真实 PDF/SARIF Schema 验收 | 2026-09-10 |
+
+### 3.1 课设差距补齐任务包定义（T25-T34）
+
+依据：对照《2026 网络空间安全课程设计》题目要求与代码实际的差距分析（Q-009）。所有任务包对应《系统实现模块拆分》既有模块（M01/M07/M10/M11/M13/M14/M15/M16）的验收标准，不改变架构与安全红线。
+
+**T25 智能体规划执行框架**（P0；依赖：无；对应 M07/M05）
+- 现状：全系统唯一 LLM 生产调用是独立复核（`orchestrator/model_reviews.py`）；`ActionPlan`/PolicyEngine/AgentRun 基础设施齐备但无规划智能体驱动；LangGraph 编排为固定 4 节点 intake 状态机。
+- 目标：提供统一的“规划—执行—观察”循环：模型按任务上下文输出结构化 ActionPlan，经 Policy Engine 校验后调度已登记工具/Job，结果回填上下文继续迭代，直至完成或预算耗尽；决策序列与理由写入 AgentRun。
+- 验收：循环推进、策略拒绝、预算终止、模型未配置/连续失败时结构化降级到固定管线均有自动化测试；决策轨迹可经 `GET /api/tasks/{id}/agent-runs` 查询。
+
+**T26 二进制主管线收口**（P0；依赖：无；对应 M10/M11）
+- 现状缺陷：`compose.yaml` 中 `GHIDRA_HEADLESS_EXECUTABLE` 默认为空且 analysis-worker 镜像未安装 Ghidra；`BINARY_TOOLS_IMAGE_DIGEST` 默认为空且 binary-facts 沙箱工具无任何调度方（死路径）；二进制任务仅 1 个 IMPORT Job，结束即 `NO_FINDINGS`，伪代码从不进入审计。
+- 目标：默认部署下 Ghidra 反编译可用（worker 镜像内置或经 Sandbox Runner binary-tools 路径接通，二选一并记录决策）；伪代码、函数、调用关系入库 PAIR。
+- 验收：默认 compose 上传 ELF 教学样本后，`GET /api/tasks/{id}/pair` 返回含伪代码的函数清单与调用关系。
+
+**T27 逆向分析智能体与混淆特征识别**（P0；依赖：T25、T26；对应 M07/M10）
+- 现状：二进制分析为固定步骤序列（`binary-analysis/executor.py`）；“是否脱壳/是否解混淆”无模型决策；`target_addresses` 恒为空无人规划；无混淆特征识别代码。
+- 目标：解析格式/壳指纹/混淆特征（控制流平坦化启发式：分发基本块聚集、间接跳转密度）后，由模型自主规划分析步骤（是否脱壳、反编译目标函数、是否解混淆、angr 定点目标），经 T25 循环协同调用去壳/反编译/解混淆工具。
+- 验收：加壳与未加壳 ELF 教学样本分别获得差异化且可追溯的规划（AgentRun 含决策理由）；无模型时降级为现行固定管线并输出结构化说明；`target_addresses` 由规划填充。
+
+**T28 解混淆与可读伪代码生成**（P1；依赖：T26；对应 M10）
+- 现状缺陷：`angr_helper.main` 参数校验为 `!= 7` 而实际传入 10 个 argv（且函数体读取 `argv[9]`），angr 分支启用即失败；全仓无混淆检测/解混淆实现。
+- 目标：修复 argv 校验并在 `ANGR_ENABLED=true` 下端到端可用；控制流平坦化恢复（反扁平化脚本或 Ghidra 脚本）；LLM 对伪代码做结构归纳、变量重命名、注释，生成“可读版本”派生工件，原始反编译结果保留不改写。
+- 验收：OLLVM 平坦化教学样本产出混淆判定与可读版本工件（派生谱系完整）；angr 路径真实执行成功。
+
+**T29 语义审计智能体（源码+二进制）**（P0；依赖：T26（二进制侧）；对应 M07/M15）
+- 现状：源码审计仅 2 条固定 Semgrep 规则投影 Finding，LLM 只复核不发现；二进制路径不产生 Finding（`evidence_ids=[]`），报告只消费 findings/pocs。
+- 目标：落地 ADR-021 审计计划（必跑基线 + 覆盖度门禁）；LLM 按函数邻域（源码）/伪代码+调用邻域（二进制）语义审计产出候选 Finding，进入既有独立复核与确认门禁。
+- 验收：C 或 Python 教学样本发现固定规则之外的候选漏洞并经独立复核；ELF 教学样本经伪代码审计端到端产出候选 Finding、完成复核并生成报告。
+
+**T30 关键逻辑标定**（P1；依赖：T26；对应 M07/M11/M01）
+- 现状：全仓无任何认证/加解密/注册等关键函数识别代码；前端无标定展示。
+- 目标：导入表/字符串/tree-sitter 特征规则 + LLM 确认，标定关键函数并入库（PAIR 属性或专表），记录判定依据与证据；API 与前端展示函数位置、关联代码、调用链。
+- 验收：教学样本标定出至少认证与加解密两类关键函数，前端可见位置、关联代码与判定依据。
+
+**T31 漏洞自动利用智能体**（P1；依赖：T25；对应 M14/M07）
+- 现状：Proof/Exploit 需用户手工提供 `script_ref` 与镜像摘要，无自动生成。
+- 目标：对 `confirmed` 且项目开启利用验证的 Finding，由模型自动生成 PoC/利用脚本（受 Policy、资源预算与利用红线约束：无持久化/横向/外联），自动经 Sandbox Runner 执行验证，脚本、日志与结果作为证据链落库。
+- 验收：confirmed 教学漏洞在无人工输入下完成“生成 → 沙箱执行 → `exploitable`/`not_exploitable_under_environment` 落库”全链；生成脚本经策略校验。
+
+**T32 模糊测试接入自动链路与 harness 生成**（P2；依赖：T25（可选）；对应 M13/M07）
+- 现状：AFL++/CASR 工具链回放验收通过（T19），但不在自动管线中，无 LLM harness 生成。
+- 目标：按 Finding 或审计计划自动创建 fuzz Job；LLM 生成 harness 并进入“编译—诊断—修正”有界循环（超限结构化失败，Task 可 PARTIAL）；崩溃簇与最小化输入挂接 Finding 证据。
+- 验收：教学样本自动完成 harness 生成与受限时长 fuzz，崩溃簇作为 Evidence 关联到 Finding。
+
+**T33 前端逆向工作台与人工复核**（P1；依赖：T26、T30 数据就绪；对应 M01/M02）
+- 现状：前端为单文件最小闭环（`apps/web/src/App.svelte`），未调用 pair/agent-runs/annotations 任何端点；API 缺函数调用边端点；人工复核与标注 API（`app.py` annotations/review）完整但无前端入口。
+- 目标：API 暴露函数调用边；函数点击高亮 caller/callee 并联动伪代码与判定依据；Agent 决策轨迹展示；人工复核提交与标注修正（label/note/severity）入口。
+- 验收：浏览器完成“二进制样本 → 函数浏览 → 调用链高亮 → 伪代码查看 → 提交标注”操作；标注不覆盖原始分析与历史复核。
+
+**T34 报告证据链写实**（P1；依赖：T29、T31（内容源）；对应 M16）
+- 现状：报告证据链仅计数（"Evidence: N"），PDF 无严重等级，SARIF 无修复建议。
+- 目标：三类报告包含证据链明细：文件位置/二进制地址、调用路径、Review/Poc 验证结果、证据工件摘要与引用；PDF 补严重等级。
+- 验收：报告四要素（漏洞列表、严重等级、证据链、修复建议）在 Markdown/PDF 齐备；SARIF 通过 Schema 校验且含修复建议字段。
 
 ## 4. 当前问题
 
@@ -57,6 +121,7 @@
 | Q-006 | Proof/Exploit 创建接口未校验客户端传入的 `script_ref` 是否归属当前 Finding 的 task 项目 | 用户可传入其他项目共享 CAS 存储中的派生对象引用，沙箱仅校验引用存在性，可能越出 Finding 项目范围执行脚本 | 已修复：Scheduler 与 Executor 通过 `find_project_version_by_object_ref` 按项目范围解析 `script_ref`，跨项目或未登记引用被拒绝（`proof.script_ref_outside_project`） | 已处理 | Codex |
 | Q-007 | ProofJobExecutor 的数据库事务横跨长时间沙箱 HTTP 调用 | 沙箱运行期间（默认最长 120s）持续占用一条 DB 连接，并发下可能耗尽连接池阻塞其他 DB 工作 | 已修复：拆分为「加载校验事务 → 无事务沙箱调用 → Poc 持久化事务」三段，SQLAlchemy 连接不再被沙箱调用占用 | 已处理 | Codex |
 | Q-008 | 任务聚合并集推导不允许跨阶段跳跃；若 Job 脱离正常管线（如手工向 `created` 任务挂 Proof Job），settlement hook 抛 `IllegalTransitionError` 并反复重试形成毒消息 | 非常规入口的 Job 会无限重试、重复触发沙箱执行 | 已修复：`_transition_path` 只输出状态机允许的迁移（越阶段跳被跳过），结算钩子对残余非法迁移记录 `task_aggregation_transition_skipped` 并继续；回归测试确认越阶段 Proof Job 正常结算且任务仅经合法迁移收尾 | 已处理 | Codex |
+| Q-009 | 对照课设要求差距分析（2026-09-10，只读核查确认）：①全系统唯一 LLM 生产调用是独立复核，无自主规划智能体，ActionPlan/LangGraph 均为固定管线；②二进制主管线默认无 Ghidra（env 空且 worker 镜像未装），binary-tools 沙箱工具为死路径，二进制任务不产生 Finding；③无关键逻辑标定、无混淆识别/解混淆（`angr_helper.py:13` argv 校验 `!=7` 与实际 10 参数不符，启用即失败）；④模糊测试未接入自动管线、无 harness 生成；⑤利用需手工提供 script_ref；⑥前端无调用链/伪代码/Agent 轨迹/人工复核标注展示；⑦报告证据链仅计数，PDF 无严重等级 | 课设题目核心要求（多智能体协作、二进制逆向自主规划、伪代码漏洞检测、关键逻辑标定、自动利用、证据链报告）未覆盖，T01-T24 的“全部完成”是对裁剪后范围而言 | 已建立补齐任务包 T25-T34（定义见 3.1），按 P0（T25/T26/T27/T29）→P1（T28/T30/T31/T33/T34）→P2（T32）顺序实施 | 待处理 | 待认领 |
 
 ## 5. 当前阻碍点
 
@@ -131,9 +196,9 @@
 
 ## 10. 下一步
 
-1. 使用真实数据库任务完成 T21 Markdown/PDF/SARIF 报告 Job 回放，确认成功、拒绝、重放、超时/取消和部分失败语义。
-2. T20 已完成 HTTP Runner CAS 回放（策略拒绝/重放/部分失败通过）；剩余为经 API→Dispatcher→Worker 完整队列链路重跑一次，归入 T22 收口。
-3. 构建并固定 AFL++/CASR 镜像摘要，在独立 Sandbox Runner 中回放无害样本，覆盖预算终止、最小输入、覆盖率、crash cluster（T19）。
-4. 配置 `analysis-plane` 可达的 REVIEW 模型，完成 C/C++/Python/Java P2 端到端验收；随后执行 T22 浏览器全链路、可观测性和最终报告验收。
+1. 认领 T25 智能体规划执行框架（P0 地基，T27/T31/T32 依赖其循环与降级语义），按 3.1 验收标准实现并测试。
+2. 并行认领 T26 二进制主管线收口：为 analysis-worker 镜像内置 Ghidra 或接通 binary-tools 沙箱路径（二选一，在 ADR/台账记录决策），使 ELF 教学样本伪代码经 `GET /api/tasks/{id}/pair` 可查。
+3. T29 语义审计智能体（源码侧可先行，不依赖 T25/T26）：落地 ADR-021 AuditPlan 必跑基线，使 LLM 产出候选 Finding；二进制侧在 T26 完成后打通端到端。
+4. 其余按 T27 → T30 → T28 → T33 → T34 → T31 → T32 推进；每个任务包完成前逐项核对 3.1 验收标准与对应模块（M01/M07/M10/M11/M13/M14/M15/M16）验收标准。
 
 更新时间：2026-09-10（Asia/Shanghai）

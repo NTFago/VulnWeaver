@@ -5,8 +5,10 @@ from vulnweaver_proof.executor import ProofExecutionError, ProofExecutionService
 from vulnweaver_proof.profiles import proof_command_profile, proof_tool_spec
 from vulnweaver_proof.scheduler import ProofJobScheduler
 from vulnweaver_proof.validation import (
+    GeneratedScriptPolicyResult,
     ScriptRefOwnershipError,
     ensure_script_ref_belongs_to_project,
+    validate_generated_script,
 )
 
 __all__ = [
@@ -17,6 +19,8 @@ __all__ = [
     "SandboxRunnerClient",
     "ScriptRefOwnershipError",
     "ensure_script_ref_belongs_to_project",
+    "GeneratedScriptPolicyResult",
+    "validate_generated_script",
     "proof_command_profile",
     "proof_tool_spec",
 ]

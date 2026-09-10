@@ -39,6 +39,13 @@ def build_markdown(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str
                 "",
             ]
         )
+        lines.extend([
+            "### Evidence chain",
+            "",
+            f"- Evidence references: {', '.join(f'`{item}`' for item in finding['evidence_ids']) or 'none'}",
+            f"- Review references: {', '.join(f'`{item}`' for item in finding['review_ids']) or 'none'}",
+            "",
+        ])
         for poc in poc_by_finding.get(finding["id"], []):
             lines.append(
                 f"- POC `{poc['id']}`: `{_value(poc['status'])}` / "

@@ -82,7 +82,7 @@ class ReportJobExecutor:
                 ):
                     return _failure(job, "report.artifact_mismatch", FailureKind.POLICY)
             if report_format == "sarif":
-                document = build_sarif(findings)
+                document = build_sarif(findings, pocs)
                 validate_sarif(document)
                 content = json.dumps(document, ensure_ascii=True, separators=(",", ":")).encode()
             elif report_format == "pdf":
