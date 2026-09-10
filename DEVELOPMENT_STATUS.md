@@ -153,6 +153,7 @@
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
 | 2026-09-10 | T30 关键逻辑标定（PR #41） | 候选暂存、模型确认/否定合并及模型失败降级的 3 项新增测试通过；修复执行器与确认器签名/数据形状不匹配，恢复被 WIP 误覆盖的 orchestrator 公共导出；合并 T28 基线后 Linux Dev Container `pnpm run check`：385 passed、5 skipped、覆盖率 81.97%，ruff/pyright 与 svelte-check 0，契约 --check 无漂移；GitHub Quality Gate 通过后已合并 main | 已配置 PLANNING 模型和教学 ELF 完成真实 E2E |
+| 2026-09-10 | CI 文档变更快速路径 | `.github/workflows/quality-gate.yml` 新增变更范围识别：仅 Markdown PR 只执行 `git diff --check`，代码/配置/工作流变更继续执行完整门禁；完整门禁改为按需启动 PostgreSQL/Redis；ADR-014 已同步 | 未在 GitHub Actions 运行器上实跑，提交 PR 后确认必需检查名称与分支保护配置兼容 |
 | 2026-09-10 | T29 二进制伪代码审计接入（`feat/t29-binary-audit`） | `SemanticAuditFinding` 支持 address 锚定；审计遍历二进制 PAIR 函数（伪代码为上下文）；模型 finding 经 functions_at_address 锚定 BinaryLocation，幻觉地址丢弃；新增二进制锚定测试，全量 377 passed（ruff/pyright 0、契约 --check 无漂移） | 真实模型二进制端到端验收 |
 | 2026-09-10 | T27 逆向规划接入 AgentLoop（`feat/t27-reverse-agent`） | ReversePlanningAgent 经 T25 循环规划 angr 定点目标并真实执行；规划失败降级固定管线；新增 4 项测试，Dev Container 全量 376 passed（ruff/pyright 0 错误） | 真实模型差异化规划验收归 E2E |
 | 2026-09-10 | T31 漏洞自动利用智能体（`feat/t31-auto-exploit`） | 复核结算后自动投递 EXPLOIT Job；执行期模型生成脚本→安全红线校验→派生工件登记→沙箱执行→Poc 证据链；新增 `ExploitScript` 契约；测试 5 项新增，全量 370 passed（ruff/pyright 0 错误、契约 --check 无漂移） | 真实模型端到端验收（需 `PROOF_TOOL_IMAGE_DIGEST` 与产品模型配置） |
