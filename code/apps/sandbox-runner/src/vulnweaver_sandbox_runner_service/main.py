@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 
 import uvicorn
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -25,7 +26,10 @@ def build_app():
     digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     profiles: list[SandboxCommandProfile] = []
     proof_digest = os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
+    binary_ref = os.environ.get("BINARY_TOOLS_IMAGE_REF", "vulnweaver-binary-tools:fixed")
     binary_digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip()
+    if not binary_digest:
+        binary_digest = _resolve_local_image_digest(binary_ref)
     if binary_digest:
         registry.register(
             binary_tool_spec(
@@ -34,8 +38,8 @@ def build_app():
             )
         )
         profiles.append(
-            binary_command_profile(
-                os.environ.get("BINARY_TOOLS_IMAGE_REF", "vulnweaver-binary-tools:fixed"),
+                binary_command_profile(
+                binary_ref,
                 binary_digest,
             )
         )
@@ -117,6 +121,22 @@ def _binary_resource_budget() -> ResourceBudget:
         "max_dynamic_runs": 0,
         "timeout_seconds": int(os.environ.get("BINARY_TIMEOUT_SECONDS", "600")),
     }
+
+
+def _resolve_local_image_digest(image_ref: str) -> str:
+    """Resolve a locally built fixed image without weakening digest pinning."""
+    try:
+        result = subprocess.run(
+            ["docker", "image", "inspect", "--format", "{{.Id}}", image_ref],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    digest = result.stdout.strip()
+    return digest if digest.startswith("sha256:") else ""
 
 
 app = build_app()

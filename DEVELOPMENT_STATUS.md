@@ -48,7 +48,7 @@
 | T23 Web 首次注册与产品设置 | 已完成 | Codex（独立 worktree） | Web 一次性管理员注册、事务竞争裁决、认证/CSRF 设置 API、模型 URL/名称/API Key/重试参数设置页、API Key 写后不回显/显式清除、Worker DB 配置读取、迁移、Compose 与升级文档已完成 | 合并后在独立 TLS 部署完成真实浏览器首次启动验收；API Key 按用户选择明文落库，数据库/备份读取者可见 | 2026-09-10 |
 | T24 Web 工作台布局与可读性优化 | 已完成 | Codex | 桌面、响应式与字号调整完成；设置页复选框已从通用整宽输入规则中隔离，恢复与说明文字横向对齐 | 无 | 2026-09-10 |
 | T25 智能体规划执行框架 | 未开始 | 待认领 | — | 通用“规划—执行—观察”Agent 循环：LLM 输出结构化 ActionPlan → Policy Engine 校验 → 工具/Job 调度 → 结果回填 → 多步迭代；决策轨迹写 AgentRun；步数/token/时间预算与无模型结构化降级（定义见 3.1） | 2026-09-10 |
-| T26 二进制主管线收口（Ghidra 默认可用） | 进行中 | Codex | 选择 Sandbox Runner binary-tools 路径；Compose 默认构建并启动 `vulnweaver-binary-tools:fixed` 持有服务，Runner 显式依赖该服务；镜像摘要仍需部署配置提供 | 配置摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查 | 2026-09-10 |
+| T26 二进制主管线收口（Ghidra 默认可用） | 进行中 | Codex | 选择 Sandbox Runner binary-tools 路径；本回合负责移除“必须手工填写镜像摘要”这一默认部署缺口，并补齐 binary Job 的运行时接线验证 | 让 Runner 在固定镜像引用可解析时自动钉住本地镜像摘要；随后接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查 | 2026-09-10 |
 | T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
 | T29 语义审计智能体（源码+二进制） | 进行中 | Codex | 新增 ADR-021 AuditPlan 必跑基线与覆盖度门禁纯领域模块，阻止不完整计划声明 NO_FINDINGS；尚未接入编排持久化和模型审计 | 接入持久化计划、源码/伪代码邻域模型审计、候选 Finding 与独立复核链路 | 2026-09-10 |
@@ -178,6 +178,7 @@
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
 | 2026-09-10 | T24 Web 定向门禁 | 复选框修复后 Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 通过（0 错误、0 警告）；`pnpm --filter @vulnweaver/web build` 成功（111 modules transformed）；Web 镜像重建并替换运行容器，新 CSS 资源 `index-e2kade8Q.css`、首页 HTTP 200 | 未执行真实浏览器多视口截图回归 |
+| 2026-09-10 | T26 binary-tools 摘要自动解析定向检查 | Dev Container 内 Sandbox Runner Ruff 通过；`pytest -q tests/sandbox_runner`：10 passed、1 skipped；未显式配置 `BINARY_TOOLS_IMAGE_DIGEST` 时仅接受 Docker 本地镜像 `sha256:` ID，解析失败保持工具不注册 | 尚未完成 binary Job 经 Runner 调度及 API PAIR 端到端验收 |
 | 2026-09-10 | P2 四语言端到端 | 真实数据库+真实模型：C/C++（CWE-120 strcpy）、Python（CWE-95 eval）候选 finding 均经独立复核（outcome=unverifiable，model=review-model/glm-5.3-flash），Java import/索引验证通过；全部门禁 333 passed / 81.26% | 利用链利用验证未执行（项目未开启 exploit_validation） |
 | 2026-09-10 | T16 二进制工具链回放 | 独立 Sandbox Runner HTTP 回放（禁网/非 root/只读根）：DIE succeeded（compiler=GCC 14.2.0）、UPX succeeded（not_upx_packed）、objdump succeeded（21 函数/95 指令/34 xref）、Ghidra succeeded（19 函数/28 基本块/19 段伪代码导出 CAS）；修复 Ghidra 项目目录与沙箱主机名解析 | angr 动态执行未启用；PE 样本未单独回放 |
 | 2026-09-10 | T19 真实镜像回放 | 禁网/非 root/只读根 fs/资源限制沙箱内 afl-fuzz 按 -E/-V 精确终止（100→16.4s，3000→30.5s）；crash-manifest 2 条 SIGABRT 带栈帧；minimized-inputs.tar 成员摘要与 manifest 一致；fuzz-summary coverage_percent=100.0；worker 侧解析 FuzzResult succeeded | 未接 CASR 原生二进制（聚类由服务端 stack_hash 完成）；长时程模糊测试未执行 |
