@@ -72,6 +72,49 @@
   let pairNeighborhood: Record<string, unknown> | null = null;
   let pairFunctions: PairFunction[] = [];
   let agentRuns: Record<string, unknown>[] = [];
+  let selectedFunctionId: string | null = null;
+
+  type PairNodeLike = { id: string; function_id: string | null };
+  type PairEdgeLike = { source_node_id: string; target_node_id: string; type: string };
+
+  function functionLocation(fn: PairFunction): string {
+    const source = fn.source_location;
+    if (source) return `${source.path}:${source.start_line}`;
+    const binary = fn.binary_location;
+    if (binary) return `0x${binary.virtual_address.toString(16)}`;
+    return fn.language;
+  }
+
+  function functionPseudocode(fn: PairFunction): string | null {
+    const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
+    if (typeof value === "string" && value.trim()) return value;
+    return null;
+  }
+
+  function relatedFunctions(direction: "callers" | "callees"): PairFunction[] {
+    if (!pairNeighborhood || !selectedFunctionId) return [];
+    const nodes = (pairNeighborhood.nodes ?? []) as PairNodeLike[];
+    const edges = (pairNeighborhood.edges ?? []) as PairEdgeLike[];
+    const nodeFunction = new Map<string, string>();
+    for (const node of nodes) if (node.function_id) nodeFunction.set(node.id, node.function_id);
+    const byId = new Map(pairFunctions.map((fn) => [fn.id, fn]));
+    const ids = new Set<string>();
+    for (const edge of edges) {
+      if (edge.type !== "call") continue;
+      const source = nodeFunction.get(edge.source_node_id);
+      const target = nodeFunction.get(edge.target_node_id);
+      if (direction === "callees" && source === selectedFunctionId && target) ids.add(target);
+      if (direction === "callers" && target === selectedFunctionId && source) ids.add(source);
+    }
+    ids.delete(selectedFunctionId);
+    return [...ids].flatMap((id) => (byId.has(id) ? [byId.get(id) as PairFunction] : []));
+  }
+
+  async function selectFunction(fn: PairFunction): Promise<void> {
+    selectedFunctionId = fn.id;
+    await loadNeighborhood(fn.id);
+  }
+
 
   let username = "";
   let password = "";
@@ -472,8 +515,30 @@
         <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1><p>结果：{displayResult(selectedTask.result)} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
         <section class="metric-strip task-metrics"><div><strong>{JSON.stringify(observability.jobs_by_status ?? {})}</strong><span>状态汇总</span></div><div><strong>{jobs.length}</strong><span>Jobs</span></div><div><strong>{events.length}</strong><span>事件</span></div><div><strong>{findings.length}</strong><span>候选问题</span></div><div><strong>{selectedTask.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div></section>
         <section class="section-block full"><div class="section-head"><div><span>FINDINGS / REPORTS</span><h2>问题与报告</h2></div><div class="task-actions"><button class="secondary" on:click={() => createReport("markdown")} disabled={busy}>生成 Markdown</button><button class="secondary" on:click={() => createReport("sarif")} disabled={busy}>生成 SARIF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button></div></div>{#if findings.length === 0}<div class="compact-empty">当前任务尚未产生候选问题。</div>{:else}<div class="finding-list">{#each findings as finding}<button class="finding-row" on:click={() => void selectFinding(finding)}><span class={`status-dot ${finding.status}`}></span><div><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></div><span>{Math.round(finding.confidence * 100)}%</span></button>{/each}</div>{/if}{#if selectedFinding}<article class="finding-detail"><b>{selectedFinding.title}</b><p>{selectedFinding.fix_suggestion}</p><small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small><div class="proof-actions"><label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS/object reference" /></label><label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label><button class="secondary" on:click={() => void createProof("proof_of_concept")} disabled={busy}>发起 Proof</button>{#if selectedFinding.status === "confirmed" && selectedProject?.exploit_validation_enabled}<button class="danger" on:click={() => void createProof("exploit")} disabled={busy}>发起 Exploit</button>{/if}</div><div class="proof-actions"><label>人工复核意见<textarea bind:value={reviewRationale} placeholder="记录复核结论与依据"></textarea></label><button class="secondary" on:click={() => void submitReview()} disabled={busy || !reviewRationale.trim()}>保存复核</button><label>标注<textarea bind:value={annotationNote} placeholder="记录问题标签或修正说明"></textarea></label><button class="secondary" on:click={() => void submitAnnotation()} disabled={busy || !annotationNote.trim()}>保存标注</button></div>{#if selectedEvidence.length > 0}<div class="detail-evidence"><b>证据链</b>{#each selectedEvidence as item}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>{/if}{#if selectedPocs.length > 0}<div class="detail-evidence"><b>复现记录</b>{#each selectedPocs as poc}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>{/if}</article>{/if}{#if reportVersionIds.length > 0}<div class="report-links">{#each reportVersionIds as versionId}{#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}{/each}</div>{/if}</section>
+        <section class="section-block full"><div class="section-head"><div><span>FUNCTION WORKBENCH</span><h2>函数与调用链</h2></div><small>点击函数联动调用关系与伪代码</small></div>
+          {#if pairFunctions.length === 0}<div class="compact-empty">样本索引完成后，此处将列出函数、伪代码与调用链。</div>{:else}
+          <div class="workbench">
+            <div class="function-list" role="listbox" aria-label="函数列表">{#each pairFunctions as fn (fn.id)}<button class:selected={selectedFunctionId === fn.id} on:click={() => void selectFunction(fn)}><b>{fn.name}</b><small>{functionLocation(fn)}</small></button>{/each}</div>
+            <div class="function-detail">
+              {#if !selectedFunctionId}<div class="compact-empty">选择一个函数，查看其调用方、被调用方与伪代码。</div>{:else}
+                {@const selected = pairFunctions.find((fn) => fn.id === selectedFunctionId)}
+                {#if selected}
+                  <div><b class="function-title">{selected.name}</b><small>{selected.signature ?? functionLocation(selected)}</small></div>
+                  {#if functionPseudocode(selected)}<pre class="code-view">{functionPseudocode(selected)}</pre>{:else}<small class="muted">该函数没有已导出的伪代码。</small>{/if}
+                  {#if pairNeighborhood}
+                    <div class="call-columns">
+                      <div><b>调用方 CALLERS</b>{#each relatedFunctions("callers") as caller (caller.id)}<button on:click={() => void selectFunction(caller)}>{caller.name}</button>{:else}<small class="muted">无</small>{/each}</div>
+                      <div><b>被调用 CALLEES</b>{#each relatedFunctions("callees") as callee (callee.id)}<button on:click={() => void selectFunction(callee)}>{callee.name}</button>{:else}<small class="muted">无</small>{/each}</div>
+                    </div>
+                  {:else}<small class="muted">调用关系加载中…</small>{/if}
+                {/if}
+              {/if}
+            </div>
+          </div>{/if}
+        </section>
         <section class="task-grid"><div class="section-block"><div class="section-head"><div><span>JOBS</span><h2>执行单元</h2></div><small>由编排层创建</small></div>{#if jobs.length === 0}<div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>{:else}<div class="job-list">{#each jobs as job}<article><span class={`status-dot ${job.status}`}></span><div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>{#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}</article>{/each}</div>{/if}</div>
           <div class="section-block"><div class="section-head"><div><span>EVENT STREAM</span><h2>决策与状态轨迹</h2></div><small class="live"><i></i> LIVE</small></div>{#if events.length === 0}<div class="compact-empty">尚未接收事件。</div>{:else}<ol class="timeline">{#each [...events].reverse() as event}<li><span>{String(event.sequence).padStart(2, "0")}</span><div><b>{event.event_type}</b><small>{formatDate(event.occurred_at)} · {shortId(event.event_id)}</small><details><summary>载荷</summary><code>{JSON.stringify(event.payload)}</code></details></div></li>{/each}</ol>{/if}</div></section>
+        <section class="section-block full"><div class="section-head"><div><span>AGENT RUNS</span><h2>智能体运行轨迹</h2></div><small>{agentRuns.length} 条模型运行记录</small></div>{#if agentRuns.length === 0}<div class="compact-empty">模型分析运行后，此处将展示各智能体的决策轨迹。</div>{:else}<div class="agent-run-list">{#each agentRuns as run}{#if run.id}<article><span class={`status-dot ${run.status}`}></span><div><b>{String(run.model)}</b><small>{String(run.status)} · 决策 {(run.decisions as unknown[] | undefined)?.length ?? 0} 条 · token {(run.token_usage as Record<string, number> | undefined)?.input_tokens ?? 0}/{(run.token_usage as Record<string, number> | undefined)?.output_tokens ?? 0} · {typeof run.duration_ms === "number" ? `${run.duration_ms}ms` : "运行中"}</small>{#if run.failure}<p>{(run.failure as Record<string, unknown>).code}</p>{/if}</div></article>{/if}{/each}</div>{/if}</section>
       {/if}
     </main>
   </div>
