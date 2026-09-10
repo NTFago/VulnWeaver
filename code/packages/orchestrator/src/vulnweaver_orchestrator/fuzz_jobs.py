@@ -42,6 +42,8 @@ class FuzzTarget:
     max_duration_seconds: int
     max_crashes: int
     collect_coverage: bool = True
+    harness_context: JsonObject | None = None
+    harness_fixture_refs: tuple[str, ...] = ()
 
 
 class FuzzTargetResolver(Protocol):
@@ -171,6 +173,14 @@ class FuzzJobScheduler:
                     "arguments": {
                         "finding_id": finding_id,
                         "fuzz_request": dict(request),
+                        **(
+                            {
+                                "harness_context": target.harness_context,
+                                "harness_fixture_refs": list(target.harness_fixture_refs),
+                            }
+                            if target.harness_context is not None
+                            else {}
+                        ),
                     },
                 },
             )

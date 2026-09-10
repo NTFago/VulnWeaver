@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -88,11 +89,13 @@ class _CrashingService:
 
     def __init__(self, *, crashes: bool = True) -> None:
         self._crashes = crashes
+        self.requests: list[FuzzRequest] = []
 
     async def run_with_crashes(self, request, _cancellation):
         from vulnweaver_contracts import FuzzStatus
         from vulnweaver_fuzzing import FuzzRunOutcome
 
+        self.requests.append(request)
         notice = _crash_record() if self._crashes else None
         return FuzzRunOutcome(
             result={
@@ -231,3 +234,36 @@ async def test_fuzz_job_executor_succeeds_without_crashes():
 
     assert result["status"] is JobStatus.SUCCEEDED
     assert result["evidence_ids"] == []
+
+
+@pytest.mark.anyio
+async def test_source_fuzz_builds_harness_before_running_service():
+    class Pipeline:
+        async def build(self, **_kwargs):
+            return SimpleNamespace(
+                succeeded=True,
+                status="compiled",
+                compiled_ref="cas://sha256/" + "f" * 64,
+            )
+
+    service = _CrashingService(crashes=False)
+    executor = FuzzJobExecutor(
+        service, harness_pipeline=Pipeline()  # type: ignore[arg-type]
+    )  # type: ignore[arg-type]
+    request = _bound_request()
+    request["sandbox_request"]["artifact_kind"] = "derived"  # type: ignore[typeddict-item]
+    result = await executor.execute(
+        _job(
+            arguments={
+                "finding_id": "finding:1",
+                "fuzz_request": request,
+                "harness_context": {"source_excerpt": "int parse(void);"},
+                "harness_fixture_refs": [],
+            }
+        ),
+        asyncio.Event(),
+    )
+
+    assert result["status"] is JobStatus.SUCCEEDED
+    assert service.requests[0]["sandbox_request"]["artifact_kind"] == "elf"
+    assert service.requests[0]["sandbox_request"]["input_ref"].endswith("f" * 64)

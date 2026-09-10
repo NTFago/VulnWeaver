@@ -932,6 +932,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             )
             return review
 
+    @app.get("/api/findings/{finding_id}/reviews")
+    async def finding_reviews(
+        finding_id: str, _: Annotated[str, Depends(require_account)] = ""
+    ) -> list[Review]:
+        async with database.transaction() as repositories:
+            await repositories.findings.get(finding_id)
+            return await repositories.findings.list_reviews(finding_id)
+
     @app.get("/api/tasks/{task_id}/events")
     async def task_events(
         task_id: str, after: int = -1, _: Annotated[str, Depends(require_account)] = ""

@@ -14,6 +14,7 @@ import type {
   Project,
   QueueEvent,
   ResourceBudget,
+  Review,
   Task,
   WorkerResult,
 } from "@vulnweaver/contracts";
@@ -183,9 +184,11 @@ export const api = {
       method: "POST", headers: writeHeaders(true), body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
     }),
   reviewFinding: (findingId: string, outcome: string, rationale: string) =>
-    request<Finding>(`/api/findings/${encodeURIComponent(findingId)}/review`, {
+    request<Review>(`/api/findings/${encodeURIComponent(findingId)}/review`, {
       method: "PATCH", headers: writeHeaders(true), body: JSON.stringify({ schema_version: schemaVersion, outcome, rationale }),
     }),
+  findingReviews: (findingId: string) =>
+    request<Review[]>(`/api/findings/${encodeURIComponent(findingId)}/reviews`),
   findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
   findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
   observability: (taskId: string) => request<Record<string, unknown>>(`/api/tasks/${taskId}/observability`),

@@ -51,3 +51,16 @@ class HarnessGenerator:
         if isinstance(source, str) and source.strip() and len(source) <= 65536:
             return source
         return None
+
+    async def repair(
+        self, *, task_id: str, job_id: str, source: str, diagnostics: str
+    ) -> str | None:
+        return await self.generate(
+            task_id=task_id,
+            job_id=f"{job_id}:repair",
+            context={
+                "previous_source": source,
+                "compiler_diagnostics": diagnostics,
+                "instruction": "Return corrected HarnessSource JSON only.",
+            },
+        )

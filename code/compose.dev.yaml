@@ -34,7 +34,3 @@ services:
   api:
     environment:
       SECURE_COOKIE: "false"
-
-  web:
-    ports:
-      - 127.0.0.1:${WEB_PORT:-8080}:8080

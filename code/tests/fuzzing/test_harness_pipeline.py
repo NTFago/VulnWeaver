@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import tarfile
 from pathlib import PurePosixPath
 from typing import cast
 
@@ -77,7 +78,12 @@ def _sandbox_result(
     ).encode()
     outputs = [_output(store, "compile-report.json", report)]
     if success:
-        outputs.append(_output(store, "harness.tar", harness))
+        bundle = io.BytesIO()
+        with tarfile.open(fileobj=bundle, mode="w") as archive:
+            member = tarfile.TarInfo("harness")
+            member.size = len(harness)
+            archive.addfile(member, io.BytesIO(harness))
+        outputs.append(_output(store, "harness.tar", bundle.getvalue()))
     return cast(
         SandboxResult,
         {
@@ -155,6 +161,8 @@ async def test_compile_uses_the_fixed_harness_profile(tmp_path) -> None:
 
     assert outcome.succeeded
     assert outcome.compiled_ref is not None
+    with store.open(outcome.compiled_ref) as compiled:
+        assert compiled.read() == b"compiled-harness"
     request = sandbox.requests[0]
     assert request["tool_name"] == "afl-casr"
     assert request["image_digest"] == IMAGE_DIGEST
