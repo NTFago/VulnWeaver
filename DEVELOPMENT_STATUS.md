@@ -130,6 +130,8 @@
 | Q-012 | `Orchestrator.process_once` 的 `read_group` / `ensure_group` / `claim_stale` / `acknowledge` 均无兜底，`QueueUnavailable` 直接掀掉进程；`ReliableWorker.run` 存在完全相同的洞 | Redis 卡顿超过客户端 socket 超时（5s）即崩溃重启；另一套同分支部署的 orchestrator 已重启 5 次，属 main 既有缺陷，每次重启有恢复空窗 | 已修复：`Orchestrator.run(stop)` 与 `ReliableWorker.run` 接住 `QueueUnavailable`，按 dispatcher 既有退避式（`min(max, base * 2 ** min(attempt-1, 30))`）做停止感知重试，进程不退出；退避参数经 `ORCHESTRATOR_RETRY_*` / `WORKER_RETRY_*` 注入；新增两侧故障注入测试 | 已处理 | 本次修复分支 |
 | Q-013 | proof/fuzz 下发给沙箱的 `resource_budget` 方向相反（沙箱要求「请求 ≤ 规格」，UI 却传整个项目预算），且 `deploy/tool-specs/binary-import.json` 的 `cpu 8000 / memory 1 GiB` 与运行时实际值（`cpu 4000 / 3 GiB`，见 `docs/binary-analysis-runtime.md` 与 `binary-analysis/tools.py`）矛盾 | Proof/Exploit 必然 `sandbox.resource_budget_exceeded`（proof-tool 规格仅 cpu 1000 / 256 MiB / 120s）；模糊测试同样超限；ToolSpec 数值无出处，门禁 CPU 过严而内存过松 | 已修复（ADR-024）：`binary-import` 校准到运行时实际值；新增 `vulnweaver_tool_runtime.bounded_resource_budget` 作为唯一收敛实现，proof 执行器与 fuzz 执行器按各自规格收敛（源码静态阶段原私有实现改为复用），运行器侧拒绝语义不变；默认预算 `max_dynamic_runs ≥ 1`，开启利用验证但预算不容许动态运行时建项目即拒 | 已处理 | 本次修复分支 |
 
+| Q-014 | `SANDBOX_RUNNER_TIMEOUT_SECONDS` 默认 60s，低于最长工具超时（binary-facts 允许运行至 600s）：analysis-worker 的沙箱 HTTP 客户端会在工具完成前放弃，二进制任务必然失败于 `ToolExecutionError` | 默认部署下二进制分析完全不可用；且沙箱容器在 Job 已失败后仍在运行，浪费资源 | 已修复：`compose.yaml` 与 `.env.example` 默认值改为 660（600s 工具预算 + 60s 余量，使 Runner 自身的超时先触发并返回结构化失败，而不是客户端中断）；实时栈实测确认置为 600s 后 `binary-import` Job 由 failed 转为 succeeded，任务走完 `analyzing→reporting→completed` | 已处理 | 本次修复分支 |
+
 ## 5. 当前阻碍点
 
 当前无阻碍。T16/T18/T19/T20/T21/T22/T32/T34 的未完成项属于待验证工作或待确认设计（D-002），不应标记为阻碍：
@@ -164,7 +166,8 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
-| 2026-09-10 | Q-010~Q-013 修复（`fix/budget-and-orchestration-resilience`，基于 main `0098798`）：项目预算一致性、Task 失败可见性、队列韧性、proof/fuzz 预算方向 | 见下方验证记录；ADR-023/024 已新增；契约 `--check` 无漂移 | 由用户以浏览器走通「新建项目（默认预算）→ 提交 PE 任务」；已存在项目的预算需重建或修正（无更新端点） |
+| 2026-09-10 | Q-014 沙箱客户端超时默认值修正（`compose.yaml` / `.env.example`：60s → 660s） | 实时栈实测：60s 时 `binary-import` 在任务批准后精确 61s 失败（`ToolExecutionError`），沙箱容器在 Job 失败后仍在运行；置为 600s 后同一 PE 样本的 `import` Job `succeeded`，任务走完 `validating→analyzing→reporting→completed`（`result=partial`，产出 3 个工件版本） | 长耗时工具接入时按最长工具超时复核该默认值 |
+| 2026-09-10 | Q-010~Q-013 修复（`fix/budget-and-orchestration-resilience`，基于 main `0098798`，已合并入 `main` `bf956b6`）：项目预算一致性、Task 失败可见性、队列韧性、proof/fuzz 预算方向 | 见下方验证记录；ADR-023/024 已新增；契约 `--check` 无漂移 | 由用户以浏览器走通「新建项目（默认预算）→ 提交 PE 任务」；已存在项目的预算需重建或修正（无更新端点）；是否推送 / 开 PR 待用户确认 |
 | 2026-09-10 | T35 主分支全链路接线修复（`codex/fix-main-review`） | Linux Dev Container `pnpm run check`：437 passed、5 skipped、覆盖率 82.11%，Ruff/Pyright/TS/Svelte 0 错误；基础 Compose 重建成功，Web 首页与 Web→API 代理均 HTTP 200；新增二进制审计、自动报告、Harness 解包和复核历史回归 | 配置真实模型与固定 AFL/Proof 镜像后执行动态 E2E |
 | 2026-09-10 | T32 自动投递接通（`feat/t32-fuzz-auto`，提交 `4ec38a0`） | `TaskAggregateSettlementHook` 新增 `FuzzDispatchScheduler` 协议与 fuzz 调度参数：复核结算后按 `exploit_validation_enabled` opt-in 对非 FALSE_POSITIVE 的 Finding 调度 fuzz（与 T31 同一门禁，动态执行语义一致）；`FuzzJobScheduler` 新增 `FuzzTargetResolver` 注入点与 `schedule_finding_in_transaction`，`schedule_in_transaction` 改为按 `task["artifact_version_ids"]` 绑定（`Task` 无 `input_refs` 字段，修正了错误的键访问）；analysis-worker 装配 `_fuzz_scheduler` 与 `_fuzz_target` 解析器（仅内存破坏/注入类别、锚定工件须属任务范围、无摘要则关闭）。新增 `test_fuzz_dispatch.py` 3 项（请求绑定新 Job 并通过契约校验、无目标时拒绝、无解析器时拒绝）。全量门禁：435 passed、5 skipped、覆盖率 82.24%，ruff/pyright 0 | 真实镜像 E2E；种子语料已按 D-002 决策维持默认，无剩余设计项 |
 | 2026-09-10 | T32 Runner 摘要接口升级与 harness 编译管线（`feat/t32-fuzz-auto`） | `ToolRegistry.digests()` 由注册表派生摘要；Runner 新增 `GET /v1/tools` 且摘要端点一律由注册表作答，`SandboxRunnerClient` 支持 Bearer 与 `registered_tools()`，worker 经该端点发现 `afl-casr` 摘要；新增 `HarnessSource` 契约（修复原 `output_contract` 未注册导致真实网关 `KeyError`）、`harness-compile` 固定 profile、`HarnessCompiler`/`HarnessPipeline` 与 fuzz-tool `compile_harness`；`FuzzJobScheduler.schedule` 现构造真正合法的 `FuzzRequest`；crash 无法挂接 Finding 时返回结构化失败而非静默成功；修复 `persist_crash_evidence` 未排序时间戳与 `SandboxResult.status` 值比较。全量门禁：432 passed、5 skipped、覆盖率 82.28%，ruff/pyright 0，契约 --check 无漂移 | 契约中尚无 fuzz 目标/种子概念，自动投递需调用方提供 `FuzzTarget`；真实镜像编译+fuzz E2E 待部署 Runner 与登记摘要 |
@@ -228,6 +231,6 @@
 5. 配置 AUDIT/PLANNING 等档位模型后，跑一次真实源码样本验证 T29 语义审计候选 Finding → 独立复核 → 报告链路；随后按真实模型验收 T27 规划差异化（加壳 vs 未加壳样本）与 T31 自动利用教学样本链路。
 6. 里程碑全量回归：T20/T21/T22/T33 由「待验证」转「已完成」需在部署环境完成一次覆盖 Proof→报告→浏览器下载的全链路回归。
 7. 仓库清理（可选，需确认）：移除 `vulnweaver-t30` worktree 与本地 `feat/t32-fuzz-auto` 分支；清理其它已合并本地分支（`docs/t30-merge-status` 等）与远程 `chore/skip-wip-ci`。
-8. `fix/budget-and-orchestration-resilience` 分支（Q-010~Q-013）待合并：由用户以浏览器走通「新建项目（不填预算）→ 上传 PE → 提交任务 → 任务页」，确认失败原因展示与默认预算；已存在项目因无预算更新端点，需重建项目或直接修正 `projects.resource_budget`；合并后按 ADR-024 复核 `deploy/tool-specs` 与运行时资源数值的一致性。
+8. Q-010~Q-014 修复已合并入本地 `main`（`bf956b6`，**未推送**）：待用户确认是否推送 / 开 PR；由用户以浏览器走通「新建项目（不填预算）→ 上传 PE → 提交任务 → 任务页」，确认失败原因展示与默认预算；已存在项目因无预算更新端点，需重建项目或直接修正 `projects.resource_budget`；真实 `semantic_audit` 失败于 `model_budget_exhausted`，需在产品设置配置复核模型后复跑以取得 Finding 与报告内容。
 
 更新时间：2026-09-10（Asia/Shanghai）
