@@ -51,7 +51,7 @@
 | T26 二进制主管线收口（Ghidra 默认可用） | 进行中 | Codex | 选择 Sandbox Runner binary-tools 路径；本回合负责移除“必须手工填写镜像摘要”这一默认部署缺口，并补齐 binary Job 的运行时接线验证 | 让 Runner 在固定镜像引用可解析时自动钉住本地镜像摘要；随后接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查 | 2026-09-10 |
 | T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
-| T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed | 二进制伪代码侧在 T26 Ghidra 主管线接通后复用同一审计链路；AuditPlan 覆盖度对 NO_FINDINGS 的聚合约束待接入；真实模型端到端验收 | 2026-09-10 |
+| T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed | 二进制伪代码侧在 T26 Ghidra 主管线接通后复用同一审计链路；AuditPlan-NO_FINDINGS 聚合门禁已落地（`feat/audit-plan-gate`）；真实模型端到端验收 | 2026-09-10 |
 | T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器，返回分数与证据关键词；已在 Dev Container 通过定向测试 | 接入 PAIR 持久化、LLM 确认、API 与前端展示 | 2026-09-10 |
 | T31 漏洞自动利用智能体 | 进行中 | Codex | 新增自动生成脚本内容安全校验器，拒绝持久化、横向移动和外部网络行为并限制大小；Dev Container 定向测试通过 | 接入模型生成、脚本工件登记、Proof Scheduler 自动投递及结果证据链 | 2026-09-10 |
 | T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex | 新增不执行命令的有界 harness 编译—诊断—修正循环抽象，支持结构化诊断与预算耗尽结果；Dev Container 定向测试待提交前复核 | 接入 LLM harness 生成、Sandbox 编译执行、fuzz Job 自动调度和 Finding 证据挂接 | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | ADR-021 NO_FINDINGS 聚合门禁（`feat/audit-plan-gate`） | 结算钩子从 Job 事实推导 AuditPlan（static_rules/semantic_function_audit），聚合结果为 NO_FINDINGS 且已配置语义审计调度器但必跑基线未完成时，阻断 COMPLETED 迁移并记录 `audit_plan_no_findings_blocked`（含缺失基线与覆盖度）；未配置审计调度器的降级部署保持原行为。新增测试 2 项，Dev Container 全量 365 passed | 真实模型 E2E；阻断时任务停留 ANALYZING 的运维语义随真实环境验收复核 |
 | 2026-09-10 | T29 语义审计智能体源码侧（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job/契约/迁移 0017；静态基线结算后自动调度审计 Job，审计完成才调度独立复核（含模型发现候选）；模型 finding 强制锚定 PAIR 索引防幻觉；新增测试 4 项，Dev Container 全量 363 passed（ruff/pyright 0 错误、契约生成 --check 无漂移，PostgreSQL/Redis 集成环境实跑） | 二进制伪代码审计复用链路待 T26；真实模型 E2E 与 AuditPlan-NO_FINDINGS 聚合门禁待接入 |
 | 2026-09-10 | T25 智能体规划执行框架（`feat/t25-agent-loop`） | 新增 `orchestrator/agent_loop.py` 通用规划—执行—观察循环与 `ActionPlanProposal` 公共契约（`06fdebb`、`9558375`，已 rebase 至最新 main）；15 个循环测试 + 2 个契约测试通过，覆盖循环推进、模型身份覆盖、策略拒绝回填与降级、轮次/token/deadline/步数预算终止、未配置立即降级、许可等待、失败步骤观察与观察截断；Ruff、Pyright 0 错误、契约生成 `--check` 无漂移、contracts tsc 通过 | 接入首个消费智能体（T27/T29/T31）后经真实任务验证 AgentRun 轨迹查询；合并前跑全量门禁 |
 | 2026-09-10 | T24 Web 工作台布局与可读性优化 | 主内容限制在 1600px 可读轨道，项目与任务双栏按职责分配宽度；任务指标、Finding 操作区、事件载荷及窄屏断点完成；将原 9–12px 辅助文字提升至 11–14px；修复设置页复选框受整宽输入规则覆盖的错位；Web 镜像重建后首页 HTTP 200 | 可补一次真实浏览器多视口截图回归 |
@@ -162,12 +163,12 @@
 | 2026-09-10 | T20 全链路 + T21 真实数据库报告回放 | 重建 analysis-worker/api/migrate 镜像（补 `vulnweaver-proof` 依赖、WeasyPrint 系统库），配 `SANDBOX_RUNNER_URL` 后：API 提交 Proof Job 经 Dispatcher/Worker/Runner 全链路成功（Poc `completed/exploitable`）；Markdown/SARIF/PDF 报告 Job 真实数据库回放成功并可经 API 下载；修复报告渲染未纳入 Poc 的问题（Markdown/HTML 现显示 Proof runs）。Dev Container 门禁 329 passed | T22 浏览器全链路收口 |
 | 2026-09-10 | T23 Web 首次注册与产品设置 | 独立网络与 tmpfs PostgreSQL 中 API/迁移/契约 34 passed；Ruff、Pyright、Svelte、Vite build、Compose config 通过；未触碰既有 VulnWeaver 容器/网络/卷 | 合并后在独立 TLS 部署完成浏览器首次启动 E2E |
 | 2026-09-10 | ADR-021 评审结论登记 | PR #17 合并入 `main`（`b704814`）；项目负责人批准 D-001，ADR-021 状态改为已接受，勾选评审结论并同步 `DEVELOPMENT_STATUS.md`；纯文档变更 | 按ADR-021实施顺序启动 AuditPlan/覆盖度/结算门禁设计任务 |
-| 2026-09-10 | T20 HTTP Runner CAS 回放验收（`feat/sprint-final-closeout`） | 修复 runner 镜像缺 docker-cli（Debian 13 拆包）与 runtime 重复传递镜像 ENTRYPOINT 两个缺陷后，经 `http://sandbox-runner:8080` 完成：CAS 脚本 Proof 回放成功、scheduler 幂等重放同 Job、exploit 未开启项目策略拒绝、失败脚本结构化部分失败且 Poc 留痕；`tests/proof/test_http_replay.py` 4 用例通过，全量门禁 328 passed / 81.38% | 完整 API→Worker 队列链路重跑归 T22 收口 |
 
 ## 9. 验证记录
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | 审计计划门禁定向测试（worktree `feat/audit-plan-gate`） | 新增 2 项集成测试（阻断与放行/降级兼容）通过；Dev Container 全量 365 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误 | 无 |
 | 2026-09-10 | T29 定向门禁（worktree `feat/t29-semantic-audit`） | Dev Container：`ruff check .` 通过、`pyright` 0 错误、`generate_contracts.py --check` 无漂移；`pytest -q` 全量 363 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），PostgreSQL/Redis 集成环境实跑 | 真实 AUDIT 模型端到端（需在产品设置配置模型后跑源码样本链路）；二进制伪代码审计依赖 T26 |
 | 2026-09-10 | T25 定向门禁（worktree `feat/t25-agent-loop`，rebase 至 origin/main 后复跑） | Dev Container 内：`ruff check .` 通过；`pyright` 0 错误 0 警告；`pytest tests/orchestrator tests/tool_runtime tests/model_gateway tests/contracts`：56 passed（含 T25 循环测试 15 项与 ActionPlanProposal 契约测试 2 项）、29 skipped（一次性容器未启用 PostgreSQL 集成环境）；`generate_contracts.py --check` 无漂移；contracts `tsc --noEmit` 通过 | 全量套件与覆盖率门禁未在分支执行（合并前由全量门禁/CI 覆盖）；PostgreSQL/Redis 集成测试未跑 |
 | 2026-09-10 | T24 Web 定向门禁 | 复选框修复后 Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 通过（0 错误、0 警告）；`pnpm --filter @vulnweaver/web build` 成功（111 modules transformed）；Web 镜像重建并替换运行容器，新 CSS 资源 `index-e2kade8Q.css`、首页 HTTP 200 | 未执行真实浏览器多视口截图回归 |
