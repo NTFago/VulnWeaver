@@ -214,3 +214,23 @@ def test_registry_snapshot_is_detached() -> None:
     snapshot = registry.snapshot()
     snapshot[0]["name"] = "mutated"  # type: ignore[index]
     assert registry.resolve("semgrep", "1.0.0")["name"] == "semgrep"
+
+
+def test_registry_digests_publish_every_registered_identity() -> None:
+    registry = ToolRegistry(
+        [
+            spec(name="afl-casr", image_digest="sha256:" + "b" * 64),
+            spec(name="proof-tool", image_digest="sha256:" + "c" * 64),
+        ]
+    )
+
+    assert registry.digests() == {
+        ("afl-casr", "1.0.0"): "sha256:" + "b" * 64,
+        ("proof-tool", "1.0.0"): "sha256:" + "c" * 64,
+    }
+
+
+def test_registry_rejects_an_unpinned_tool_spec() -> None:
+    # Digest pinning is a schema invariant, so it cannot be bypassed by a spec.
+    with pytest.raises(ToolSpecError):
+        ToolRegistry([spec(image_digest="")])

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from html import escape
 
 from vulnweaver_contracts import Evidence, Finding, Poc
@@ -14,6 +14,27 @@ def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, i
         if poc["finding_id"] in counts:
             counts[poc["finding_id"]] += 1
     return counts
+
+
+def _call_path_html(finding: Finding) -> str:
+    steps = finding["call_path"]
+    if not steps:
+        return ""
+    items = "".join(
+        f"<li><code>{escape(str(getattr(step['relation'], 'value', step['relation'])))}</code> "
+        f"{escape(step['function_name'][:2048])} <code>{escape(_step_location(step))}</code></li>"
+        for step in steps
+    )
+    return f"<p><b>Call path:</b></p><ul>{items}</ul>"
+
+
+def _step_location(step: Mapping[str, object]) -> str:
+    path = step.get("path")
+    if isinstance(path, str) and path:
+        line = step.get("line")
+        return f"{path[:4096]}:{line if isinstance(line, int) else 1}"
+    address = step.get("address")
+    return f"0x{address:x}" if isinstance(address, int) else "unknown"
 
 
 def build_html(
@@ -48,6 +69,7 @@ def build_html(
             f"{escape(', '.join(finding['evidence_ids']) or 'none')}<br/>"
             f"<b>Review references:</b> {escape(', '.join(finding['review_ids']) or 'none')}</p>"
             f"<p><b>Proof runs:</b> {poc_counts.get(finding['id'], 0)}</p>"
+            + _call_path_html(finding)
             + "".join(
                 f"<p><b>Proof {escape(poc['id'])}:</b> "
                 f"{escape(str(getattr(poc['status'], 'value', poc['status'])))} / "

@@ -122,6 +122,7 @@ def _result(
                 }
             }
         ],
+        "codeFlows": _code_flows(finding),
         "properties": {
             "findingId": finding["id"],
             "status": _enum_value(finding["status"]),
@@ -143,6 +144,31 @@ def _result(
         },
         "fixes": [{"description": {"text": finding["fix_suggestion"][:4096]}}],
     }
+
+
+def _code_flows(finding: Finding) -> list[dict[str, Any]]:
+    """Express the projected call path as a SARIF thread flow."""
+    steps = [
+        {"location": {"physicalLocation": _step_physical_location(step)}}
+        for step in finding["call_path"]
+    ]
+    if not steps:
+        return []
+    return [{"threadFlows": [{"locations": steps}]}]
+
+
+def _step_physical_location(step: Mapping[str, object]) -> dict[str, Any]:
+    path = step.get("path")
+    address = step.get("address")
+    if isinstance(path, str) and path:
+        line = step.get("line")
+        return {
+            "artifactLocation": {"uri": path[:4096]},
+            "region": {"startLine": line if isinstance(line, int) and line > 0 else 1},
+        }
+    if isinstance(address, int):
+        return {"artifactLocation": {"uri": f"binary://0x{address:x}"}}
+    return {"artifactLocation": {"uri": "unknown"}}
 
 
 def _location_uri(finding: Finding) -> str:

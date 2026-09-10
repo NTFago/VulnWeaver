@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
@@ -43,6 +43,11 @@ def build_markdown(
                 "",
             ]
         )
+        call_path = finding["call_path"]
+        if call_path:
+            lines.extend(["### Call path", ""])
+            lines.extend(f"- {_call_path_step(step)}" for step in call_path)
+            lines.append("")
         lines.extend(
             [
                 "### Evidence chain",
@@ -84,7 +89,20 @@ def _value(value: object) -> str:
     return member if isinstance(member, str) else str(member)
 
 
-def _location_text(location: dict[str, object]) -> str:
+def _call_path_step(step: Mapping[str, object]) -> str:
+    relation = _value(step["relation"])
+    name = str(step["function_name"])[:2048]
+    path = step.get("path")
+    line = step.get("line")
+    if isinstance(path, str) and path:
+        where = f"{path[:4096]}:{line if isinstance(line, int) else 1}"
+    else:
+        address = step.get("address")
+        where = f"0x{address:x}" if isinstance(address, int) else "unknown"
+    return f"`{relation}` {name} (`{where}`)"
+
+
+def _location_text(location: Mapping[str, object]) -> str:
     address = location.get("address")
     if isinstance(address, int):
         return f"0x{address:x}"
