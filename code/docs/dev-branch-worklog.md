@@ -66,15 +66,17 @@ DATABASE_URL、REDIS_URL、SANDBOX_RUNNER_URL/TOKEN、worker consumer/并发/租
 
 ### 实施清单
 
-- [ ] 契约与 API：`ProductSettings` 重构为每档位子对象（`tiers: {planning|audit|review|report: {protocol, base_url, model_name, api_key(写only), context_window_tokens, thinking_mode, thinking_budget_tokens, timeout/重试}}`）；每档位独立 Key 均不回显。
-- [ ] 网关协议层：`ModelEndpoint` 增加 `protocol` 字段；新增 Anthropic Messages 适配（URL 拼接、鉴权头、system 抽取、thinking 预算、usage 映射、json 输出约束）。
-- [ ] 思考模式映射：OpenAI → `reasoning_effort`；Anthropic → `thinking.budget_tokens`；关闭则不发字段。
-- [ ] 上下文窗口：网关按档位窗口做输入 token 预算检查（超限结构化失败或截断保护，实现时定）。
-- [ ] worker：按档位构建四个独立 endpoint；兼容旧 review 字段读取（迁移期回退）。
-- [ ] 前端：模型设置区改为四档位 Tab/分组 + 协议下拉 + 思考模式三选 + 上下文窗口输入。
-- [ ] 测试：协议适配单测（OpenAI/Anthropic 各自 payload/鉴权/usage）、思考模式映射、档位独立回退、设置 API 新形状校验。
-- [ ] 与线 1 的衔接：两线都改 `ProductSettings` 与设置页，**合并顺序需协调**——建议线 1 先合，线 2 rebase；若线 2 先合，线 1 的部署字段并入新形状。
+- [x] 契约与 API：`ProductSettings` 新增 `model_tiers`（planning/audit/review/report 各自 protocol/base_url/model_name/context_window_tokens/thinking_mode/thinking_budget_tokens/timeout_seconds/max_attempts）、`tier_api_keys`（写 only，不回显，响应只含 `tier_api_keys_configured` 布尔表）、`clear_tier_api_keys`。成对校验与 thinking 预算下限（custom ≥1024）在 PUT 服务端校验。
+- [x] 网关协议层：`ModelEndpoint` 增加 `protocol`/`context_window_tokens`/`thinking`（`ThinkingConfig` 三选）；新增 Anthropic Messages 适配（`/v1/messages` URL、x-api-key + anthropic-version 头、system 抽取、JSON 指令附加到末尾 user 轮、thinking 块跳过、usage 从 input/output_tokens 映射）。
+- [x] 思考模式映射：OpenAI → `reasoning_effort`（预算 ≤4096 low / ≤16384 medium / 其余 high；default=medium）；Anthropic → `thinking.budget_tokens`；关闭不发字段。
+- [x] 上下文窗口：`_check_context_budget` 以 4 字符/token 粗估输入，加输出预留超窗即结构化失败（不重试）；无 tokenizer 依赖的确定性守卫。
+- [x] worker：`_model_executors` 按档位独立解析 endpoint（tier 配置 > 旧 review 字段回退——旧字段继续服务 REVIEW/AUDIT），未配置档位无路由、调用结构化失败；修复了此前 PLANNING 档无路由导致的关键逻辑确认必然降级问题。
+- [x] 前端：设置页新增"分档位模型"折叠分组（协议下拉、端点、模型、独立 Key、上下文窗口、思考三选、超时/尝试覆写），档位状态徽标显示"协议 · 模型名"或"未配置（回退）"。
+- [x] 测试：`test_protocols.py` 17 项（Anthropic wire 格式/鉴权/usage、thinking 预算到 payload、reasoning_effort 映射、非法模式/预算/窗口关系拒绝、上下文守卫、messages URL、协议白名单）；API `test_product_settings_tier_models_and_api_key_isolation`（保存回显、Key 不回显、跨请求保留、清除、预算下限 422、成对校验 422）。
+- [x] 与线 1 的衔接：本线基于 `dev/settings-deployment-ui`（9fb4db0）快进合入后开发，天然包含部署字段；两线合并顺序已解决——先合 #45，本线 PR 只含增量提交。
 
 ### 进展日志
 
 - 2026-09-10：worktree 建立（自 main `10a8936`）；三决策定型；曾误在主工作树做的临时改动已回退，未污染任何分支历史。
+- 2026-09-10：按负责人指示改为基于 `dev/settings-deployment-ui` 开发（fast-forward 合入 9fb4db0）；全链路实现完成（980e53e→bca0dd9），为该 worktree 启动专用一次性 Dev 容器 `vulnweaver-mg-dev`（挂载本目录、接入 t30 PostgreSQL/Redis 网络）；静态门禁全绿、定向测试通过。
+- 2026-09-10：全量门禁通过（PostgreSQL/Redis 集成环境）：**456 passed、5 skipped、覆盖率门禁 ≥80% 通过**；ruff/pyright 全仓 0 错误；契约 --check 无漂移；svelte-check 与 contracts tsc 0 错误。等待 PR 评审。
