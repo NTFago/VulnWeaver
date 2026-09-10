@@ -449,6 +449,9 @@ def _tier_endpoint(
         api_key=stored_api_key,
         timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
         max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
+        context_window_tokens=_setting_int(
+            product_settings, "review_model_context_window_tokens", 0
+        ),
     )
 
 
@@ -495,7 +498,6 @@ def _proof_executor(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
-        resource_limits=_proof_resource_budget(),
     )
     generator = (
         ExploitScriptGenerator(database, model_gateway, store)
@@ -530,34 +532,21 @@ def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
     )
 
 
-def _proof_resource_budget() -> ResourceBudget:
-    """Mirror the budget the Sandbox Runner registers for the proof tool.
+def _fuzz_resource_budget() -> ResourceBudget:
+    """Spec metadata for the registered AFL++/CASR ToolSpec.
 
-    Proof and exploit requests carry the whole project budget, which exceeds the proof tool's
-    limits and would be refused as ``sandbox.resource_budget_exceeded``. The executor clamps to
-    these values, so they must track the Runner's ``PROOF_*`` deployment configuration.
+    Budgets no longer gate execution (ADR-025); the ToolSpec still needs a
+    well-formed resource_limits row, so it is filled with generous values.
     """
 
     return ResourceBudget(
         max_model_tokens=0,
-        cpu_millis=int(os.environ.get("PROOF_CPU_MILLIS", "1000")),
-        memory_bytes=int(os.environ.get("PROOF_MEMORY_BYTES", str(256 * 1024 * 1024))),
-        disk_bytes=int(os.environ.get("PROOF_DISK_BYTES", str(256 * 1024 * 1024))),
+        cpu_millis=1_000_000,
+        memory_bytes=1 << 40,
+        disk_bytes=1 << 40,
         max_tool_concurrency=1,
         max_dynamic_runs=1,
-        timeout_seconds=int(os.environ.get("PROOF_TIMEOUT_SECONDS", "120")),
-    )
-
-
-def _fuzz_resource_budget() -> ResourceBudget:
-    return ResourceBudget(
-        max_model_tokens=0,
-        cpu_millis=int(os.environ.get("AFL_CPU_MILLIS", "4000")),
-        memory_bytes=int(os.environ.get("AFL_MEMORY_BYTES", str(1024 * 1024 * 1024))),
-        disk_bytes=int(os.environ.get("AFL_DISK_BYTES", str(512 * 1024 * 1024))),
-        max_tool_concurrency=1,
-        max_dynamic_runs=1,
-        timeout_seconds=int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
+        timeout_seconds=600,
     )
 
 
