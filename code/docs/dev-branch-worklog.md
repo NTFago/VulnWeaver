@@ -28,17 +28,18 @@ DATABASE_URL、REDIS_URL、SANDBOX_RUNNER_URL/TOKEN、worker consumer/并发/租
 
 ### 实施清单
 
-- [ ] API Schema（`schemas.py`）：`ProductSettingsBody`/`Response` 新增 `tool_image_digests`（3 个 sha256 可空）、`sandbox_budgets`（afl/proof/binary × cpu_millis/memory_bytes/disk_bytes/timeout_seconds）、`fuzz_budgets`（max_executions/max_duration_seconds/max_crashes）、`sandbox_runner_timeout_seconds`、`fuzz_runner_timeout_seconds`、`angr_enabled`；同步公共契约 `ProductSettings` 定义并 `generate_contracts.py` 重新生成。
-- [ ] 合并模块：`resolve_deployment_config(settings_values, environ)` 三级合并，worker/Runner 共用。
-- [ ] Runner：`apps/sandbox-runner` 新增 DATABASE_URL 读取 + 请求前指纹刷新重建规格；compose 加 `DATABASE_URL`。
-- [ ] Worker：`_model_executors`/`_fuzz_executor`/`_binary_sandbox` 等装配改指纹缓存可刷新；主循环领取任务前刷新。
-- [ ] 前端（`App.svelte`）：一级=模型设置+工具镜像登记（含状态徽标：已登记/自动发现/未配置）+ 执行能力状态；二级折叠=沙箱资源与预算。
-- [ ] 测试：API 字段校验（digest 负向、数值越界负向）、合并模块单测、Runner 指纹刷新、worker 热刷新。
-- [ ] 验证：Dev Container 定向 pytest + ruff + pyright + svelte-check；台账登记。
+- [x] API Schema（`schemas.py`）：`ProductSettingsBody`/`Response` 新增 `tool_image_digests`（3 个 sha256 可空）、`sandbox_budgets`（afl/proof/binary × cpu_millis/memory_bytes/disk_bytes/timeout_seconds）、`fuzz_budgets`（max_executions/max_duration_seconds/max_crashes）、`sandbox_runner_timeout_seconds`、`fuzz_runner_timeout_seconds`、`angr_enabled`；同步公共契约 `ProductSettings` 定义并 `generate_contracts.py` 重新生成。（59168f1）
+- [x] 合并模块：`vulnweaver_domain.deployment_config.resolve_deployment_config(settings_values, environ)` 三级合并（设置页 > env > 代码默认），worker/Runner 共用。（83a4dc6）
+- [x] Runner：`apps/sandbox-runner` 新增只读 `DATABASE_URL`（compose 注入，`SANDBOX_RUNNER_DATABASE_URL` 可覆盖），`SettingsReader` 指纹比较 + `ReconfigurableRunner` 重建 ToolSpec/profile；`create_sandbox_app` 支持 runner 工厂（async），每个请求经工厂解析当前 runner。数据库不可达时降级沿用上次配置。（d3a1777）
+- [x] Worker：新增 `hot_reload.py`（`ReconfigurableAssembly` + `HotReloadExecutor`/`HotReloadSettlementHook`），`main.py` 装配改为 `_build_assembly(settings)`——模型执行器/proof/fuzz/binary/hooks/调度器全部按设置指纹重建，旧 model gateway 在重建后关闭；`ReliableWorker` 与 settlement hook 面向稳定 facade。（58daee5）
+- [x] 前端（`App.svelte`）：一级=模型设置+工具镜像登记（sha256 校验、留空=自动发现）+ 执行能力状态徽标（二进制/Proof/模糊测试/模型）；二级折叠"高级：沙箱资源与预算"（三工具 × 4 资源项、fuzz 预算、双 Runner 超时、angr 开关）。保存提示改为"Worker 下一次任务时自动生效"。（f6f207b）
+- [x] 测试：`test_deployment_config.py`（6 项合并语义）、`test_http.py` 新增 runner 工厂热切换、`test_hot_reload.py`（4 项：指纹不变不重建/变化重建+退休/DB 故障保持旧 assembly/facade 委派）、`test_api.py` 新增 digest 正常保存回显 + 格式与数值负向（真实 PostgreSQL 集成环境）。
+- [x] 验证：Dev Container（`vulnweaver-dev-1`，PostgreSQL/Redis 集成环境）：全量 **447 passed、5 skipped、覆盖率门禁 ≥80% 通过**；ruff/pyright 全仓 0 错误；`generate_contracts.py --check` 无漂移；svelte-check 与 contracts tsc 0 错误。（358b8d4 收口）
 
 ### 进展日志
 
 - 2026-09-10：分支建立（自 main `10a8936`）；当日曾直接在 review 档位上加字段的临时方案已回退（见线 2 说明），本线按完整方案重新实施。
+- 2026-09-10：全链路实现完成并全量门禁通过（提交 59168f1→358b8d4）；等待 PR 评审。注意：`vulnweaver-dev-1` 容器 venv 手动装了 `asyncpg` 用于集成测试，该容器镜像不含此包属环境侧操作。
 
 ---
 
