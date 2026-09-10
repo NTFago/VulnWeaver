@@ -51,20 +51,31 @@ class FuzzJobExecutor:
         request = cast(FuzzRequest, raw)
         if request.get("job_id") != job["id"]:
             return _failed(job, "fuzz.job_id_mismatch", FailureKind.VALIDATION)
+        finding_id = arguments.get("finding_id")
         try:
             validate_contract("FuzzRequest", request)
             outcome = await self._service.run_with_crashes(request, cancellation)
             result = outcome.result
-            finding_id = arguments.get("finding_id")
-            evidence_ids: list[str] = []
-            if outcome.crashes and self._crash_sink is not None and isinstance(finding_id, str):
+        except (TypeError, ValueError) as error:
+            return _failed(job, "fuzz.invalid_request", FailureKind.VALIDATION, str(error))
+        evidence_ids: list[str] = []
+        if outcome.crashes:
+            # A crash that cannot be linked is a loss of evidence, not a success:
+            # reporting SUCCEEDED here would hide reproducible crashes from review.
+            if self._crash_sink is None:
+                return _unlinked(job, "fuzz.crash_sink_unconfigured")
+            if not isinstance(finding_id, str):
+                return _unlinked(job, "fuzz.crash_finding_required")
+            try:
                 evidence_ids = list(
                     await self._crash_sink.persist(
                         finding_id=finding_id, crashes=outcome.crashes, created_by=job["id"]
                     )
                 )
-        except (TypeError, ValueError) as error:
-            return _failed(job, "fuzz.invalid_request", FailureKind.VALIDATION, str(error))
+            except (TypeError, ValueError) as error:
+                return _failed(
+                    job, "fuzz.crash_evidence_rejected", FailureKind.DEPENDENCY, str(error)
+                )
         if result["status"] is FuzzStatus.SUCCEEDED:
             status, failure = JobStatus.SUCCEEDED, None
         elif result["status"] is FuzzStatus.CANCELLED:
@@ -79,6 +90,15 @@ class FuzzJobExecutor:
             evidence_ids=evidence_ids,
             failure=failure,
         )
+
+
+def _unlinked(job: Job, code: str) -> WorkerResult:
+    return _failed(
+        job,
+        code,
+        FailureKind.DEPENDENCY,
+        "fuzz crashes were found but could not be attached to a Finding",
+    )
 
 
 def _failed(

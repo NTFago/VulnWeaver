@@ -177,7 +177,8 @@ class FuzzExecutionService:
                 failure=_failure_for_exception(error, phase="execution"),
             ), ())
 
-        if sandbox_result["status"] is not SandboxStatus.SUCCEEDED:
+        # The status may arrive as the enum or as its raw value from HTTP.
+        if SandboxStatus(sandbox_result["status"]) is not SandboxStatus.SUCCEEDED:
             status = _fuzz_status(sandbox_result["status"])
             failure = sandbox_result["failure"] or _failure(
                 "fuzz.sandbox_failed",

@@ -8,7 +8,9 @@ dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
     "vulnweaver-domain",
+    "vulnweaver-fuzzing",
     "vulnweaver-model-gateway",
+    "vulnweaver-pair",
     "vulnweaver-persistence",
     "vulnweaver-queue",
     "vulnweaver-source-analysis",
@@ -23,7 +25,9 @@ build-backend = "uv_build"
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-contracts = { workspace = true }
 vulnweaver-domain = { workspace = true }
+vulnweaver-fuzzing = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
+vulnweaver-pair = { workspace = true }
 vulnweaver-persistence = { workspace = true }
 vulnweaver-queue = { workspace = true }
 vulnweaver-source-analysis = { workspace = true }

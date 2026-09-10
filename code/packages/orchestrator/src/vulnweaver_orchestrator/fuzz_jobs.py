@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import cast
 
 from vulnweaver_contracts import (
@@ -23,7 +24,22 @@ from vulnweaver_contracts import (
     RetryPolicy,
     SchemaVersion,
 )
+from vulnweaver_fuzzing import build_fuzz_request
 from vulnweaver_persistence import Database, Repositories
+
+
+@dataclass(frozen=True, slots=True)
+class FuzzTarget:
+    """Everything the executor needs to build a fixed, sandbox-bound fuzz request."""
+
+    artifact_version_id: str
+    target_ref: str
+    seed_refs: tuple[str, ...]
+    image_digest: str
+    max_executions: int
+    max_duration_seconds: int
+    max_crashes: int
+    collect_coverage: bool = True
 
 
 class FuzzJobScheduler:
@@ -39,20 +55,25 @@ class FuzzJobScheduler:
             ],
         )
 
-    async def schedule(self, source_job: Job, finding_ids: Sequence[str]) -> tuple[str, ...]:
+    async def schedule(
+        self, source_job: Job, targets: dict[str, FuzzTarget]
+    ) -> tuple[str, ...]:
+        """Enqueue one idempotent fuzz Job per Finding, with its fixed request bound."""
         async with self._database.transaction() as repositories:
             task = await repositories.tasks.get(source_job["task_id"], for_update=True)
             created: list[str] = []
-            for finding_id in sorted(set(finding_ids)):
+            for finding_id in sorted(set(targets)):
                 finding = await repositories.findings.get(finding_id)
                 if finding["task_id"] != task["id"]:
                     raise ValueError("fuzz finding does not belong to source task")
                 job_id = _id("job", "fuzz", finding_id)
+                target = targets[finding_id]
                 job = Job(
                     schema_version=SchemaVersion.VALUE_1_0_0,
                     id=job_id,
                     task_id=task["id"],
                     kind=JobKind.FUZZ,
+                    # Bound below, once the fixed request exists for this Job id.
                     arguments=cast(JsonObject, {"finding_id": finding_id}),
                     input_refs=source_job["input_refs"],
                     status=JobStatus.QUEUED,
@@ -64,6 +85,29 @@ class FuzzJobScheduler:
                     failure=None,
                     created_at=task["created_at"],
                     updated_at=task["updated_at"],
+                )
+                # The executor only accepts a request already bound to this Job id,
+                # so it is constructed from the identical Job identity.
+                request = build_fuzz_request(
+                    job,
+                    artifact_version_id=target.artifact_version_id,
+                    target_ref=target.target_ref,
+                    seed_refs=list(target.seed_refs),
+                    image_digest=target.image_digest,
+                    max_executions=target.max_executions,
+                    max_duration_seconds=target.max_duration_seconds,
+                    max_crashes=target.max_crashes,
+                    collect_coverage=target.collect_coverage,
+                )
+                job = cast(
+                    Job,
+                    {
+                        **job,
+                        "arguments": {
+                            "finding_id": finding_id,
+                            "fuzz_request": dict(request),
+                        },
+                    },
                 )
                 event = JobRequestedEvent(
                     schema_version=SchemaVersion.VALUE_1_0_0,
@@ -123,8 +167,9 @@ async def persist_crash_evidence(
     created_by: str,
 ) -> tuple[str, ...]:
     """Persist minimized crash inputs as reproducible Finding evidence."""
+    ordered = sorted(crashes, key=lambda item: item["id"])
     evidence_ids: list[str] = []
-    for crash in sorted(crashes, key=lambda item: item["id"]):
+    for crash in ordered:
         evidence_id = _id("evidence", "fuzz-crash", crash["id"])
         await repositories.evidence.create(
             Evidence(
@@ -161,7 +206,7 @@ async def persist_crash_evidence(
         finding_id=finding_id,
         evidence_ids=evidence_ids,
         created_by=created_by,
-        created_at=crashes[0]["created_at"] if crashes else "1970-01-01T00:00:00Z",
+        created_at=ordered[0]["created_at"] if ordered else "1970-01-01T00:00:00Z",
     )
 
 

@@ -12,7 +12,7 @@ from typing import Any
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
-from vulnweaver_contracts import CrashRecord, ToolIdentity
+from vulnweaver_contracts import CrashRecord, ResourceBudget, ToolIdentity
 from vulnweaver_fuzzing import (
     AFL_CASR_TOOL_NAME,
     AFL_CASR_TOOL_VERSION,
@@ -20,6 +20,7 @@ from vulnweaver_fuzzing import (
     CASR_TOOL_VERSION,
     FuzzExecutionService,
     FuzzJobExecutor,
+    afl_casr_tool_spec,
 )
 from vulnweaver_model_gateway import (
     ModelEndpoint,
@@ -108,7 +109,7 @@ async def _run() -> None:
         ),
     )
     proof_executor = _proof_executor(database, store, model_gateway)
-    fuzz_executor = _fuzz_executor(database, store, tool_registry)
+    fuzz_executor = await _fuzz_executor(database, store, tool_registry)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -317,9 +318,8 @@ def _proof_executor(
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
-    client = SandboxRunnerClient(
-        runner_url,
-        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")),
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60"))
     )
     service = ProofExecutionService(
         client,
@@ -342,20 +342,54 @@ def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
     return AutoExploitScheduler(database, image_digest=image_digest)
 
 
-def _fuzz_executor(
+def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
+    """Build a Runner client that authenticates whenever the deployment pins a token."""
+
+    return SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=timeout,
+        bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None,
+    )
+
+
+def _fuzz_resource_budget() -> ResourceBudget:
+    return ResourceBudget(
+        max_model_tokens=0,
+        cpu_millis=int(os.environ.get("AFL_CPU_MILLIS", "4000")),
+        memory_bytes=int(os.environ.get("AFL_MEMORY_BYTES", str(1024 * 1024 * 1024))),
+        disk_bytes=int(os.environ.get("AFL_DISK_BYTES", str(512 * 1024 * 1024))),
+        max_tool_concurrency=1,
+        max_dynamic_runs=1,
+        timeout_seconds=int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
+    )
+
+
+async def _fuzz_executor(
     database: Database, store: LocalContentAddressedStore, tool_registry: ToolRegistry
 ) -> FuzzJobExecutor | None:
+    """Assemble the fuzz executor from the digest the Runner actually enforces.
+
+    The pinned digest is read from the Runner's registered-tool endpoint when the
+    deployment did not supply one, so no caller-supplied digest or command reaches
+    the sandbox.
+    """
+
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("FUZZ_RUNNER_TIMEOUT_SECONDS", "600"))
+    )
     try:
         spec = tool_registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
     except KeyError:
-        return None
-    client = SandboxRunnerClient(
-        runner_url,
-        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
-    )
+        digest = await client.tool_digest(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+        if digest is None:
+            # No pinned fuzz image on either side: leave the executor unconfigured
+            # rather than let an unpinned request reach the Runner.
+            return None
+        spec = afl_casr_tool_spec(digest, _fuzz_resource_budget())
+        tool_registry.register(spec)
     return FuzzJobExecutor(
         FuzzExecutionService(
             store,
@@ -389,9 +423,8 @@ async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None, None
-    client = SandboxRunnerClient(
-        runner_url,
-        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600"))
     )
     digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None
     if digest is None:

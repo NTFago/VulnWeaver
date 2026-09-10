@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -44,6 +45,8 @@ def main() -> int:
     parser.add_argument("--max-crashes", type=int, required=True)
     parser.add_argument("--collect-coverage", action="store_true")
     args = parser.parse_args()
+    if args.profile == "harness-compile":
+        return compile_harness(args)
     if args.profile != "afl-qemu-casr":
         print(f"unsupported fuzz profile: {args.profile}", file=sys.stderr)
         return 2
@@ -166,6 +169,90 @@ def main() -> int:
         return 1
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def compile_harness(args: argparse.Namespace) -> int:
+    """Build the generated harness with the image's AFL instrumentation.
+
+    Only the harness source is model-authored; the command line, toolchain and
+    flags are fixed here so no caller-supplied argument reaches the compiler.
+    The compiled harness is returned as a tar so the Runner can publish it to CAS.
+    """
+    workdir = Path("/work") if _usable_workdir(Path("/work")) else Path(tempfile.mkdtemp(prefix="compile-"))
+    workdir.mkdir(parents=True, exist_ok=True)
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics: list[str] = []
+    message = ""
+    success = False
+    try:
+        bundle_dir = workdir / "bundle"
+        bundle_dir.mkdir()
+        _extract_bundle(args.input_bundle, bundle_dir)
+        source = bundle_dir / "harness.c"
+        if not source.is_file():
+            raise ValueError("harness bundle has no harness.c")
+        binary = workdir / "harness"
+        compile_env = {
+            **os.environ,
+            "AFL_QUIET": "1",
+            "AFL_NOOPT": "0",
+            "AFL_USE_ASAN": "1",
+        }
+        result = subprocess.run(
+            [
+                "afl-cc",
+                "-O1",
+                "-g",
+                "-fno-omit-frame-pointer",
+                "-o",
+                str(binary),
+                str(source),
+                "-I",
+                str(bundle_dir),
+            ],
+            env=compile_env,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode != 0:
+            message = "harness compilation failed"
+            diagnostics = _compiler_diagnostics(result.stderr or result.stdout)
+        elif not binary.is_file():
+            message = "compiler reported success without producing a binary"
+        else:
+            with tarfile.open(output_dir / "harness.tar", "w") as archive:
+                payload = binary.read_bytes()
+                info = tarfile.TarInfo("harness")
+                info.size = len(payload)
+                info.mtime = 0
+                info.mode = 0o755
+                archive.addfile(info, io.BytesIO(payload))
+            success = True
+    except Exception as error:  # the structured report is the tool contract
+        message = f"harness compile step failed: {error}"
+    (output_dir / "compile-report.json").write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "success": success,
+                "message": message[:512],
+                "diagnostics": diagnostics[:50],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    shutil.rmtree(workdir, ignore_errors=True)
+    return 0
+
+
+def _compiler_diagnostics(output: str) -> list[str]:
+    """Keep the bounded compiler lines that a repair attempt can act on."""
+    lines = [line.strip()[:512] for line in output.splitlines() if "error" in line.lower()]
+    return lines[:50] or [output.strip()[:512]]
 
 
 def _usable_workdir(path: Path) -> bool:

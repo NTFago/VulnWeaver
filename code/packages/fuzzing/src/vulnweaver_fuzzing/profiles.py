@@ -31,6 +31,11 @@ AFL_CASR_OUTPUT_NAMES = (
     "minimized-inputs.tar",
 )
 
+# Harness compilation runs in the same fixed AFL++ image so the compiled
+# harness uses the exact instrumentation ABI the fuzzing profile expects.
+HARNESS_COMPILE_PROFILE = "harness-compile"
+HARNESS_COMPILE_OUTPUT_NAMES = ("compile-report.json", "harness.tar")
+
 
 def afl_casr_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> ToolSpec:
     """Build the fixed policy definition after deployment resolves an image digest."""
@@ -55,7 +60,10 @@ def afl_casr_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> To
                     "collect_coverage",
                 ],
                 "properties": {
-                    "profile": {"type": "string", "const": AFL_CASR_PROFILE},
+                    "profile": {
+                        "type": "string",
+                        "enum": [AFL_CASR_PROFILE, HARNESS_COMPILE_PROFILE],
+                    },
                     "max_executions": {
                         "type": "integer",
                         "minimum": 1,
@@ -120,6 +128,16 @@ def afl_casr_command_profile(
         arguments: Mapping[str, object], input_path: PurePath, output_path: PurePath
     ) -> Sequence[str]:
         profile = _required_text(arguments, "profile")
+        if profile == HARNESS_COMPILE_PROFILE:
+            return (
+                executable,
+                "--profile",
+                profile,
+                "--input-bundle",
+                str(input_path),
+                "--output-dir",
+                str(output_path),
+            )
         if profile != AFL_CASR_PROFILE:
             raise ValueError("unsupported AFL++/CASR profile")
         argv = [
