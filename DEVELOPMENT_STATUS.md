@@ -10,9 +10,9 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成；T38 报告下载文件名/类型、报告位置格式和失败状态提示已修复；T39 任务事件契约兼容与部署镜像一致性修复已完成。
-- **当前分支**：`fix/task-event-stream`（基于 `fix/report-download@b0f9ad7`，独立修复分支）。
-- **当前负责人**：Codex（T39）；T26-T39 各行见进度表。
+- **当前阶段**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 479 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
+- **当前分支**：`dev`（自 `main@c3f571d` 新建，已 rebase 至 `origin/main@0f1df82`，随后整体推送）
+- **当前负责人**：Codex（T38）
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
@@ -61,7 +61,8 @@
 | T35 主分支全链路接线修复 | 已完成 | Codex（`codex/fix-main-review`） | PLANNING/REVIEW/AUDIT 共用产品模型配置；源码无静态扫描器与二进制导入均会进入语义基线；动态 Job 创建后重新聚合；默认 Markdown 在结算前自动投递；源码 Harness 读取有界摘录并走生成→沙箱编译→安全解包→Fuzz，ELF 直接 Fuzz、PE 明确拒绝；Compose 默认回环暴露 Web 并透传摘要；前端 WebSocket 补事件后重连，人工复核可选结果并显示历史 | 真实 PLANNING 模型 + AFL/Proof 固定镜像的动态 E2E 仍属部署验收，不影响代码任务完成 | 2026-09-10 |
 | P2 大归档源码摘录修复 | 待验证 | Codex（`fix/large-archive-excerpts`） | 真实模型任务确认配置和调用正常，但 95 MiB `BettaFish.zip` 被摘录器的 16 MiB 完整归档读取上限拒绝，模型仅得到函数元数据而无法审计源码；现改为校验归档元数据后只解压请求的源码文件，并缓存同一 Reader 内的 CAS 完整性校验。Linux 运行镜像定向测试 21 passed、Ruff 通过；已用真实 BettaFish 工件成功读取 `BettaFish/ReportEngine/llms/base.py`（426 bytes，未截断），Worker 已重建并运行 | 在 Web 重新投递 BettaFish，确认模型输入含源码摘录、任务不再出现 `excerpt_archive_too_large`，并检查审计和报告结果 | 2026-09-11 |
 | T37 Markdown 快速路径 CI 修复 | 已完成 | Codex（`ci/markdown-gate-move-gate`，PR #53 已合并） | Q-017 登记；Markdown gate 移入具备全量克隆的 `change-scope` job（浅克隆无 base 对象、`persist-credentials: false` 不可 fetch）；修复 PR #53 全量门禁通过；本收尾 PR（markdown-only）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 | 2026-09-11 |
-| T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`，PR #49 已合并） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
+
+| T38 移除计算资源限制与模型提供商预设 | 进行中 | Codex（`dev` 分支） | ADR-025：Policy Engine 预算门禁、沙箱容器配额（CPU/内存/PID/tmpfs size/输出限额/规格超时拒绝）、`bounded_resource_budget` 收敛、review/audit `model_budget_exhausted` 全部删除；`resource_budget` 保留为惰性簿记（API 写入无界常量、任务预算可省略并继承项目）；网关新增 `_fit_context_window` 自动裁剪 + `review_model_context_window_tokens`；设置页新增 DeepSeek/GLM 预设并移除预算表单；E2E 驱动修复：Ghidra 地址按 image base 归一化（伪代码进入 PAIR 工作台）、Runner 本地摘要优先取 RepoDigests（containerd 守护进程无法解析旧 CLI 的 config digest）、fuzz 派发幂等（确定性 job id 预检 + 并发容忍 + 0020 迁移补 `ck_jobs_kind` 的 fuzz 值 + harness run id 按 attempt/轮次隔离）；AGENTS.md 红线第 4 条同步改写 | 推送 `origin/dev` 并确认 CI；`fuzz.harness_failed` 依赖模型生成质量（结构化 PARTIAL 属设计内），auto-exploit 链路需 confirmed Finding 未在 E2E 触发 | 2026-09-11 || T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`，PR #49 已合并） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
 
 | T38 报告下载与导出可读性修复 | 已完成 | Codex（`fix/report-download`） | 下载响应按报告格式返回安全文件名和媒体类型；Markdown/HTML/SARIF 读取规范源码范围，二进制位置读取 `virtual_address`；前端显示报告生成失败原因并为下载链接提供扩展名 | 部署更新后的 API/Web 镜像后做浏览器点击回归 | 2026-09-11 |
 | T39 任务事件契约兼容与部署镜像一致性修复 | 已完成 | Codex（`fix/task-event-stream`） | 读取历史 `task.status_changed` 事件时对缺失的可空 `failure` 做内存兼容补全；为严格 Pyright 检查补充 `JsonObject` 类型收窄，避免兼容 payload 展开产生未知类型；统一重建 API、Dispatcher、Orchestrator、Worker、Sandbox Runner、Web 镜像；清理开发 Redis DB 0 残留队列；保留 PostgreSQL 任务和工件数据 | 无；用户刷新当前任务页即可确认页面恢复最终状态 | 2026-09-11 |
@@ -173,6 +174,7 @@
 | ADR-022 | 空库通过 Web 一次性注册；模型连接与 API Key 由前端管理并持久化，API Key 不回显且传输依赖 HTTPS；基础设施与安全上限仍由部署配置注入。 |
 | ADR-023 | Task 按 Job 的既有形状携带结构化失败：`tasks.failure` 列与 `Task`/`TaskStatusChangedPayload` 的 required 可空 `failure`，使编排层在没有 Job 时的失败原因可见。 |
 | ADR-024 | 默认项目预算由服务端按已注册 ToolSpec 逐项最大值推导并校验下界；`binary-import` 数值校准到运行时实际值；请求预算统一经 `bounded_resource_budget` 按规格收敛。 |
+| ADR-025 | 移除全部计算资源限制：预算保留为惰性簿记，不再有任何拒绝/收敛路径；沙箱安全隔离属性不变；模型上下文改为网关自动裁剪。（2026-09-11 项目负责人决策） |
 
 ## 8. 最近完成记录
 
@@ -206,6 +208,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-11 | T38 真实模型 E2E（DeepSeek，重建全部镜像后） | 源码链路：9/9 Job 成功（import/静态×2/语义审计/复核×4/报告），模型自主发现 2 条固定规则外候选（CWE-95 eval、CWE-121 栈溢出），Markdown 报告含调用路径/证据链/复核引用；二进制链路：Ghidra 伪代码 17/27 函数进 PAIR、逆向规划智能体（planning-model 3 决策）、可读化 model_view_count=4、关键逻辑标定、报告；动态链路：fuzz Job 成功创建并进入沙箱编译修复回路，以结构化 `fuzz.harness_failed` PARTIAL 收尾（模型生成质量依赖，设计内） | auto-exploit（需 confirmed Finding）与 ELF 直接 fuzz 未触发；报告浏览器下载归 T22 里程碑 |
 | 2026-09-11 | PR #57 CI Pyright 修复（`fix/task-event-stream`） | Linux 临时测试容器内持久化仓储定向回归 **16 passed**；目标文件 Pyright **0 errors**；Ruff **All checks passed**；`git diff --check` 通过 | 推送后等待 GitHub Actions 重新执行完整门禁 |
 | 2026-09-11 | T39 任务事件契约兼容与部署镜像一致性修复（`fix/task-event-stream`） | Linux 容器定向回归 **50 passed**（PostgreSQL/Redis 集成实际执行），Ruff 通过；Compose `migrate` exit 0、alembic head 为 `0019_task_failure`、任务记录仍为 1；API `/health/live` 与 `/health/ready` 均 200；Orchestrator/Dispatcher/API/Analysis Worker/Sandbox Runner/Web 均稳定运行；Redis DB 0 已清理旧任务队列；运行中 Orchestrator 已确认包含 `failure` 字段的新版事件生成代码 | 当前 CLI 无可附着的用户浏览器会话，需用户刷新已打开的任务页确认视觉状态；未重新提交耗时分析任务 |
 | 2026-09-10 | T36 前端门禁与视觉验收 | Dev Container（`vulnweaver-dev-1`）`pnpm --filter @vulnweaver/web typecheck`：0 错误 0 警告；`pnpm --filter @vulnweaver/web build` 成功（111 modules，CSS 29.06KB / JS 97.35KB gzip 后 6.56/34.81KB）。浏览器验证使用系统临时目录下的契约同形 Mock API（不进仓库）：17 张截图覆盖设置（含档位展开态）、项目（含新建表单）、项目详情、任务（指标/问题详情/工作台/Agent 轨迹）、认证三变体、移动端 390px 两页；judge 视觉验收 16/17 通过，唯一缺陷（移动端导航胶囊随项目数拉伸）修复后复核通过 | 真实部署栈（nginx 镜像 + api）下的浏览器回归未执行；Firefox/Safari 实机未验证；设置保存、Proof/Exploit 提交等写路径仅经 Mock 验证了前端交互形态 |
