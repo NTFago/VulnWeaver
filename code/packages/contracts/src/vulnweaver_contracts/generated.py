@@ -735,6 +735,10 @@ class ExploitScript(TypedDict):
     script: str
     rationale: str
 
+class CriticalLogicAssessment(TypedDict):
+    schema_version: SchemaVersion
+    assessments: list[dict[str, JsonValue]]
+
 class ProofRequest(TypedDict):
     schema_version: SchemaVersion
     id: Identifier

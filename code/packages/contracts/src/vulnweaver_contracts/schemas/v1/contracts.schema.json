@@ -978,6 +978,29 @@
         "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
       }
     },
+    "CriticalLogicAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "assessments"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "assessments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["function_name", "category", "confirmed", "rationale"],
+            "properties": {
+              "function_name": {"$ref": "#/$defs/Identifier"},
+              "category": {"type": "string", "enum": ["auth", "crypto", "registration"]},
+              "confirmed": {"type": "boolean"},
+              "rationale": {"type": "string", "minLength": 1, "maxLength": 2048}
+            }
+          }
+        }
+      }
+    },
     "ProofRequest": {
       "type": "object",
       "additionalProperties": false,

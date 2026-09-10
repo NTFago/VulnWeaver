@@ -85,6 +85,19 @@
     return fn.language;
   }
 
+  type CriticalLogicEntry = {
+    category: string;
+    score: number;
+    evidence: string[];
+    confirmed: boolean | null;
+    rationale: string | null;
+  };
+
+  function functionCritical(fn: PairFunction): CriticalLogicEntry[] {
+    const value = (fn.attributes as Record<string, unknown> | undefined)?.critical_logic;
+    return Array.isArray(value) ? (value as CriticalLogicEntry[]) : [];
+  }
+
   function functionPseudocode(fn: PairFunction): string | null {
     const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
     if (typeof value === "string" && value.trim()) return value;
@@ -518,7 +531,7 @@
         <section class="section-block full"><div class="section-head"><div><span>FUNCTION WORKBENCH</span><h2>函数与调用链</h2></div><small>点击函数联动调用关系与伪代码</small></div>
           {#if pairFunctions.length === 0}<div class="compact-empty">样本索引完成后，此处将列出函数、伪代码与调用链。</div>{:else}
           <div class="workbench">
-            <div class="function-list" role="listbox" aria-label="函数列表">{#each pairFunctions as fn (fn.id)}<button class:selected={selectedFunctionId === fn.id} on:click={() => void selectFunction(fn)}><b>{fn.name}</b><small>{functionLocation(fn)}</small></button>{/each}</div>
+            <div class="function-list" role="listbox" aria-label="函数列表">{#each pairFunctions as fn (fn.id)}<button class:selected={selectedFunctionId === fn.id} on:click={() => void selectFunction(fn)}><b>{fn.name}</b>{#if functionCritical(fn).length > 0}<em class="key-badge">{functionCritical(fn).map((entry) => entry.category).join(" / ")}</em>{/if}<small>{functionLocation(fn)}</small></button>{/each}</div>
             <div class="function-detail">
               {#if !selectedFunctionId}<div class="compact-empty">选择一个函数，查看其调用方、被调用方与伪代码。</div>{:else}
                 {@const selected = pairFunctions.find((fn) => fn.id === selectedFunctionId)}

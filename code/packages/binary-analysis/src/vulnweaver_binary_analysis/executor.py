@@ -37,6 +37,10 @@ from vulnweaver_contracts import (
 from vulnweaver_pair import BinaryPairImporter, BinaryPairImportError
 from vulnweaver_persistence import Database, EntityConflict, EntityNotFound, PersistenceError
 
+from vulnweaver_binary_analysis.critical_logic import (
+    CriticalLogicCandidate,
+    discover_critical_logic,
+)
 from vulnweaver_binary_analysis.headers import (
     BinaryInspectionError,
     extract_strings,
@@ -81,6 +85,12 @@ class BinaryAnalysisExecutionError(RuntimeError):
         super().__init__(message)
 
 
+class CriticalLogicHook(Protocol):
+    """Confirm stamped critical-logic candidates via the planning model."""
+
+    async def confirm(self, candidates: JsonObject) -> JsonObject: ...
+
+
 class AngrRunner(Protocol):
     """Execute targeted symbolic analysis for the planning agent."""
 
@@ -111,6 +121,7 @@ class BinaryImportExecutor:
         sandbox: BinaryFactsSandbox | None = None,
         sandbox_image_digest: str | None = None,
         planning_hook: BinaryPlanningHook | None = None,
+        critical_logic_hook: CriticalLogicHook | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -122,6 +133,7 @@ class BinaryImportExecutor:
         self._sandbox = sandbox
         self._sandbox_image_digest = sandbox_image_digest
         self._planning_hook = planning_hook
+        self._critical_logic_hook = critical_logic_hook
         self._angr_adapter = next(
             (adapter for adapter in self._adapters if isinstance(adapter, AngrAdapter)),
             None,
@@ -144,6 +156,7 @@ class BinaryImportExecutor:
         sandbox: BinaryFactsSandbox | None = None,
         sandbox_image_digest: str | None = None,
         planning_hook: BinaryPlanningHook | None = None,
+        critical_logic_hook: CriticalLogicHook | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
@@ -160,6 +173,7 @@ class BinaryImportExecutor:
             sandbox=sandbox,
             sandbox_image_digest=sandbox_image_digest,
             planning_hook=planning_hook,
+            critical_logic_hook=critical_logic_hook,
         )
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
@@ -393,6 +407,12 @@ class BinaryImportExecutor:
                 if planned is None:
                     return _cancelled_result(job["id"], produced)
                 target_addresses = _merge_target_addresses(target_addresses, planned)
+
+            _attach_critical_logic_candidates(aggregate, self._limits)
+            if self._critical_logic_hook is not None:
+                await _confirm_critical_logic(
+                    job, aggregate, self._critical_logic_hook
+                )
 
             result = _build_result(
                 parent_version_id,
@@ -675,6 +695,77 @@ def _required_argument(job: Job, name: str) -> str:
             details={"argument": name},
         )
     return value
+
+
+def _attach_critical_logic_candidates(
+    aggregate: BinaryAnalysisAggregate, limits: BinaryAnalysisLimits
+) -> None:
+    """Stamp deterministic auth/crypto/registration candidates into function attributes.
+
+    Candidates stay advisory (``confirmed: None``); model confirmation may later
+    replace the value without touching the immutable raw tool outputs.
+    """
+    candidates = discover_critical_logic(
+        aggregate.functions, aggregate.imports, aggregate.strings
+    )
+    by_name: dict[str, list[CriticalLogicCandidate]] = {}
+    for candidate in candidates:
+        by_name.setdefault(candidate.function_name, []).append(candidate)
+    stamped = 0
+    for function in aggregate.functions:
+        matched = by_name.get(function["name"])
+        if not matched or stamped >= limits.max_functions:
+            continue
+        stamped += 1
+        function["attributes"]["critical_logic"] = [
+            {
+                "category": item.category,
+                "score": item.score,
+                "evidence": list(item.evidence),
+                "confirmed": None,
+                "rationale": None,
+            }
+            for item in matched
+        ]
+
+
+async def _confirm_critical_logic(
+    job: Job,
+    aggregate: BinaryAnalysisAggregate,
+    hook: CriticalLogicHook,
+) -> None:
+    """Merge model verdicts into the stamped candidate attributes."""
+    candidates: JsonObject = {}
+    for function in aggregate.functions:
+        marked = function["attributes"].get("critical_logic")
+        if isinstance(marked, list) and marked:
+            candidates[function["name"]] = cast(JsonObject, {"entries": marked})
+    if not candidates:
+        return
+    try:
+        assessments = await hook.confirm(candidates)
+    except Exception as error:  # confirmation degrades, never aborts the job
+        LOGGER.warning(
+            "critical_logic_confirmation_degraded",
+            extra={"job_id": job["id"], "error": str(error)[:200]},
+        )
+        return
+    for function in aggregate.functions:
+        verdicts = assessments.get(function["name"])
+        if not isinstance(verdicts, list):
+            continue
+        for entry in function["attributes"].get("critical_logic", []):
+            if not isinstance(entry, dict):
+                continue
+            for verdict in verdicts:
+                if not isinstance(verdict, dict):
+                    continue
+                if (
+                    verdict.get("function_name") == function["name"]
+                    and verdict.get("category") == entry.get("category")
+                ):
+                    entry["confirmed"] = bool(verdict.get("confirmed"))
+                    entry["rationale"] = verdict.get("rationale")
 
 
 def _merge_target_addresses(

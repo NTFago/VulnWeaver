@@ -8,6 +8,7 @@ from vulnweaver_binary_analysis.executor import (
     BinaryAnalysisExecutionError,
     BinaryImportExecutor,
     BinaryPlanningHook,
+    CriticalLogicHook,
 )
 from vulnweaver_binary_analysis.headers import (
     BinaryInspectionError,
@@ -57,6 +58,7 @@ __all__ = [
     "BinaryAnalysisLimits",
     "BinaryImportExecutor",
     "BinaryPlanningHook",
+    "CriticalLogicHook",
     "BinaryInspectionError",
     "BinaryMetadata",
     "ObfuscationAssessment",
