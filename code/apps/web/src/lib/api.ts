@@ -172,6 +172,8 @@ export const api = {
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
+  pairNeighborhood: (taskId: string, functionId: string, depth = 1) =>
+    request<Record<string, unknown>>(`/api/tasks/${encodeURIComponent(taskId)}/pair/function/${encodeURIComponent(functionId)}/neighborhood?depth=${depth}`),
   findingEvidence: (findingId: string) => request<FindingEvidenceDetail[]>(`/api/findings/${findingId}/evidence`),
   findingPocs: (findingId: string) => request<Poc[]>(`/api/findings/${findingId}/pocs`),
   observability: (taskId: string) => request<Record<string, unknown>>(`/api/tasks/${taskId}/observability`),
