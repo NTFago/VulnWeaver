@@ -122,7 +122,7 @@ class BinaryFactsAdapter:
             timeout_seconds=min(600, max(1, int(limits.command_timeout_seconds))),
         )
         result = await self._sandbox.run(request, cancellation)
-        if result["status"].value != "succeeded":
+        if result["status"] != "succeeded":
             raise ToolExecutionError("binary-facts sandbox execution failed")
         output = next(
             (item for item in result["outputs"] if item["path"] == "binary-facts.json"), None
