@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
-- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已合并入 `main`（PR #31，待真实任务轨迹验收）；T29 语义审计智能体源码侧已在 `feat/t29-semantic-audit` 完成实现与定向验收（待验证）；其余任务包由并行会话推进中。
+- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已合并入 `main`（PR #31，待真实任务轨迹验收）；T29 语义审计（源码 PR #32 + 二进制伪代码 PR #39）、T27 逆向规划接入（PR #38）、T31 自动利用（PR #37）、T33 工作台（PR #36）、AuditPlan 门禁（PR #35）均已合并入 `main`；T28/T30/T32/T34 由并行会话推进中；真实模型端到端验收待部署配置。
 - **当前分支**：`main`（T25 位于 `feat/t25-agent-loop` 独立 worktree，已 rebase 至最新 `origin/main`）。
 - **当前负责人**：Codex（T01-T24）；T25 Codex（`feat/t25-agent-loop`）；T26-T34 各行见进度表。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
@@ -47,7 +47,7 @@
 | T22 全链路 UI、可观测性与 E2E | 待验证 | Codex | 浏览器全链路验收完成：登录→项目→任务页→Finding 详情（证据/POC/复现记录、Proof/Exploit 入口）→报告下载；可观测性（Job 汇总、事件时间线载荷展开、LIVE）已验证；最终验收报告见 `code/docs/progress/2026-09-10-acceptance-report.md` | 里程碑全量回归与真实模型/工具验收归 P2/T16/T18/T19 | 2026-09-10 |
 | T23 Web 首次注册与产品设置 | 已完成 | Codex（独立 worktree） | Web 一次性管理员注册、事务竞争裁决、认证/CSRF 设置 API、模型 URL/名称/API Key/重试参数设置页、API Key 写后不回显/显式清除、Worker DB 配置读取、迁移、Compose 与升级文档已完成 | 合并后在独立 TLS 部署完成真实浏览器首次启动验收；API Key 按用户选择明文落库，数据库/备份读取者可见 | 2026-09-10 |
 | T24 Web 工作台布局与可读性优化 | 已完成 | Codex | 桌面、响应式与字号调整完成；设置页复选框已从通用整宽输入规则中隔离，恢复与说明文字横向对齐 | 无 | 2026-09-10 |
-| T25 智能体规划执行框架 | 未开始 | 待认领 | — | 通用“规划—执行—观察”Agent 循环：LLM 输出结构化 ActionPlan → Policy Engine 校验 → 工具/Job 调度 → 结果回填 → 多步迭代；决策轨迹写 AgentRun；步数/token/时间预算与无模型结构化降级（定义见 3.1） | 2026-09-10 |
+| T25 智能体规划执行框架 | 已完成 | Codex（PR #31） | `orchestrator/agent_loop.py` 通用“规划—执行—观察”循环 + `ActionPlanProposal` 契约；预算与结构化降级；15+2 项测试；已合并入 `main` 并由 T27 逆向规划实际消费 | 真实任务轨迹展示归 T33 浏览器回归 | 2026-09-10 |
 | T26 二进制主管线收口（Ghidra 默认可用） | 已完成 | Codex | Sandbox Runner binary-tools 路径已接入 Worker；Runner 自动解析摘要，Worker 通过受保护端点获取摘要；binary-facts 完整事实转换为分析贡献并复用派生工件/PAIR 路径；真实 ELF 回放已成功产出 20 函数、96 指令、33 基本块、31 Xref、18 段伪代码；真实数据库 Job 回放已成功生成派生工件；facts 已补齐 imports/strings；API PAIR、地址定位和调用关系查询定向验收通过；资源/挂载配置已文档化 | 无 | 2026-09-10 |
 | T27 逆向分析智能体与混淆特征识别 | 待验证 | Codex（`feat/t27-reverse-agent`） | 扁平化启发式识别器 + 新增 `orchestrator/reverse_planning.py`（ReversePlanningAgent 复用 T25 AgentLoop：angr-targeted-analysis 进程内 ToolSpec 经 PolicyEngine 校验、DatabaseAgentRunSink 持久化决策轨迹）；binary executor 新增 `planning_hook`：facts 阶段后由模型基于壳/混淆/函数事实规划 angr 定点目标（`_plan_with_agent` 经 run_angr 闭包真实执行 angr 并合并结果，规划失败结构化降级为固定管线不中断 Job），`target_addresses` 由规划合并进 generation_config；analysis-worker 已装配（模型未配置时自动关闭）；新增 4 项测试（规划执行/降级/Sink 持久化/执行器钩子全链），全量 376 passed | 真实模型差异化规划验收（加壳 vs 未加壳样本）归真实模型 E2E | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
