@@ -20,6 +20,7 @@ from vulnweaver_domain.transitions import TASK_TRANSITIONS
 from vulnweaver_persistence import Repositories
 
 from vulnweaver_orchestrator.review_jobs import ReviewJobScheduler
+from vulnweaver_orchestrator.semantic_audit import SemanticAuditScheduler
 
 LOGGER = logging.getLogger("vulnweaver.orchestrator.aggregation")
 
@@ -38,17 +39,26 @@ _JOB_PHASES = {
     JobKind.VALIDATE: TaskStatus.VALIDATING,
     JobKind.IMPORT: TaskStatus.VALIDATING,
     JobKind.SOURCE_ANALYSIS: TaskStatus.ANALYZING,
+    JobKind.SEMANTIC_AUDIT: TaskStatus.ANALYZING,
     JobKind.BINARY_ANALYSIS: TaskStatus.ANALYZING,
     JobKind.REVIEW: TaskStatus.REVIEWING,
     JobKind.PROOF: TaskStatus.VERIFYING,
     JobKind.EXPLOIT: TaskStatus.EXPLOITING,
     JobKind.REPORT: TaskStatus.REPORTING,
 }
+_ACTIVE = frozenset(
+    {JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.WAITING_PERMISSION}
+)
 
 
 class TaskAggregateSettlementHook:
-    def __init__(self, review_scheduler: ReviewJobScheduler | None = None) -> None:
+    def __init__(
+        self,
+        review_scheduler: ReviewJobScheduler | None = None,
+        audit_scheduler: SemanticAuditScheduler | None = None,
+    ) -> None:
         self._review_scheduler = review_scheduler
+        self._audit_scheduler = audit_scheduler
 
     async def after_terminal(
         self, repositories: Repositories, job: Job, result: WorkerResult
@@ -59,19 +69,27 @@ class TaskAggregateSettlementHook:
         jobs = await repositories.jobs.list_for_task(task["id"])
         findings = await repositories.findings.list_for_task(task["id"])
         if (
-            self._review_scheduler is not None
+            self._audit_scheduler is not None
             and job["kind"] is JobKind.SOURCE_ANALYSIS
             and not any(
-                item["kind"] is JobKind.SOURCE_ANALYSIS
-                and item["status"]
-                in {
-                    JobStatus.PENDING,
-                    JobStatus.QUEUED,
-                    JobStatus.RUNNING,
-                    JobStatus.WAITING_PERMISSION,
-                }
+                item["kind"] is JobKind.SOURCE_ANALYSIS and item["status"] in _ACTIVE
                 for item in jobs
             )
+            and not any(item["kind"] is JobKind.SEMANTIC_AUDIT for item in jobs)
+        ):
+            # ADR-021: the semantic baseline runs after the static baseline and
+            # before review so model-discovered candidates are also reviewed.
+            await self._audit_scheduler.schedule_in_transaction(repositories, job)
+            jobs = await repositories.jobs.list_for_task(task["id"])
+        analysis_pending = any(
+            item["kind"] in {JobKind.SOURCE_ANALYSIS, JobKind.SEMANTIC_AUDIT}
+            and item["status"] in _ACTIVE
+            for item in jobs
+        )
+        if (
+            self._review_scheduler is not None
+            and job["kind"] in {JobKind.SOURCE_ANALYSIS, JobKind.SEMANTIC_AUDIT}
+            and not analysis_pending
         ):
             await self._review_scheduler.schedule_in_transaction(
                 repositories,

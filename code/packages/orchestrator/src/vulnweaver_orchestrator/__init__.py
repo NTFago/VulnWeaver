@@ -39,6 +39,12 @@ from vulnweaver_orchestrator.reviews import (
     ReviewFactContext,
     ReviewGateResult,
 )
+from vulnweaver_orchestrator.semantic_audit import (
+    SemanticAuditJobExecutor,
+    SemanticAuditor,
+    SemanticAuditOutcome,
+    SemanticAuditScheduler,
+)
 from vulnweaver_orchestrator.task_aggregation import TaskAggregateSettlementHook
 
 __all__ = [
@@ -67,6 +73,10 @@ __all__ = [
     "ReviewGateResult",
     "ReviewJobExecutor",
     "ReviewJobScheduler",
+    "SemanticAuditJobExecutor",
+    "SemanticAuditOutcome",
+    "SemanticAuditScheduler",
+    "SemanticAuditor",
     "StepExecutor",
     "StepOutcome",
     "TaskAggregateSettlementHook",

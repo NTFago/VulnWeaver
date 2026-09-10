@@ -15,7 +15,7 @@ export type TaskResult = "success" | "partial" | "no_findings";
 
 export type JobStatus = "pending" | "queued" | "running" | "waiting_permission" | "succeeded" | "failed" | "cancelled";
 
-export type JobKind = "validate" | "import" | "source_analysis" | "binary_analysis" | "review" | "proof" | "exploit" | "report";
+export type JobKind = "validate" | "import" | "source_analysis" | "semantic_audit" | "binary_analysis" | "review" | "proof" | "exploit" | "report";
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -709,6 +709,22 @@ export interface ActionPlanProposal {
   schema_version: SchemaVersion;
   steps: Array<ActionStep>;
   rationale: string;
+}
+
+export interface SemanticAuditFinding {
+  cwe_id: string;
+  title: string;
+  severity: Severity;
+  path: string;
+  start_line: number;
+  end_line?: number;
+  rationale: string;
+}
+
+export interface SemanticAuditReport {
+  schema_version: SchemaVersion;
+  summary?: string;
+  findings: Array<SemanticAuditFinding>;
 }
 
 export interface ToolSpec {

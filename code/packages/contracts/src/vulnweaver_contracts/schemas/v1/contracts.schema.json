@@ -30,7 +30,7 @@
     },
     "JobKind": {
       "type": "string",
-      "enum": ["validate", "import", "source_analysis", "binary_analysis", "review", "proof", "exploit", "report"]
+      "enum": ["validate", "import", "source_analysis", "semantic_audit", "binary_analysis", "review", "proof", "exploit", "report"]
     },
     "RunStatus": {
       "type": "string",
@@ -1071,6 +1071,30 @@
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "steps": {"type": "array", "items": {"$ref": "#/$defs/ActionStep"}},
         "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
+      }
+    },
+    "SemanticAuditFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cwe_id", "title", "severity", "path", "start_line", "rationale"],
+      "properties": {
+        "cwe_id": {"type": "string", "pattern": "^CWE-[0-9]{1,4}$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "severity": {"$ref": "#/$defs/Severity"},
+        "path": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "start_line": {"type": "integer", "minimum": 1},
+        "end_line": {"type": "integer", "minimum": 1},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "SemanticAuditReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "findings"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 8192},
+        "findings": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/SemanticAuditFinding"}}
       }
     },
     "ToolSpec": {
