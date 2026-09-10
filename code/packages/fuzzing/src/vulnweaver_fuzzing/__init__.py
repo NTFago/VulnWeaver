@@ -1,6 +1,6 @@
 """Bounded fuzzing budgets and deterministic crash triage."""
 
-from vulnweaver_fuzzing.executor import FuzzExecutionService, build_fuzz_input_bundle
+from vulnweaver_fuzzing.executor import FuzzExecutionService, FuzzRunOutcome, build_fuzz_input_bundle
 from vulnweaver_fuzzing.harness_generator import HarnessGenerator, HarnessModel
 from vulnweaver_fuzzing.harness_loop import (
     HarnessDiagnostic,
@@ -30,6 +30,7 @@ __all__ = [
     "CrashTriageError",
     "CrashTriageService",
     "FuzzExecutionService",
+    "FuzzRunOutcome",
     "FuzzJobExecutor",
     "build_fuzz_request",
     "FuzzBudgetGate",

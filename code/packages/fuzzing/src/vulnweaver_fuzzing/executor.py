@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import BinaryIO, Protocol, cast
 
@@ -19,6 +20,7 @@ from vulnweaver_contracts import (
     ArtifactKind,
     CrashManifest,
     CrashManifestEntry,
+    CrashRecord,
     FailureKind,
     FuzzRequest,
     FuzzResult,
@@ -61,6 +63,12 @@ _DEFAULT_MAX_MINIMIZED_INPUT_TOTAL_BYTES = 256 * 1024 * 1024
 
 class FuzzSandbox(Protocol):
     async def run(self, request: SandboxRequest, cancellation: asyncio.Event) -> SandboxResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FuzzRunOutcome:
+    result: FuzzResult
+    crashes: tuple[CrashRecord, ...]
 
 
 def build_fuzz_input_bundle(
@@ -141,6 +149,11 @@ class FuzzExecutionService:
         self._max_minimized_input_total_bytes = max_minimized_input_total_bytes
 
     async def run(self, request: FuzzRequest, cancellation: asyncio.Event) -> FuzzResult:
+        return (await self.run_with_crashes(request, cancellation)).result
+
+    async def run_with_crashes(
+        self, request: FuzzRequest, cancellation: asyncio.Event
+    ) -> FuzzRunOutcome:
         limits = validate_fuzz_request(request)
         triage = CrashTriageService(limits)
         try:
@@ -156,13 +169,13 @@ class FuzzExecutionService:
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            return triage.build_result(
+            return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=FuzzStatus.FAILED,
                 coverage_percent=None,
                 created_at=_timestamp(self._now()),
                 failure=_failure_for_exception(error, phase="execution"),
-            )
+            ), ())
 
         if sandbox_result["status"] is not SandboxStatus.SUCCEEDED:
             status = _fuzz_status(sandbox_result["status"])
@@ -171,13 +184,13 @@ class FuzzExecutionService:
                 FailureKind.ENVIRONMENT,
                 "fuzz Sandbox Runner did not complete successfully",
             )
-            return triage.build_result(
+            return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=status,
                 coverage_percent=None,
                 created_at=_timestamp(self._now()),
                 failure=failure,
-            )
+            ), ())
 
         try:
             summary = cast(
@@ -221,7 +234,7 @@ class FuzzExecutionService:
             )
             triage.set_execution_count(summary["executions"])
             partial = len(manifest["crashes"]) > limits.max_crashes
-            return triage.build_result(
+            return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=FuzzStatus.PARTIAL if partial else FuzzStatus.SUCCEEDED,
                 coverage_percent=summary["coverage_percent"],
@@ -235,17 +248,17 @@ class FuzzExecutionService:
                     if partial
                     else None
                 ),
-            )
+            ), triage.records())
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            return triage.build_result(
+            return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=FuzzStatus.FAILED,
                 coverage_percent=None,
                 created_at=_timestamp(self._now()),
                 failure=_failure_for_exception(error, phase="normalization"),
-            )
+            ), triage.records())
 
     def _validate_tool_identity(self) -> ToolSpec:
         try:
