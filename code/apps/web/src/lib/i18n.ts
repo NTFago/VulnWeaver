@@ -4,19 +4,25 @@
  */
 
 import type {
+  AgentRun,
   EvidenceStrength,
   EvidenceType,
   FindingCategory,
   FindingStatus,
   JobKind,
   JobStatus,
+  JobRequestedPayload,
+  JobStatusChangedPayload,
   PocKind,
   PocResult,
   PocStatus,
+  QueueEvent,
   RunStatus,
   Severity,
+  TaskRequestedPayload,
   TaskResult,
   TaskStatus,
+  TaskStatusChangedPayload,
 } from "@vulnweaver/contracts";
 
 export const taskStatusLabels: Record<TaskStatus, string> = {
@@ -250,4 +256,97 @@ export const failureCodeLabels: Record<string, string> = {
 
 export function failureCodeText(code: string): string {
   return failureCodeLabels[code] ?? `错误码：${code}`;
+}
+
+/* ---------- 事件流 ---------- */
+
+/** 事件展示分类：左侧色条与类型徽章的依据。 */
+export type EventCategory = "stage" | "job" | "finding" | "error" | "system";
+
+export const eventCategoryLabels: Record<EventCategory, string> = {
+  stage: "阶段",
+  job: "作业",
+  finding: "发现",
+  error: "错误",
+  system: "系统",
+};
+
+export type EventFilter = "all" | EventCategory;
+
+export function eventCategory(event: QueueEvent): EventCategory {
+  const rawType: string = event.event_type;
+  if (rawType === "task.requested") return "stage";
+  if (rawType === "task.status_changed") return "stage";
+  if (rawType === "job.status_changed") {
+    const payload = event.payload as JobStatusChangedPayload;
+    return payload.failure ? "error" : "job";
+  }
+  if (rawType === "job.requested") return "job";
+  // 未来可能新增的事件类型：按名称关键词兜底分类。
+  if (rawType.includes("finding")) return "finding";
+  if (rawType.includes("error") || rawType.includes("failed")) return "error";
+  return "system";
+}
+
+/** 过滤 chips 的匹配规则：作业过滤包含失败的作业事件（其展示分类是「错误」）。 */
+export function eventMatchesFilter(event: QueueEvent, filter: EventFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "job") return event.event_type === "job.requested" || event.event_type === "job.status_changed";
+  return eventCategory(event) === filter;
+}
+
+/** 事件标题中文化；未映射的事件类型显示原文。 */
+export function eventTitle(event: QueueEvent, jobKindById: Map<string, JobKind>): string {
+  const rawType: string = event.event_type;
+  if (rawType === "task.requested") {
+    const payload = event.payload as TaskRequestedPayload;
+    return payload.artifact_version_ids.length > 1 ? `任务已受理（${payload.artifact_version_ids.length} 个样本）` : "任务已受理";
+  }
+  if (rawType === "task.status_changed") {
+    const payload = event.payload as TaskStatusChangedPayload;
+    return `任务状态：${taskStatusLabels[payload.status]}`;
+  }
+  if (rawType === "job.requested") {
+    const payload = event.payload as JobRequestedPayload;
+    return `作业已下发：${jobKindLabels[payload.job_kind]}`;
+  }
+  if (rawType === "job.status_changed") {
+    const payload = event.payload as JobStatusChangedPayload;
+    const kindLabel = jobKindById.get(payload.job_id);
+    const base = kindLabel
+      ? `作业 ${kindLabel} ${jobStatusLabels[payload.status]}`
+      : `作业 ${jobStatusLabels[payload.status]}`;
+    return payload.failure ? `${base}：${failureCodeText(payload.failure.code)}` : base;
+  }
+  return rawType;
+}
+
+/* ---------- 智能体协作 ---------- */
+
+const agentRoleKeywords: Array<{ keywords: string[]; label: string }> = [
+  { keywords: ["key_logic", "key logic", "critical", "关键"], label: "关键逻辑" },
+  { keywords: ["reverse", "ghidra", "deobfusc", "disassembl", "逆向"], label: "逆向分析" },
+  { keywords: ["fuzz", "afl", "harness", "模糊"], label: "模糊测试" },
+  { keywords: ["exploit", "利用"], label: "利用生成" },
+  { keywords: ["proof", "verif"], label: "验证" },
+  { keywords: ["review", "复核"], label: "独立复核" },
+  { keywords: ["static", "semgrep", "scan", "audit", "静态", "语义"], label: "静态审计" },
+  { keywords: ["import", "ingest", "parse", "导入"], label: "导入解析" },
+  { keywords: ["plan", "orchestr", "dispatch", "schedul", "调度"], label: "调度" },
+  { keywords: ["report", "summar", "报告"], label: "报告" },
+];
+
+/** 依据运行记录中可能的智能体标识字段与模型名推断中文角色名；无法识别时显示「模型分析」。 */
+export function agentRoleLabel(run: AgentRun): string {
+  const hints = run as unknown as Record<string, unknown>;
+  const haystack = [hints.agent, hints.agent_type, hints.role, hints.stage, hints.kind, run.model]
+    .filter((hint): hint is string => typeof hint === "string" && hint.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (haystack) {
+    for (const entry of agentRoleKeywords) {
+      if (entry.keywords.some((keyword) => haystack.includes(keyword))) return entry.label;
+    }
+  }
+  return "模型分析";
 }

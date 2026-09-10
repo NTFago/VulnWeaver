@@ -14,9 +14,12 @@
   import type { AgentRun } from "@vulnweaver/contracts";
   import type { FindingEvidenceDetail } from "../api";
   import { api } from "../api";
-  import { formatDate, shortId } from "../format";
+  import { formatDate } from "../format";
   import { taskResultLabels, taskStatusLabels } from "../i18n";
   import TaskPipeline from "../components/TaskPipeline.svelte";
+  import FindingStats from "../components/FindingStats.svelte";
+  import AgentPanel from "../components/AgentPanel.svelte";
+  import EventStream from "../components/EventStream.svelte";
   import type { PipelineTaskType } from "../pipeline";
 
   /** 任务详情页：任务状态、漏洞与报告、函数工作台、作业与事件轨迹、智能体运行。 */
@@ -57,6 +60,7 @@
   let reviewOutcome: FindingStatus = "candidate";
   let reviewRationale = "";
   let annotationNote = "";
+  let rightTab: "agents" | "events" | "jobs" = "agents";
 
   function functionLocation(fn: PairFunction): string {
     const source = fn.source_location;
@@ -197,7 +201,10 @@
   <div><strong>{failedJobs.length}</strong><span>失败作业</span></div>
   <div><strong>{reportStateText}</strong><span>报告状态</span></div>
 </section>
-<section class="panel table-panel">
+<FindingStats {findings} />
+<div class="task-columns">
+  <div class="task-column">
+    <section class="panel table-panel">
   <header class="panel-head">
     <div><h2>问题与报告</h2><p>候选问题、人工复核与报告导出。</p></div>
   </header>
@@ -259,7 +266,40 @@
       {/each}
     </div>
   {/if}
-</section>
+    </section>
+  </div>
+  <div class="task-column">
+    <section class="panel table-panel">
+      <header class="panel-head">
+        <div class="tabs" aria-label="任务详情面板">
+          <button class:active={rightTab === "agents"} aria-pressed={rightTab === "agents"} on:click={() => (rightTab = "agents")}>智能体协作</button>
+          <button class:active={rightTab === "events"} aria-pressed={rightTab === "events"} on:click={() => (rightTab = "events")}>事件流<span class="live"><i></i>实时</span></button>
+          <button class:active={rightTab === "jobs"} aria-pressed={rightTab === "jobs"} on:click={() => (rightTab = "jobs")}>作业列表</button>
+        </div>
+      </header>
+      {#if rightTab === "agents"}
+        <AgentPanel {agentRuns} />
+      {:else if rightTab === "events"}
+        <EventStream {events} {jobs} />
+      {:else}
+        {#if jobs.length === 0}
+          <div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>
+        {:else}
+          <div class="job-list">
+            {#each jobs as job (job.id)}
+              <article>
+                <span class={`status-dot ${job.status}`}></span>
+                <div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>
+                {#if job.status === "failed"}<button class="text-button job-retry" disabled={busy} on:click={() => void onRetryJobs([job.id])}>重试</button>{/if}
+                {#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}
+              </article>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+    </section>
+  </div>
+</div>
 <section class="panel table-panel">
   <header class="panel-head"><div><h2>函数与调用链</h2><p>点击函数联动调用关系与伪代码。</p></div></header>
   {#if pairFunctions.length === 0}
@@ -295,52 +335,41 @@
     </div>
   {/if}
 </section>
-<section class="task-grid">
-  <section class="panel table-panel">
-    <header class="panel-head"><div><h2>执行单元</h2><p>由编排层创建的 Job。</p></div></header>
-    {#if jobs.length === 0}
-      <div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>
-    {:else}
-      <div class="job-list">
-        {#each jobs as job (job.id)}
-          <article>
-            <span class={`status-dot ${job.status}`}></span>
-            <div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>
-            {#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}
-          </article>
-        {/each}
-      </div>
-    {/if}
-  </section>
-  <section class="panel table-panel">
-    <header class="panel-head"><div><h2>决策与状态轨迹</h2><p>任务事件实时流。</p></div><small class="live"><i></i>LIVE</small></header>
-    {#if events.length === 0}
-      <div class="compact-empty">尚未接收事件。</div>
-    {:else}
-      <ol class="timeline">
-        {#each [...events].reverse() as event (event.event_id)}
-          <li><span>{String(event.sequence).padStart(2, "0")}</span><div><b>{event.event_type}</b><small>{formatDate(event.occurred_at)} · {shortId(event.event_id)}</small><details><summary>载荷</summary><code>{JSON.stringify(event.payload)}</code></details></div></li>
-        {/each}
-      </ol>
-    {/if}
-  </section>
-</section>
-<section class="panel table-panel">
-  <header class="panel-head"><div><h2>智能体运行轨迹</h2><p>各智能体的模型调用与决策记录。</p></div><span class="badge muted">{agentRuns.length} 条</span></header>
-  {#if agentRuns.length === 0}
-    <div class="compact-empty">模型分析运行后，此处将展示各智能体的决策轨迹。</div>
-  {:else}
-    <div class="agent-run-list">
-      {#each agentRuns as run (run.id)}
-        <article>
-          <span class={`status-dot ${run.status}`}></span>
-          <div>
-            <b>{run.model}</b>
-            <small>{run.status} · 决策 {run.decisions.length} 条 · token {run.token_usage.input_tokens}/{run.token_usage.output_tokens} · {typeof run.duration_ms === "number" ? `${run.duration_ms}ms` : "运行中"}</small>
-            {#if run.failure}<p>{run.failure.code}</p>{/if}
-          </div>
-        </article>
-      {/each}
-    </div>
-  {/if}
-</section>
+
+<style>
+  .task-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+    margin-top: 24px;
+    align-items: start;
+  }
+  .task-column { min-width: 0; display: grid; }
+  .task-column > .table-panel { margin-top: 0; }
+  @media (min-width: 1180px) {
+    .task-columns { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+  }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs button {
+    border: 1px solid transparent;
+    border-radius: var(--radius-s);
+    background: transparent;
+    color: var(--muted);
+    padding: 8px 13px;
+    font-size: 13.5px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: color 0.16s var(--ease), background 0.16s var(--ease), border-color 0.16s var(--ease);
+  }
+  .tabs button:hover { color: var(--text); background: var(--panel-2); }
+  .tabs button.active {
+    color: var(--accent);
+    background: rgba(201, 244, 59, 0.08);
+    border-color: rgba(201, 244, 59, 0.35);
+  }
+  .tabs .live { font-size: 10px; }
+  .job-retry { grid-column: 2; justify-self: start; color: var(--warn); padding: 2px 8px; }
+  .job-retry:hover { color: var(--text); }
+</style>
