@@ -32,6 +32,11 @@ from vulnweaver_orchestrator.flow import (
     OrchestratorSettings,
 )
 from vulnweaver_orchestrator.model_reviews import IndependentModelReviewer, ModelReviewResult
+from vulnweaver_orchestrator.reverse_planning import (
+    DatabaseAgentRunSink,
+    PlannedTargets,
+    ReversePlanningAgent,
+)
 from vulnweaver_orchestrator.review_jobs import ReviewJobExecutor, ReviewJobScheduler
 from vulnweaver_orchestrator.reviews import (
     FindingReviewGate,
@@ -71,6 +76,9 @@ __all__ = [
     "ReviewEvidenceFact",
     "ReviewFactContext",
     "ReviewGateResult",
+    "DatabaseAgentRunSink",
+    "PlannedTargets",
+    "ReversePlanningAgent",
     "ReviewJobExecutor",
     "ReviewJobScheduler",
     "SemanticAuditJobExecutor",

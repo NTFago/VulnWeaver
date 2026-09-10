@@ -1,4 +1,4 @@
-# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false, reportArgumentType=false, reportUnnecessaryComparison=false
 """Optional subprocess helper for bounded angr CFGFast extraction."""
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from typing import Any
 
 
 def main() -> None:
+    # argv includes the executable name; the helper has nine positional
+    # arguments after it (the limits, state budget, and target list).
     if len(sys.argv) != 10:
         raise SystemExit(
             "usage: angr_helper INPUT OUTPUT MAX_FUNCTIONS MAX_INSTRUCTIONS "
@@ -77,7 +79,12 @@ def main() -> None:
                     break
                 edge = cfg.graph.get_edge_data(node, successor) or {}
                 jumpkind = str(edge.get("jumpkind") or "")
-                target_function = cfg.kb.functions.get_by_addr(int(successor.addr))
+                try:
+                    target_function = cfg.kb.functions.get_by_addr(int(successor.addr))
+                except KeyError:
+                    # CFG edges can target an intra-function block rather than
+                    # a registered function entry; retain the xref either way.
+                    target_function = None
                 xrefs.append(
                     {
                         "source_address": int(block.addr),

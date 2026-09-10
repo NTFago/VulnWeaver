@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from typing import Protocol
 
 from vulnweaver_contracts import (
+    FindingStatus,
     Job,
     JobKind,
     JobStatus,
@@ -19,10 +21,13 @@ from vulnweaver_domain import JobSnapshot, aggregate_task, transition_task
 from vulnweaver_domain.transitions import TASK_TRANSITIONS
 from vulnweaver_persistence import Repositories
 
+from vulnweaver_orchestrator.audit_plan import AuditPlan, build_baseline_plan, complete_baselines
 from vulnweaver_orchestrator.review_jobs import ReviewJobScheduler
 from vulnweaver_orchestrator.semantic_audit import SemanticAuditScheduler
 
 LOGGER = logging.getLogger("vulnweaver.orchestrator.aggregation")
+
+_AUDIT_BASELINES = ("static_rules", "semantic_function_audit")
 
 _PHASES = (
     TaskStatus.CREATED,
@@ -51,14 +56,24 @@ _ACTIVE = frozenset(
 )
 
 
+class ExploitDispatchScheduler(Protocol):
+    """Implemented by the proof package; dispatches auto-exploit Jobs."""
+
+    async def schedule_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None: ...
+
+
 class TaskAggregateSettlementHook:
     def __init__(
         self,
         review_scheduler: ReviewJobScheduler | None = None,
         audit_scheduler: SemanticAuditScheduler | None = None,
+        exploit_scheduler: ExploitDispatchScheduler | None = None,
     ) -> None:
         self._review_scheduler = review_scheduler
         self._audit_scheduler = audit_scheduler
+        self._exploit_scheduler = exploit_scheduler
 
     async def after_terminal(
         self, repositories: Repositories, job: Job, result: WorkerResult
@@ -97,14 +112,50 @@ class TaskAggregateSettlementHook:
                 [finding["id"] for finding in findings],
             )
             jobs = await repositories.jobs.list_for_task(task["id"])
+        review_pending = any(
+            item["kind"] is JobKind.REVIEW and item["status"] in _ACTIVE for item in jobs
+        )
+        if (
+            self._exploit_scheduler is not None
+            and job["kind"] is JobKind.REVIEW
+            and not review_pending
+        ):
+            # T31: confirmed findings flow into automatic exploit verification
+            # when the project opted in; the scheduler enforces the gates again.
+            project = await repositories.projects.get(task["project_id"])
+            if project["exploit_validation_enabled"]:
+                for finding in findings:
+                    if finding["status"] is FindingStatus.CONFIRMED:
+                        await self._exploit_scheduler.schedule_in_transaction(
+                            repositories, finding["id"]
+                        )
         aggregate = aggregate_task(
             [JobSnapshot(kind=item["kind"], status=item["status"]) for item in jobs],
             [item["status"] for item in findings],
             [],
         )
-        for status, task_result in _transition_path(
-            task["status"], aggregate.status, aggregate.result, jobs
-        ):
+        transitions = _transition_path(task["status"], aggregate.status, aggregate.result, jobs)
+        if aggregate.result is TaskResult.NO_FINDINGS and self._audit_scheduler is not None:
+            plan = _audit_plan(jobs)
+            if plan.missing_required():
+                # ADR-021: NO_FINDINGS requires the required audit baselines to
+                # have actually run; blocking beats silently reporting a clean
+                # scan when the semantic baseline never completed.
+                LOGGER.warning(
+                    "audit_plan_no_findings_blocked",
+                    extra={
+                        "task_id": task["id"],
+                        "job_id": job["id"],
+                        "missing_required": list(plan.missing_required()),
+                        "coverage": plan.coverage(),
+                    },
+                )
+                transitions = [
+                    (status, task_result)
+                    for status, task_result in transitions
+                    if status is not TaskStatus.COMPLETED
+                ]
+        for status, task_result in transitions:
             allowed_now = TASK_TRANSITIONS.get(task["status"], frozenset())
             if status not in allowed_now:
                 LOGGER.warning(
@@ -135,6 +186,23 @@ class TaskAggregateSettlementHook:
             await repositories.task_events.append(event)
             await repositories.outbox.add(event)
             task = updated.task
+
+
+def _audit_plan(jobs: list[Job]) -> AuditPlan:
+    """Derive the durable audit-plan completion from settled Job facts."""
+    plan = build_baseline_plan(*_AUDIT_BASELINES)
+    completed: list[str] = []
+    if any(
+        item["kind"] is JobKind.SOURCE_ANALYSIS and item["status"] is JobStatus.SUCCEEDED
+        for item in jobs
+    ):
+        completed.append("static_rules")
+    if any(
+        item["kind"] is JobKind.SEMANTIC_AUDIT and item["status"] is JobStatus.SUCCEEDED
+        for item in jobs
+    ):
+        completed.append("semantic_function_audit")
+    return complete_baselines(plan, completed)
 
 
 def _transition_path(

@@ -638,6 +638,12 @@ export interface Poc {
   created_at: string;
 }
 
+export interface ExploitScript {
+  schema_version: SchemaVersion;
+  script: string;
+  rationale: string;
+}
+
 export interface ProofRequest {
   schema_version: SchemaVersion;
   id: Identifier;
@@ -712,13 +718,14 @@ export interface ActionPlanProposal {
 }
 
 export interface SemanticAuditFinding {
-  cwe_id: string;
+  cwe_id: Identifier;
   title: string;
   severity: Severity;
-  path: string;
-  start_line: number;
-  end_line?: number;
   rationale: string;
+  path?: string;
+  start_line?: number;
+  end_line?: number;
+  address?: number;
 }
 
 export interface SemanticAuditReport {
@@ -876,6 +883,17 @@ export interface RegistrationRequest {
   schema_version: SchemaVersion;
   username: string;
   password: string;
+}
+
+export interface ReadablePseudocodeItem {
+  function_name?: string;
+  address: number;
+  text: string;
+}
+
+export interface ReadablePseudocodeReport {
+  schema_version: SchemaVersion;
+  pseudocode: Array<ReadablePseudocodeItem>;
 }
 
 export interface ProductSettings {

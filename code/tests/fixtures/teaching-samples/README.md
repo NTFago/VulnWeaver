@@ -3,3 +3,4 @@
 | 文件 | 来源 | 授权依据 | 用途 |
 |---|---|---|---|
 | `fuzz-overflow.c` | 本仓库自编（2026-09-10，分支 `feat/sprint-final-closeout`） | 自编教学样本，可公开；仅含确定性的栈缓冲区溢出模式，无恶意功能，不可用于攻击真实目标 | T19 AFL++/CASR 模糊测试链路的无害崩溃样本（`vulnweaver-fuzz-entrypoint` 回放） |
+| `ollvm-style-flattened.c` | 本仓库自编（2026-09-10，`feat/t28-deobfuscation`） | 自编教学样本，可公开；复现 OLLVM `fla` 的 dispatcher/state-machine 控制流形状，不含恶意功能或外部访问 | T28 混淆识别与可读伪代码恢复回归；明确不是第三方 OLLVM 编译产物 |

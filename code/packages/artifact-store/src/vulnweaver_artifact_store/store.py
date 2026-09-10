@@ -88,6 +88,11 @@ class LocalContentAddressedStore:
             except FileExistsError:
                 created = False
                 self._verify_path(target, digest)
+            if created:
+                # CAS objects are immutable after publication. They must be
+                # readable by the non-root workers sharing the volume, while
+                # remaining non-writable to them.
+                os.chmod(target, 0o644)
             self._sync_directory(target.parent)
             return StoredObject(
                 digest=f"sha256:{digest}",

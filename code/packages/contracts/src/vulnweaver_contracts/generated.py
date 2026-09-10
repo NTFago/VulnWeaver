@@ -730,6 +730,11 @@ class Poc(TypedDict):
     resource_budget: ResourceBudget
     created_at: str
 
+class ExploitScript(TypedDict):
+    schema_version: SchemaVersion
+    script: str
+    rationale: str
+
 class ProofRequest(TypedDict):
     schema_version: SchemaVersion
     id: Identifier
@@ -796,13 +801,14 @@ class ActionPlanProposal(TypedDict):
     rationale: str
 
 class SemanticAuditFinding(TypedDict):
-    cwe_id: str
+    cwe_id: Identifier
     title: str
     severity: Severity
-    path: str
-    start_line: int
-    end_line: NotRequired[int]
     rationale: str
+    path: NotRequired[str]
+    start_line: NotRequired[int]
+    end_line: NotRequired[int]
+    address: NotRequired[int]
 
 class SemanticAuditReport(TypedDict):
     schema_version: SchemaVersion
@@ -947,6 +953,15 @@ class RegistrationRequest(TypedDict):
     schema_version: SchemaVersion
     username: str
     password: str
+
+class ReadablePseudocodeItem(TypedDict):
+    function_name: NotRequired[str]
+    address: int
+    text: str
+
+class ReadablePseudocodeReport(TypedDict):
+    schema_version: SchemaVersion
+    pseudocode: list[ReadablePseudocodeItem]
 
 class ProductSettings(TypedDict):
     schema_version: SchemaVersion

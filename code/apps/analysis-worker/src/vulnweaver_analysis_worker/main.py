@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 from types import FrameType
+from typing import Any
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
@@ -20,7 +21,9 @@ from vulnweaver_model_gateway import (
     ModelTier,
 )
 from vulnweaver_orchestrator import (
+    DatabaseAgentRunSink,
     IndependentModelReviewer,
+    ReversePlanningAgent,
     ReviewJobExecutor,
     ReviewJobScheduler,
     SemanticAuditJobExecutor,
@@ -30,7 +33,13 @@ from vulnweaver_orchestrator import (
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
-from vulnweaver_proof import ProofExecutionService, ProofJobExecutor, SandboxRunnerClient
+from vulnweaver_proof import (
+    AutoExploitScheduler,
+    ExploitScriptGenerator,
+    ProofExecutionService,
+    ProofJobExecutor,
+    SandboxRunnerClient,
+)
 from vulnweaver_queue import QueueSettings, RedisStreamsClient
 from vulnweaver_reporting import ReportJobExecutor
 from vulnweaver_source_analysis import (
@@ -41,6 +50,8 @@ from vulnweaver_source_analysis import (
 )
 from vulnweaver_tool_runtime import ToolSpecLoader
 from vulnweaver_worker import ReliableWorker, WorkerSettings
+
+from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
 
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
 
@@ -75,6 +86,7 @@ async def _run() -> None:
     scheduler = StaticAnalysisScheduler(database, static_specs)
     review_scheduler = ReviewJobScheduler(database)
     audit_scheduler = SemanticAuditScheduler(database)
+    exploit_scheduler = _auto_exploit_scheduler(database)
     review_executor, audit_executor, model_gateway = await _model_executors(database, store)
     report_executor = ReportJobExecutor(
         database,
@@ -85,7 +97,7 @@ async def _run() -> None:
             image_digest=None,
         ),
     )
-    proof_executor = _proof_executor(database)
+    proof_executor = _proof_executor(database, store, model_gateway)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -93,6 +105,14 @@ async def _run() -> None:
         scratch_root=os.environ.get("SOURCE_SCRATCH_ROOT", "/tmp"),
         static_scheduler=scheduler,
         pair_importer=pair_importer,
+    )
+    binary_sandbox, binary_digest = await _binary_sandbox()
+    binary_planning_hook = (
+        _ReversePlanningHook(
+            ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
+        )
+        if model_gateway is not None
+        else None
     )
     binary_executor = BinaryImportExecutor.configured(
         database,
@@ -102,9 +122,19 @@ async def _run() -> None:
         objdump_executable=os.environ.get("OBJDUMP_EXECUTABLE", "objdump"),
         ghidra_executable=os.environ.get("GHIDRA_HEADLESS_EXECUTABLE") or None,
         ghidra_script_directory=os.environ.get("GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"),
-        angr_enabled=_environment_bool("ANGR_ENABLED", False),
+        # Symbolic execution is dynamic analysis and may only run through the
+        # independent Sandbox Runner; never enable the worker-local adapter.
+        angr_enabled=(
+            _environment_bool("ANGR_ENABLED", False) and binary_sandbox is not None
+        ),
         upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
         pair_importer=BinaryPairImporter(database),
+        sandbox=binary_sandbox,
+        sandbox_image_digest=binary_digest,
+        planning_hook=binary_planning_hook,
+        readable_pseudocode_hook=(
+            ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
+        ),
     )
     executor = AnalysisJobExecutor(
         source_executor,
@@ -133,7 +163,9 @@ async def _run() -> None:
             heartbeat_interval_seconds=_environment_int("WORKER_HEARTBEAT_INTERVAL_SECONDS", 30),
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
-        settlement_hook=TaskAggregateSettlementHook(review_scheduler, audit_scheduler),
+        settlement_hook=TaskAggregateSettlementHook(
+            review_scheduler, audit_scheduler, exploit_scheduler
+        ),
     )
     stop = asyncio.Event()
     _install_signal_handlers(stop)
@@ -149,6 +181,24 @@ async def _run() -> None:
         await queue.close()
         await database.dispose()
         LOGGER.info("analysis_worker_stopped")
+
+
+class _ReversePlanningHook:
+    """Bridge the orchestrator planning agent to the binary executor hook."""
+
+    def __init__(self, agent: ReversePlanningAgent) -> None:
+        self._agent = agent
+
+    async def plan(
+        self, job: Any, facts: Any, run_angr: Any
+    ) -> tuple[int, ...]:
+        planned = await self._agent.plan(
+            task_id=str(job["task_id"]),
+            job_id=str(job["id"]),
+            facts=facts,
+            run_angr=run_angr,
+        )
+        return planned.targets
 
 
 def _required_environment(name: str) -> str:
@@ -239,7 +289,11 @@ def _setting_float(settings: dict[str, object], name: str, default: float) -> fl
     return float(value)
 
 
-def _proof_executor(database: Database) -> ProofJobExecutor | None:
+def _proof_executor(
+    database: Database,
+    store: LocalContentAddressedStore,
+    model_gateway: ModelGateway | None,
+) -> ProofJobExecutor | None:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
@@ -252,7 +306,34 @@ def _proof_executor(database: Database) -> ProofJobExecutor | None:
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
     )
-    return ProofJobExecutor(database, service)
+    generator = (
+        ExploitScriptGenerator(database, model_gateway, store)
+        if model_gateway is not None
+        else None
+    )
+    return ProofJobExecutor(database, service, script_generator=generator)
+
+
+def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
+    image_digest = os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
+    if not image_digest:
+        # Without a pinned proof image the automatic exploit pipeline stays off.
+        return None
+    return AutoExploitScheduler(database, image_digest=image_digest)
+
+
+async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None, None
+    client = SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
+    )
+    digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None
+    if digest is None:
+        digest = await client.tool_digest("binary-facts", "1.0.0")
+    return client, digest
 
 
 def _install_signal_handlers(stop: asyncio.Event) -> None:

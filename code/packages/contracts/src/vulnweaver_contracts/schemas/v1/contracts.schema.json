@@ -968,6 +968,16 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "ExploitScript": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "script", "rationale"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "script": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
+      }
+    },
     "ProofRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -1073,18 +1083,23 @@
         "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
       }
     },
-    "SemanticAuditFinding": {
+        "SemanticAuditFinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cwe_id", "title", "severity", "path", "start_line", "rationale"],
+      "required": ["cwe_id", "title", "severity", "rationale"],
+      "oneOf": [
+        {"required": ["path", "start_line"]},
+        {"required": ["address"]}
+      ],
       "properties": {
-        "cwe_id": {"type": "string", "pattern": "^CWE-[0-9]{1,4}$"},
+        "cwe_id": {"$ref": "#/$defs/Identifier"},
         "title": {"type": "string", "minLength": 1, "maxLength": 256},
         "severity": {"$ref": "#/$defs/Severity"},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 4096},
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},
         "start_line": {"type": "integer", "minimum": 1},
         "end_line": {"type": "integer", "minimum": 1},
-        "rationale": {"type": "string", "minLength": 1, "maxLength": 4096}
+        "address": {"type": "integer", "minimum": 0}
       }
     },
     "SemanticAuditReport": {
@@ -1327,6 +1342,29 @@
         "password": {"type": "string", "minLength": 12, "maxLength": 1024}
       }
     },
+    "ReadablePseudocodeItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "text"],
+      "properties": {
+        "function_name": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "address": {"type": "integer", "minimum": 0},
+        "text": {"type": "string", "minLength": 1, "maxLength": 32768}
+      }
+    },
+    "ReadablePseudocodeReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pseudocode"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "pseudocode": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/ReadablePseudocodeItem"}
+        }
+      }
+    },
     "ProductSettings": {
       "type": "object",
       "additionalProperties": false,
@@ -1423,6 +1461,7 @@
     {"$ref": "#/$defs/CapabilityProfile"},
     {"$ref": "#/$defs/SourceImportResult"},
     {"$ref": "#/$defs/BinaryAnalysisResult"},
+    {"$ref": "#/$defs/ReadablePseudocodeReport"},
     {"$ref": "#/$defs/PairFunction"},
     {"$ref": "#/$defs/PairNode"},
     {"$ref": "#/$defs/PairEdge"},
