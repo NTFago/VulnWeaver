@@ -885,6 +885,17 @@ export interface RegistrationRequest {
   password: string;
 }
 
+export interface ReadablePseudocodeItem {
+  function_name?: string;
+  address: number;
+  text: string;
+}
+
+export interface ReadablePseudocodeReport {
+  schema_version: SchemaVersion;
+  pseudocode: Array<ReadablePseudocodeItem>;
+}
+
 export interface ProductSettings {
   schema_version: SchemaVersion;
   review_model_base_url: string;

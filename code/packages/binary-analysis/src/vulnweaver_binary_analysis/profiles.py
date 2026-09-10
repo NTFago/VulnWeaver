@@ -46,6 +46,13 @@ def binary_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> Tool
                         "minimum": 1,
                         "maximum": 20000,
                     },
+                    "target_addresses": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "uniqueItems": True,
+                        "items": {"type": "integer", "minimum": 0},
+                    },
+                    "angr_enabled": {"type": "boolean"},
                 },
             },
             "output_schema": {"type": "object"},
@@ -83,6 +90,13 @@ def binary_command_profile(
         max_functions = arguments.get("max_functions")
         max_instructions = arguments.get("max_instructions")
         max_pseudocode = arguments.get("max_pseudocode_functions")
+        raw_target_addresses = arguments.get("target_addresses", [])
+        target_addresses = (
+            cast(list[object], raw_target_addresses)
+            if isinstance(raw_target_addresses, list)
+            else None
+        )
+        angr_enabled = arguments.get("angr_enabled", False)
         for name, value in (
             ("max_functions", max_functions),
             ("max_instructions", max_instructions),
@@ -90,6 +104,21 @@ def binary_command_profile(
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"binary argument {name} is invalid")
+        if target_addresses is None or len(target_addresses) > 8:
+            raise ValueError("binary target_addresses are invalid")
+        if any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 0
+            for item in target_addresses
+        ):
+            raise ValueError("binary target_addresses are invalid")
+        if not isinstance(angr_enabled, bool):
+            raise ValueError("binary angr_enabled is invalid")
+        symbolic_arguments = (
+            "--target-addresses",
+            ",".join(str(cast(int, item)) for item in target_addresses),
+        )
+        if angr_enabled:
+            symbolic_arguments += ("--angr-enabled",)
         return (
             executable,
             "--input",
@@ -102,6 +131,7 @@ def binary_command_profile(
             str(max_instructions),
             "--max-pseudocode-functions",
             str(max_pseudocode),
+            *symbolic_arguments,
         )
 
     return SandboxCommandProfile(

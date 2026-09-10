@@ -954,6 +954,15 @@ class RegistrationRequest(TypedDict):
     username: str
     password: str
 
+class ReadablePseudocodeItem(TypedDict):
+    function_name: NotRequired[str]
+    address: int
+    text: str
+
+class ReadablePseudocodeReport(TypedDict):
+    schema_version: SchemaVersion
+    pseudocode: list[ReadablePseudocodeItem]
+
 class ProductSettings(TypedDict):
     schema_version: SchemaVersion
     review_model_base_url: str

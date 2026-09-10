@@ -4,10 +4,15 @@ from vulnweaver_binary_analysis.critical_logic import (
     CriticalLogicCandidate,
     discover_critical_logic,
 )
+from vulnweaver_binary_analysis.deobfuscation import (
+    recover_readable_pseudocode,
+    validate_model_readable_pseudocode,
+)
 from vulnweaver_binary_analysis.executor import (
     BinaryAnalysisExecutionError,
     BinaryImportExecutor,
     BinaryPlanningHook,
+    ReadablePseudocodeHook,
 )
 from vulnweaver_binary_analysis.headers import (
     BinaryInspectionError,
@@ -57,6 +62,7 @@ __all__ = [
     "BinaryAnalysisLimits",
     "BinaryImportExecutor",
     "BinaryPlanningHook",
+    "ReadablePseudocodeHook",
     "BinaryInspectionError",
     "BinaryMetadata",
     "ObfuscationAssessment",
@@ -82,4 +88,6 @@ __all__ = [
     "parse_objdump_symbols",
     "assess_control_flow_flattening",
     "discover_critical_logic",
+    "recover_readable_pseudocode",
+    "validate_model_readable_pseudocode",
 ]

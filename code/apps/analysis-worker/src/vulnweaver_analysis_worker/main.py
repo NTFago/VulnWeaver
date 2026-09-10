@@ -51,6 +51,8 @@ from vulnweaver_source_analysis import (
 from vulnweaver_tool_runtime import ToolSpecLoader
 from vulnweaver_worker import ReliableWorker, WorkerSettings
 
+from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
+
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
 
 
@@ -120,12 +122,19 @@ async def _run() -> None:
         objdump_executable=os.environ.get("OBJDUMP_EXECUTABLE", "objdump"),
         ghidra_executable=os.environ.get("GHIDRA_HEADLESS_EXECUTABLE") or None,
         ghidra_script_directory=os.environ.get("GHIDRA_SCRIPT_DIRECTORY", "/opt/vulnweaver/ghidra"),
-        angr_enabled=_environment_bool("ANGR_ENABLED", False),
+        # Symbolic execution is dynamic analysis and may only run through the
+        # independent Sandbox Runner; never enable the worker-local adapter.
+        angr_enabled=(
+            _environment_bool("ANGR_ENABLED", False) and binary_sandbox is not None
+        ),
         upx_executable=os.environ.get("UPX_EXECUTABLE", "upx"),
         pair_importer=BinaryPairImporter(database),
         sandbox=binary_sandbox,
         sandbox_image_digest=binary_digest,
         planning_hook=binary_planning_hook,
+        readable_pseudocode_hook=(
+            ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
+        ),
     )
     executor = AnalysisJobExecutor(
         source_executor,

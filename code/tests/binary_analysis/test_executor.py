@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -264,14 +265,23 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             )
             result = await executor.execute(job, asyncio.Event())
             assert result["status"] is JobStatus.SUCCEEDED
-            assert len(result["produced_artifact_version_ids"]) == 2
-            unpacked_version_id, result_version_id = result["produced_artifact_version_ids"]
+            assert len(result["produced_artifact_version_ids"]) == 3
+            unpacked_version_id, result_version_id, readable_version_id = result[
+                "produced_artifact_version_ids"
+            ]
             async with database.transaction() as repositories:
                 unpacked_version = await repositories.artifacts.get_version(unpacked_version_id)
                 result_version = await repositories.artifacts.get_version(result_version_id)
-                assert unpacked_version["parent_version_id"] == version_id
-                assert result_version["parent_version_id"] == unpacked_version_id
-                assert result_version["produced_by"]["name"] == "binary-import"
+                readable_version = await repositories.artifacts.get_version(readable_version_id)
+                assert unpacked_version.get("parent_version_id") == version_id
+                assert result_version.get("parent_version_id") == unpacked_version_id
+                produced_by = result_version.get("produced_by")
+                assert isinstance(produced_by, Mapping)
+                assert produced_by.get("name") == "binary-import"
+                assert readable_version.get("parent_version_id") == result_version_id
+                generation_config = readable_version.get("generation_config")
+                assert isinstance(generation_config, Mapping)
+                assert generation_config.get("format") == "binary-readable-pseudocode"
                 pair_functions = await repositories.pair.list_functions(version_id)
                 assert [item["name"] for item in pair_functions] == ["main"]
                 assert pair_functions[0]["binary_location"] is not None
@@ -294,11 +304,22 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             assert document["xrefs"][0]["target_symbol"] == "helper"
             assert document["pseudocode"][0]["tool_name"] == "ghidra"
             assert document["symbolic_facts"][0]["status"] == "completed"
+            with store.open(readable_version["object_ref"]) as stream:
+                readable_document = json.load(stream)
+            assert (
+                readable_document["original_pseudocode_excerpts"][0]["text"]
+                == "int main(void) { return 0; }"
+            )
+            assert (
+                readable_document["recovered_pseudocode"][0]["tool_name"]
+                == "vulnweaver-readable"
+            )
 
             replay = await executor.execute(job, asyncio.Event())
             assert replay["produced_artifact_version_ids"] == [
                 unpacked_version_id,
                 result_version_id,
+                readable_version_id,
             ]
             invalid_job = cast(
                 Job,
