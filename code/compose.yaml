@@ -51,6 +51,33 @@ services:
       - analysis-plane
     restart: unless-stopped
 
+  # The artifact volume is shared by non-root consumers (api, analysis-worker) and by the
+  # root-run Sandbox Runner. Whichever process first writes to a fresh volume owns the
+  # staging and object roots, so a root-owned winner would lock the non-root consumers out
+  # and leave them crash-looping. Create the roots once with the deployment's uid instead.
+  artifact-init:
+    image: python:3.12-slim
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        root=/var/lib/vulnweaver/artifacts
+        mkdir -p "$$root/.staging" "$$root/objects"
+        chown -R 10001:10001 "$$root"
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+    networks: []
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   migrate:
     image: vulnweaver-dispatcher:dev
     build:
@@ -130,6 +157,8 @@ services:
       - artifact-data:/var/lib/vulnweaver/artifacts
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     networks:
@@ -203,7 +232,8 @@ services:
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       # Must exceed the longest registered tool timeout (binary-facts runs for up to 600s);
       # the margin lets the Runner's own timeout surface as a structured failure.
-      SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-660}
+      # Capped at 600 by SandboxRunnerClient; binary-facts runs for up to 600s.
+      SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-600}
       FUZZ_RUNNER_TIMEOUT_SECONDS: ${FUZZ_RUNNER_TIMEOUT_SECONDS:-600}
       PROOF_TOOL_NAME: ${PROOF_TOOL_NAME:-proof-tool}
       PROOF_TOOL_VERSION: ${PROOF_TOOL_VERSION:-1.0.0}
@@ -220,6 +250,8 @@ services:
       - artifact-data:/var/lib/vulnweaver/artifacts
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       redis:
@@ -264,6 +296,8 @@ services:
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       binary-tools:
         condition: service_started
       migrate:
