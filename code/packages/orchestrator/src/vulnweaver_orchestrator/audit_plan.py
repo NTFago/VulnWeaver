@@ -1,8 +1,9 @@
 """ADR-021 audit-plan completeness and coverage gates."""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,11 +18,21 @@ class AuditPlan:
     completed: frozenset[str]
 
     def missing_required(self) -> tuple[str, ...]:
-        return tuple(sorted(item.name for item in self.baselines if item.required and item.name not in self.completed))
+        return tuple(
+            sorted(
+                item.name
+                for item in self.baselines
+                if item.required and item.name not in self.completed
+            )
+        )
 
     def coverage(self) -> float:
         required = [item for item in self.baselines if item.required]
-        return 1.0 if not required else sum(item.name in self.completed for item in required) / len(required)
+        return (
+            1.0
+            if not required
+            else sum(item.name in self.completed for item in required) / len(required)
+        )
 
     def allows_no_findings(self) -> bool:
         return not self.missing_required()

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
 from vulnweaver_contracts import BinaryBasicBlock, BinaryXref
 
@@ -45,8 +45,7 @@ def assess_control_flow_flattening(
     for function_name in sorted(blocks_by_function):
         blocks = blocks_by_function[function_name]
         dispatcher_blocks = sum(
-            len(block["successor_addresses"]) >= min_dispatcher_successors
-            for block in blocks
+            len(block["successor_addresses"]) >= min_dispatcher_successors for block in blocks
         )
         indirect_jumps = jumps_by_function[function_name]
         block_ratio = dispatcher_blocks / max(1, len(blocks))
@@ -57,5 +56,9 @@ def assess_control_flow_flattening(
             f"{dispatcher_blocks}/{len(blocks)} blocks have at least "
             f"{min_dispatcher_successors} successors; {indirect_jumps} indirect jumps"
         )
-        results.append(ObfuscationAssessment(function_name, flattened, score, dispatcher_blocks, indirect_jumps, reason))
+        results.append(
+            ObfuscationAssessment(
+                function_name, flattened, score, dispatcher_blocks, indirect_jumps, reason
+            )
+        )
     return tuple(results)

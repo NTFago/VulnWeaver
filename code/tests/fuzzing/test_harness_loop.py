@@ -6,10 +6,13 @@ def test_compile_repair_loop_is_bounded_and_repairs_diagnostics() -> None:
 
     def compile_once(source: str) -> harness_loop.HarnessDiagnostic:
         attempts.append(source)
-        return harness_loop.HarnessDiagnostic(source == "fixed", "ok" if source == "fixed" else "missing include")
+        return harness_loop.HarnessDiagnostic(
+            source == "fixed", "ok" if source == "fixed" else "missing include"
+        )
 
     result = harness_loop.compile_repair_loop(
-        "broken", compile_once,
+        "broken",
+        compile_once,
         lambda _source, _diagnostic: "fixed",
         max_repairs=2,
     )
