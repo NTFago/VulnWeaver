@@ -12,7 +12,8 @@ from typing import Any
 def main() -> None:
     if len(sys.argv) != 10:
         raise SystemExit(
-            "usage: angr_helper INPUT OUTPUT MAX_FUNCTIONS MAX_INSTRUCTIONS MAX_BLOCKS MAX_XREFS STEP_LIMIT STATE_LIMIT TARGETS"
+            "usage: angr_helper INPUT OUTPUT MAX_FUNCTIONS MAX_INSTRUCTIONS "
+            "MAX_BLOCKS MAX_XREFS STEP_LIMIT STATE_LIMIT TARGETS"
         )
     source = Path(sys.argv[1]).resolve()
     output = Path(sys.argv[2]).resolve()

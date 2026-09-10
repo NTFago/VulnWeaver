@@ -16,7 +16,10 @@ def build_sarif(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> dict[s
         poc_counts[poc["finding_id"]] = poc_counts.get(poc["finding_id"], 0) + 1
         if poc["result"] is not None:
             poc_results.setdefault(poc["finding_id"], []).append(_enum_value(poc["result"]))
-    results = [_result(finding, poc_counts.get(finding["id"], 0), poc_results.get(finding["id"], [])) for finding in findings]
+    results = [
+        _result(finding, poc_counts.get(finding["id"], 0), poc_results.get(finding["id"], []))
+        for finding in findings
+    ]
     rules = {
         finding["cwe_id"]: {
             "id": finding["cwe_id"],
@@ -61,9 +64,7 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
         typed_tool = cast(Mapping[str, Any], tool)
         driver = typed_tool.get("driver")
         driver_name = (
-            cast(Mapping[str, Any], driver).get("name")
-            if isinstance(driver, Mapping)
-            else None
+            cast(Mapping[str, Any], driver).get("name") if isinstance(driver, Mapping) else None
         )
         if driver_name != "VulnWeaver":
             raise ValueError("SARIF run must contain a tool driver")
@@ -87,7 +88,9 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
                 raise ValueError("SARIF result locations must be an array")
 
 
-def _result(finding: Finding, poc_count: int = 0, poc_results: Sequence[str] = ()) -> dict[str, Any]:
+def _result(
+    finding: Finding, poc_count: int = 0, poc_results: Sequence[str] = ()
+) -> dict[str, Any]:
     level = {
         "critical": "error",
         "high": "error",

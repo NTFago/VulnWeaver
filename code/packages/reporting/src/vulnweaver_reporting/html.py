@@ -27,15 +27,18 @@ def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
         location = finding["location"]
         path = escape(str(location.get("path", "unknown")))
         line = location.get("line", 1)
+        severity = escape(str(getattr(finding["severity"], "value", finding["severity"])))
+        status = escape(str(getattr(finding["status"], "value", finding["status"])))
         items.append(
             "<article>"
             f"<h2>{escape(finding['title'][:256])}</h2>"
             f"<p><b>ID:</b> <code>{escape(finding['id'])}</code> "
             f"<b>CWE:</b> <code>{escape(finding['cwe_id'])}</code></p>"
             f"<p><b>Location:</b> <code>{path}:{line}</code></p>"
-            f"<p><b>Severity:</b> <code>{escape(str(getattr(finding['severity'], 'value', finding['severity'])))}</code> "
-            f"<b>Status:</b> <code>{escape(str(getattr(finding['status'], 'value', finding['status'])))}</code></p>"
-            f"<p><b>Evidence references:</b> {escape(', '.join(finding['evidence_ids']) or 'none')}<br/>"
+            f"<p><b>Severity:</b> <code>{severity}</code> "
+            f"<b>Status:</b> <code>{status}</code></p>"
+            f"<p><b>Evidence references:</b> "
+            f"{escape(', '.join(finding['evidence_ids']) or 'none')}<br/>"
             f"<b>Review references:</b> {escape(', '.join(finding['review_ids']) or 'none')}</p>"
             f"<p><b>Proof runs:</b> {poc_counts.get(finding['id'], 0)}</p>"
             + "".join(

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Mapping, Sequence
 
 from vulnweaver_contracts import BinaryBasicBlock, BinaryXref
 
@@ -36,17 +36,23 @@ def assess_control_flow_flattening(
         raise ValueError("invalid flattening heuristic thresholds")
     blocks_by_function: dict[str, list[BinaryBasicBlock]] = defaultdict(list)
     for block in basic_blocks:
-        blocks_by_function[block["function_name"]].append(block)
+        function_name = block.get("function_name")
+        if function_name is not None:
+            blocks_by_function[function_name].append(block)
     jumps_by_function: Counter[str] = Counter()
     for xref in xrefs:
-        if xref["type"] == "jump" and xref.get("target_symbol") is None:
-            jumps_by_function[xref["source_function"]] += 1
+        source_function = xref.get("source_function")
+        if (
+            xref["type"] == "jump"
+            and xref.get("target_symbol") is None
+            and source_function is not None
+        ):
+            jumps_by_function[source_function] += 1
     results: list[ObfuscationAssessment] = []
     for function_name in sorted(blocks_by_function):
         blocks = blocks_by_function[function_name]
         dispatcher_blocks = sum(
-            len(block["successor_addresses"]) >= min_dispatcher_successors
-            for block in blocks
+            len(block["successor_addresses"]) >= min_dispatcher_successors for block in blocks
         )
         indirect_jumps = jumps_by_function[function_name]
         block_ratio = dispatcher_blocks / max(1, len(blocks))
@@ -57,5 +63,9 @@ def assess_control_flow_flattening(
             f"{dispatcher_blocks}/{len(blocks)} blocks have at least "
             f"{min_dispatcher_successors} successors; {indirect_jumps} indirect jumps"
         )
-        results.append(ObfuscationAssessment(function_name, flattened, score, dispatcher_blocks, indirect_jumps, reason))
+        results.append(
+            ObfuscationAssessment(
+                function_name, flattened, score, dispatcher_blocks, indirect_jumps, reason
+            )
+        )
     return tuple(results)

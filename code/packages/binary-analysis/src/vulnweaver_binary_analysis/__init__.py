@@ -1,5 +1,9 @@
 """Inert x86/x64 ELF/PE inspection and bounded reverse-engineering adapters."""
 
+from vulnweaver_binary_analysis.critical_logic import (
+    CriticalLogicCandidate,
+    discover_critical_logic,
+)
 from vulnweaver_binary_analysis.executor import (
     BinaryAnalysisExecutionError,
     BinaryImportExecutor,
@@ -13,7 +17,6 @@ from vulnweaver_binary_analysis.obfuscation import (
     ObfuscationAssessment,
     assess_control_flow_flattening,
 )
-from vulnweaver_binary_analysis.critical_logic import CriticalLogicCandidate, discover_critical_logic
 from vulnweaver_binary_analysis.profiles import (
     binary_command_profile,
     binary_tool_spec,

@@ -373,9 +373,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             "requestBody": {
                 "required": True,
                 "content": {
-                    "application/octet-stream": {
-                        "schema": {"type": "string", "format": "binary"}
-                    }
+                    "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
                 },
             }
         },
@@ -387,9 +385,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         _: Annotated[str, Depends(require_write)],
         idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
         kind: ArtifactKind,
-        filename: Annotated[
-            str | None, Header(alias="X-Artifact-Filename", max_length=512)
-        ] = None,
+        filename: Annotated[str | None, Header(alias="X-Artifact-Filename", max_length=512)] = None,
     ) -> ArtifactDetail:
         key = normalize_idempotency_key(idempotency_key)
         _validate_upload_kind(kind)
@@ -410,18 +406,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             concurrency=upload_slots,
         ) as staged:
             if not staged.head:
-                raise ApiInputError(
-                    "empty_artifact", "uploaded artifact must not be empty", "body"
-                )
+                raise ApiInputError("empty_artifact", "uploaded artifact must not be empty", "body")
             if not _matches_declared_format(kind, staged.head):
                 raise ApiInputError(
                     "artifact_format_mismatch",
                     "content does not match the declared artifact kind",
                     "kind",
                 )
-            fingerprint = request_fingerprint(
-                {"kind": str(kind), "digest": staged.digest}
-            )
+            fingerprint = request_fingerprint({"kind": str(kind), "digest": staged.digest})
             scope = f"projects:{project_id}:artifacts:create"
             async with database.transaction() as repositories:
                 await repositories.api_requests.lock(scope=scope, key=key)
@@ -432,9 +424,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                             "idempotency key was already used for a different upload"
                         )
                     response.status_code = prior.response_status
-                    return await _artifact_detail(
-                        repositories, project_id, prior.resource_id
-                    )
+                    return await _artifact_detail(repositories, project_id, prior.resource_id)
                 with staged.path.open("rb") as stream:
                     stored = await asyncio.to_thread(
                         store.put_stream,
@@ -659,9 +649,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             task = await repositories.tasks.get(task_id)
             functions: list[PairFunction] = []
             for version_id in task["artifact_version_ids"]:
-                functions.extend(
-                    await repositories.pair.functions_at_address(version_id, address)
-                )
+                functions.extend(await repositories.pair.functions_at_address(version_id, address))
             return functions
 
     @app.get("/api/tasks/{task_id}/pair/function/{function_id}/neighborhood")
@@ -670,7 +658,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         function_id: str,
         depth: int = 1,
         _: Annotated[str, Depends(require_account)] = "",
-    ) -> dict[str, list[Any]]:
+    ) -> dict[str, Any]:
         """Return bounded caller/callee edges for a function in the task."""
         if depth < 1 or depth > 3:
             raise ApiInputError(
@@ -685,7 +673,9 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                         version_id, function_id, depth=depth
                     )
                     return neighborhood
-        raise ApiInputError("pair_function_not_found", "pair function is not part of the task", "function_id")
+        raise ApiInputError(
+            "pair_function_not_found", "pair function is not part of the task", "function_id"
+        )
 
     @app.get("/api/tasks/{task_id}/observability")
     async def task_observability(
@@ -773,17 +763,20 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         _: Annotated[str, Depends(require_write)],
     ) -> Job:
         job_id = f"job:proof:{uuid4().hex}"
-        request = cast(ProofRequest, {
-            "schema_version": SchemaVersion.VALUE_1_0_0,
-            "id": f"proof:{uuid4().hex}",
-            "job_id": job_id,
-            "finding_id": finding_id,
-            "script_ref": body.script_ref,
-            "image_digest": body.image_digest,
-            "permission_mode": body.permission_mode,
-            "resource_budget": body.resource_budget.model_dump(mode="json"),
-            "timeout_seconds": body.resource_budget.timeout_seconds,
-        })
+        request = cast(
+            ProofRequest,
+            {
+                "schema_version": SchemaVersion.VALUE_1_0_0,
+                "id": f"proof:{uuid4().hex}",
+                "job_id": job_id,
+                "finding_id": finding_id,
+                "script_ref": body.script_ref,
+                "image_digest": body.image_digest,
+                "permission_mode": body.permission_mode,
+                "resource_budget": body.resource_budget.model_dump(mode="json"),
+                "timeout_seconds": body.resource_budget.timeout_seconds,
+            },
+        )
         validate_contract("ProofRequest", request)
         scheduler = ProofJobScheduler(
             tool=ToolIdentity(name="proof-tool", version="1.0.0", image_digest=body.image_digest)
@@ -903,9 +896,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 response.status_code = prior.response_status
                 return await repositories.findings.get_review(prior.resource_id)
             if body.supersedes_review_id is not None:
-                superseded = await repositories.findings.get_review(
-                    body.supersedes_review_id
-                )
+                superseded = await repositories.findings.get_review(body.supersedes_review_id)
                 if superseded["finding_id"] != finding_id:
                     raise ApiInputError(
                         "review_history_mismatch",
@@ -1042,12 +1033,8 @@ def _personal_author_id(username: str) -> str:
 
 
 def _product_settings_response(values: dict[str, object]) -> ProductSettingsResponse:
-    public_values = {
-        key: value for key, value in values.items() if key != "review_model_api_key"
-    }
-    parsed = ProductSettingsBody.model_validate(
-        {"schema_version": "1.0.0", **public_values}
-    )
+    public_values = {key: value for key, value in values.items() if key != "review_model_api_key"}
+    parsed = ProductSettingsBody.model_validate({"schema_version": "1.0.0", **public_values})
     return ProductSettingsResponse(
         review_model_base_url=parsed.review_model_base_url,
         review_model_name=parsed.review_model_name,

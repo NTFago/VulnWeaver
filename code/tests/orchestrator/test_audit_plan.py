@@ -1,5 +1,4 @@
 import pytest
-
 from vulnweaver_orchestrator.audit_plan import build_baseline_plan, complete_baselines
 
 
