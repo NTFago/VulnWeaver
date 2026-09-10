@@ -142,3 +142,26 @@ body{font-size:16px;line-height:1.5}
 .settings-form>label.check{display:flex;align-items:flex-start;gap:12px}
 .settings-form>label.check input{width:16px;height:16px;flex:0 0 16px;margin:3px 0 0;padding:0;accent-color:var(--accent)}
 .settings-form>label.check span{display:grid;gap:5px}
+
+/* Function workbench: call-chain and pseudocode linkage. */
+.workbench{display:grid;grid-template-columns:minmax(220px,.9fr) minmax(280px,1.1fr);gap:20px}
+.function-list{max-height:340px;overflow:auto;border-top:1px solid var(--line)}
+.function-list button{width:100%;display:grid;gap:4px;text-align:left;padding:11px 6px;border:0;border-bottom:1px solid var(--line);border-left:2px solid transparent;background:transparent;color:#e4e8e0}
+.function-list button:hover{background:#1d211d}
+.function-list button.selected{border-left-color:var(--accent);background:#1c201b}
+.function-list b{font:650 12px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace}
+.function-list small,.function-detail small{color:var(--muted);font:500 10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace}
+.function-detail{display:grid;gap:12px;align-content:start}
+.function-title{font:700 16px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace}
+.code-view{margin:0;padding:14px;background:#0f110f;border:1px solid var(--line);color:#d7e6c9;font:500 11px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;max-height:280px;overflow:auto}
+.call-columns{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.call-columns>div{display:grid;gap:6px;align-content:start}
+.call-columns>b{font:650 10px/1 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--accent);letter-spacing:.08em}
+.call-columns button{text-align:left;border:1px solid var(--line);background:transparent;color:#dfe3dc;padding:8px 10px;font:500 11px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace}
+.call-columns button:hover{border-color:var(--accent);color:var(--accent)}
+.agent-run-list article{display:grid;grid-template-columns:16px 1fr;gap:10px;padding:13px 2px;border-bottom:1px solid var(--line)}
+.agent-run-list article>div{display:grid;gap:4px}
+.agent-run-list b{font:650 11px/1.3 ui-monospace,SFMono-Regular,Consolas,monospace}
+.agent-run-list small{color:var(--muted);font-size:11px;line-height:1.5}
+.agent-run-list p{color:#ff9d8e;font-size:11px}
+@media(max-width:900px){.workbench,.call-columns{grid-template-columns:1fr}}
