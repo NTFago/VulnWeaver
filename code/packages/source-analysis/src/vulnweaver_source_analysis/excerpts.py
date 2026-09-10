@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -16,8 +14,8 @@ from vulnweaver_source_analysis.archive import ImportLimits, SafeArchiveImporter
 
 @dataclass(frozen=True, slots=True)
 class ExcerptLimits:
-    archive_bytes: int = 16 * 1024 * 1024
-    extracted_bytes: int = 32 * 1024 * 1024
+    archive_bytes: int = 512 * 1024 * 1024
+    extracted_bytes: int = 512 * 1024 * 1024
     file_bytes: int = 1024 * 1024
     max_files: int = 2000
     context_lines: int = 10
@@ -25,9 +23,9 @@ class ExcerptLimits:
     text_bytes: int = 16 * 1024
 
     def __post_init__(self) -> None:
-        if not 1 <= self.archive_bytes <= 64 * 1024 * 1024:
+        if not 1 <= self.archive_bytes <= 512 * 1024 * 1024:
             raise ValueError("excerpt archive budget is outside the safe range")
-        if not 1 <= self.file_bytes <= self.extracted_bytes <= 128 * 1024 * 1024:
+        if not 1 <= self.file_bytes <= self.extracted_bytes <= 512 * 1024 * 1024:
             raise ValueError("excerpt extraction budget is outside the safe range")
         if not 1 <= self.max_files <= 20_000:
             raise ValueError("excerpt file count is outside the safe range")
@@ -62,12 +60,14 @@ class SourceExcerptReader:
     ) -> None:
         self._store = store
         self._limits = limits or ExcerptLimits()
-        self._scratch_root = scratch_root
+        # Kept for caller compatibility. Excerpts no longer need a scratch directory.
+        del scratch_root
+        self._verified_archives: dict[tuple[str, str], int] = {}
         self._importer = SafeArchiveImporter(
             ImportLimits(
                 max_files=self._limits.max_files,
                 max_total_bytes=self._limits.extracted_bytes,
-                max_file_bytes=self._limits.file_bytes,
+                max_file_bytes=self._limits.extracted_bytes,
             )
         )
 
@@ -89,27 +89,35 @@ class SourceExcerptReader:
         if location["end_line"] < location["start_line"]:
             raise SourceImportError("excerpt_invalid_location", "Source line range is invalid")
 
-        # Hash and decode the same bounded bytes, avoiding a verify/open race.
-        with self._store.open(version["object_ref"]) as source:
-            content = source.read(self._limits.archive_bytes + 1)
-        if len(content) > self._limits.archive_bytes:
-            raise SourceImportError("excerpt_archive_too_large", "Source archive exceeds budget")
-        digest = "sha256:" + hashlib.sha256(content).hexdigest()
-        if digest != version["digest"] or version["object_ref"] != "cas://sha256/" + digest[7:]:
+        digest = version["digest"]
+        if version["object_ref"] != "cas://sha256/" + digest.removeprefix("sha256:"):
             raise SourceImportError("excerpt_digest_mismatch", "Source archive digest is invalid")
+        archive_key = (version["object_ref"], digest)
+        archive_size = self._verified_archives.get(archive_key)
+        if archive_size is None:
+            stored = self._store.verify(version["object_ref"])
+            if stored.digest != digest:
+                raise SourceImportError(
+                    "excerpt_digest_mismatch", "Source archive digest is invalid"
+                )
+            archive_size = stored.size_bytes
+            self._verified_archives[archive_key] = archive_size
+        if archive_size > self._limits.archive_bytes:
+            raise SourceImportError("excerpt_archive_too_large", "Source archive exceeds budget")
 
-        with tempfile.TemporaryDirectory(
-            prefix="vulnweaver-excerpt-", dir=self._scratch_root
-        ) as tmp:
-            root = Path(tmp) / "source"
-            self._importer.extract(io.BytesIO(content), root)
-            selected = root.joinpath(*relative.parts)
-            if not selected.is_file() or not selected.resolve().is_relative_to(root.resolve()):
-                raise SourceImportError("excerpt_file_missing", "Source file is unavailable")
-            with selected.open("rb") as source:
-                raw = source.read(self._limits.file_bytes + 1)
-        if len(raw) > self._limits.file_bytes:
-            raise SourceImportError("excerpt_file_too_large", "Source file exceeds budget")
+        try:
+            with self._store.open(version["object_ref"]) as source:
+                raw = self._importer.read_member(
+                    source,
+                    relative.as_posix(),
+                    max_bytes=self._limits.file_bytes,
+                )
+        except SourceImportError as error:
+            if error.code != "file_too_large":
+                raise
+            raise SourceImportError(
+                "excerpt_file_too_large", "Source file exceeds budget", details=error.details
+            ) from error
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as error:

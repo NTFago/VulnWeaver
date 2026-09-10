@@ -31,8 +31,10 @@ def archive_bytes(files: dict[str, bytes], *, tar: bool = False) -> bytes:
     return output.getvalue()
 
 
-def registered(store: LocalContentAddressedStore, content: bytes) -> ArtifactVersion:
-    stored = store.put_stream(io.BytesIO(content), max_bytes=1024 * 1024)
+def registered(
+    store: LocalContentAddressedStore, content: bytes, *, max_bytes: int = 1024 * 1024
+) -> ArtifactVersion:
+    stored = store.put_stream(io.BytesIO(content), max_bytes=max_bytes)
     version = artifact_version()
     version["digest"], version["object_ref"] = stored.digest, stored.object_ref
     return version
@@ -74,6 +76,22 @@ def test_verified_excerpt_and_cleanup(tmp_path: Path, tar: bool) -> None:
     assert result.start_line == 1 and result.end_line == 3
     assert result.truncated is False
     assert list(scratch.iterdir()) == []
+
+
+def test_large_zip_reads_only_the_requested_source_member(tmp_path: Path) -> None:
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    content = archive_bytes(
+        {
+            "assets/generated.bundle": b"x" * (16 * 1024 * 1024 + 1),
+            "src/demo.py": b"def greet():\n    return 'hello'\n",
+        }
+    )
+    assert len(content) > 16 * 1024 * 1024
+    version = registered(store, content, max_bytes=32 * 1024 * 1024)
+
+    result = SourceExcerptReader(store).read(version, location(start=1, end=2))
+
+    assert result.text == "def greet():\n    return 'hello'\n"
 
 
 @pytest.mark.parametrize(
@@ -141,6 +159,16 @@ def test_resource_limits_are_enforced(tmp_path: Path, limits: ExcerptLimits) -> 
     )
     with pytest.raises(SourceImportError):
         SourceExcerptReader(store, limits=limits).read(version, location())
+
+
+def test_selected_file_budget_reports_the_excerpt_error(tmp_path: Path) -> None:
+    store = LocalContentAddressedStore(tmp_path)
+    version = registered(store, archive_bytes({"src/demo.py": b"12345678\n12345678\n"}))
+
+    with pytest.raises(SourceImportError) as caught:
+        SourceExcerptReader(store, limits=ExcerptLimits(file_bytes=8)).read(version, location())
+
+    assert caught.value.code == "excerpt_file_too_large"
 
 
 def test_truncated_excerpt_has_explicit_range(tmp_path: Path) -> None:
