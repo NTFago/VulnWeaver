@@ -5,10 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from vulnweaver_contracts import Finding, Poc
+from vulnweaver_contracts import Evidence, Finding, Poc
 
 
-def build_sarif(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> dict[str, Any]:
+def build_sarif(
+    findings: Sequence[Finding],
+    pocs: Sequence[Poc] = (),
+    evidence: dict[str, list[Evidence]] | None = None,
+) -> dict[str, Any]:
     """Return SARIF without embedding evidence or unbounded tool logs."""
     poc_counts: dict[str, int] = {}
     poc_results: dict[str, list[str]] = {}
@@ -17,7 +21,12 @@ def build_sarif(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> dict[s
         if poc["result"] is not None:
             poc_results.setdefault(poc["finding_id"], []).append(_enum_value(poc["result"]))
     results = [
-        _result(finding, poc_counts.get(finding["id"], 0), poc_results.get(finding["id"], []))
+        _result(
+            finding,
+            poc_counts.get(finding["id"], 0),
+            poc_results.get(finding["id"], []),
+            (evidence or {}).get(finding["id"], []),
+        )
         for finding in findings
     ]
     rules = {
@@ -89,7 +98,10 @@ def validate_sarif(report: Mapping[str, Any]) -> None:
 
 
 def _result(
-    finding: Finding, poc_count: int = 0, poc_results: Sequence[str] = ()
+    finding: Finding,
+    poc_count: int = 0,
+    poc_results: Sequence[str] = (),
+    evidence: Sequence[Evidence] = (),
 ) -> dict[str, Any]:
     level = {
         "critical": "error",
@@ -110,6 +122,7 @@ def _result(
                 }
             }
         ],
+        "codeFlows": _code_flows(finding),
         "properties": {
             "findingId": finding["id"],
             "status": _enum_value(finding["status"]),
@@ -118,13 +131,51 @@ def _result(
             "reviewIds": list(finding["review_ids"]),
             "pocCount": poc_count,
             "pocResults": list(poc_results),
+            "evidence": [
+                {
+                    "id": item["id"],
+                    "type": _enum_value(item["type"]),
+                    "artifactRef": item["artifact_ref"][:4096],
+                    "digest": item["digest"],
+                    "replayKind": str(item["replay_recipe"].get("kind", "unknown"))[:128],
+                }
+                for item in evidence
+            ],
         },
         "fixes": [{"description": {"text": finding["fix_suggestion"][:4096]}}],
     }
 
 
+def _code_flows(finding: Finding) -> list[dict[str, Any]]:
+    """Express the projected call path as a SARIF thread flow."""
+    steps = [
+        {"location": {"physicalLocation": _step_physical_location(step)}}
+        for step in finding["call_path"]
+    ]
+    if not steps:
+        return []
+    return [{"threadFlows": [{"locations": steps}]}]
+
+
+def _step_physical_location(step: Mapping[str, object]) -> dict[str, Any]:
+    path = step.get("path")
+    address = step.get("address")
+    if isinstance(path, str) and path:
+        line = step.get("line")
+        return {
+            "artifactLocation": {"uri": path[:4096]},
+            "region": {"startLine": line if isinstance(line, int) and line > 0 else 1},
+        }
+    if isinstance(address, int):
+        return {"artifactLocation": {"uri": f"binary://0x{address:x}"}}
+    return {"artifactLocation": {"uri": "unknown"}}
+
+
 def _location_uri(finding: Finding) -> str:
     location = finding["location"]
+    address = location.get("address")
+    if isinstance(address, int):
+        return f"binary://0x{address:x}"
     value = location.get("path")
     return value[:4096] if isinstance(value, str) and value else "unknown"
 

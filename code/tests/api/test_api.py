@@ -478,6 +478,7 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
                     "end_column": 2,
                 },
                 dataflow=[],
+                call_path=[],
                 status=FindingStatus.CANDIDATE,
                 evidence_ids=[],
                 review_ids=[],

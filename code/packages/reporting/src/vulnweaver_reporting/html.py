@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from html import escape
 
-from vulnweaver_contracts import Finding, Poc
+from vulnweaver_contracts import Evidence, Finding, Poc
 
 
 def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, int]:
@@ -16,7 +16,32 @@ def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, i
     return counts
 
 
-def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
+def _call_path_html(finding: Finding) -> str:
+    steps = finding["call_path"]
+    if not steps:
+        return ""
+    items = "".join(
+        f"<li><code>{escape(str(getattr(step['relation'], 'value', step['relation'])))}</code> "
+        f"{escape(step['function_name'][:2048])} <code>{escape(_step_location(step))}</code></li>"
+        for step in steps
+    )
+    return f"<p><b>Call path:</b></p><ul>{items}</ul>"
+
+
+def _step_location(step: Mapping[str, object]) -> str:
+    path = step.get("path")
+    if isinstance(path, str) and path:
+        line = step.get("line")
+        return f"{path[:4096]}:{line if isinstance(line, int) else 1}"
+    address = step.get("address")
+    return f"0x{address:x}" if isinstance(address, int) else "unknown"
+
+
+def build_html(
+    findings: Sequence[Finding],
+    pocs: Sequence[Poc] = (),
+    evidence: dict[str, list[Evidence]] | None = None,
+) -> str:
     """Build a self-contained, escaped HTML report suitable for a PDF engine."""
     poc_counts = _poc_counts(findings, pocs)
     pocs_by_finding: dict[str, list[Poc]] = {}
@@ -24,9 +49,12 @@ def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
         pocs_by_finding.setdefault(poc["finding_id"], []).append(poc)
     items: list[str] = []
     for finding in findings:
+        finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
-        path = escape(str(location.get("path", "unknown")))
-        line = location.get("line", 1)
+        address = location.get("address")
+        location_text = f"0x{address:x}" if isinstance(address, int) else (
+            f"{location.get('path', 'unknown')}:{location.get('line', 1)}"
+        )
         severity = escape(str(getattr(finding["severity"], "value", finding["severity"])))
         status = escape(str(getattr(finding["status"], "value", finding["status"])))
         items.append(
@@ -34,18 +62,26 @@ def build_html(findings: Sequence[Finding], pocs: Sequence[Poc] = ()) -> str:
             f"<h2>{escape(finding['title'][:256])}</h2>"
             f"<p><b>ID:</b> <code>{escape(finding['id'])}</code> "
             f"<b>CWE:</b> <code>{escape(finding['cwe_id'])}</code></p>"
-            f"<p><b>Location:</b> <code>{path}:{line}</code></p>"
+            f"<p><b>Location:</b> <code>{escape(str(location_text))}</code></p>"
             f"<p><b>Severity:</b> <code>{severity}</code> "
             f"<b>Status:</b> <code>{status}</code></p>"
             f"<p><b>Evidence references:</b> "
             f"{escape(', '.join(finding['evidence_ids']) or 'none')}<br/>"
             f"<b>Review references:</b> {escape(', '.join(finding['review_ids']) or 'none')}</p>"
             f"<p><b>Proof runs:</b> {poc_counts.get(finding['id'], 0)}</p>"
+            + _call_path_html(finding)
             + "".join(
                 f"<p><b>Proof {escape(poc['id'])}:</b> "
                 f"{escape(str(getattr(poc['status'], 'value', poc['status'])))} / "
                 f"{escape(str(getattr(poc['result'], 'value', poc['result'])))}</p>"
                 for poc in pocs_by_finding.get(finding["id"], [])
+            )
+            + "".join(
+                f"<p><b>Evidence {escape(item['id'])}:</b> "
+                f"{escape(str(getattr(item['type'], 'value', item['type'])))}; "
+                f"artifact <code>{escape(item['artifact_ref'])}</code>; "
+                f"digest <code>{escape(item['digest'])}</code></p>"
+                for item in finding_evidence
             )
             + f"<p>{escape(finding['fix_suggestion'][:4096])}</p>"
             "</article>"

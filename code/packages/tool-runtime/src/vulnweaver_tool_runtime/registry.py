@@ -60,6 +60,19 @@ class ToolRegistry:
 
         return tuple(copy.deepcopy(self._specs[key]) for key in sorted(self._specs))
 
+    def digests(self) -> dict[tuple[str, str], str]:
+        """Return the pinned image digest of every registered tool identity.
+
+        ``ToolSpec.image_digest`` is a schema-enforced ``Sha256Digest``, so every
+        registered identity is pinned by construction.  The Sandbox Runner serves
+        these to Workers, which keeps the answered identities identical to the
+        ones the Runner actually enforces.
+        """
+
+        return {
+            (spec["name"], spec["version"]): spec["image_digest"] for spec in self.snapshot()
+        }
+
     def __len__(self) -> int:
         return len(self._specs)
 

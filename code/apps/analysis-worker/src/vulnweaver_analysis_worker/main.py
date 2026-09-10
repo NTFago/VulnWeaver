@@ -12,7 +12,23 @@ from typing import Any
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
-from vulnweaver_contracts import ToolIdentity
+from vulnweaver_contracts import (
+    CrashRecord,
+    Finding,
+    FindingCategory,
+    ResourceBudget,
+    Task,
+    ToolIdentity,
+)
+from vulnweaver_fuzzing import (
+    AFL_CASR_TOOL_NAME,
+    AFL_CASR_TOOL_VERSION,
+    CASR_TOOL_NAME,
+    CASR_TOOL_VERSION,
+    FuzzExecutionService,
+    FuzzJobExecutor,
+    afl_casr_tool_spec,
+)
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGateway,
@@ -23,6 +39,8 @@ from vulnweaver_model_gateway import (
 from vulnweaver_orchestrator import (
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
+    FuzzJobScheduler,
+    FuzzTarget,
     IndependentModelReviewer,
     ReversePlanningAgent,
     ReviewJobExecutor,
@@ -31,9 +49,10 @@ from vulnweaver_orchestrator import (
     SemanticAuditor,
     SemanticAuditScheduler,
     TaskAggregateSettlementHook,
+    persist_crash_evidence,
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
-from vulnweaver_persistence import Database, DatabaseSettings
+from vulnweaver_persistence import Database, DatabaseSettings, Repositories
 from vulnweaver_proof import (
     AutoExploitScheduler,
     ExploitScriptGenerator,
@@ -49,7 +68,8 @@ from vulnweaver_source_analysis import (
     StaticAnalysisExecutor,
     StaticAnalysisScheduler,
 )
-from vulnweaver_tool_runtime import ToolSpecLoader
+from vulnweaver_tool_runtime import ToolRegistry, ToolSpecLoader
+from vulnweaver_tool_runtime.errors import ToolRuntimeError
 from vulnweaver_worker import ReliableWorker, WorkerSettings
 
 from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
@@ -99,6 +119,8 @@ async def _run() -> None:
         ),
     )
     proof_executor = _proof_executor(database, store, model_gateway)
+    fuzz_executor = await _fuzz_executor(database, store, tool_registry)
+    fuzz_scheduler = _fuzz_scheduler(database)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -157,6 +179,7 @@ async def _run() -> None:
         proof=proof_executor,
         report=report_executor,
         semantic_audit=audit_executor,
+        fuzz=fuzz_executor,
     )
     worker = ReliableWorker(
         database,
@@ -173,7 +196,7 @@ async def _run() -> None:
             shutdown_grace_seconds=float(os.environ.get("WORKER_SHUTDOWN_GRACE_SECONDS", "30")),
         ),
         settlement_hook=TaskAggregateSettlementHook(
-            review_scheduler, audit_scheduler, exploit_scheduler
+            review_scheduler, audit_scheduler, exploit_scheduler, fuzz_scheduler
         ),
     )
     stop = asyncio.Event()
@@ -306,9 +329,8 @@ def _proof_executor(
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None
-    client = SandboxRunnerClient(
-        runner_url,
-        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")),
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60"))
     )
     service = ProofExecutionService(
         client,
@@ -331,13 +353,136 @@ def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
     return AutoExploitScheduler(database, image_digest=image_digest)
 
 
+def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
+    """Build a Runner client that authenticates whenever the deployment pins a token."""
+
+    return SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=timeout,
+        bearer_token=os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None,
+    )
+
+
+def _fuzz_resource_budget() -> ResourceBudget:
+    return ResourceBudget(
+        max_model_tokens=0,
+        cpu_millis=int(os.environ.get("AFL_CPU_MILLIS", "4000")),
+        memory_bytes=int(os.environ.get("AFL_MEMORY_BYTES", str(1024 * 1024 * 1024))),
+        disk_bytes=int(os.environ.get("AFL_DISK_BYTES", str(512 * 1024 * 1024))),
+        max_tool_concurrency=1,
+        max_dynamic_runs=1,
+        timeout_seconds=int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
+    )
+
+
+async def _fuzz_executor(
+    database: Database, store: LocalContentAddressedStore, tool_registry: ToolRegistry
+) -> FuzzJobExecutor | None:
+    """Assemble the fuzz executor from the digest the Runner actually enforces.
+
+    The pinned digest is read from the Runner's registered-tool endpoint when the
+    deployment did not supply one, so no caller-supplied digest or command reaches
+    the sandbox.
+    """
+
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("FUZZ_RUNNER_TIMEOUT_SECONDS", "600"))
+    )
+    try:
+        spec = tool_registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+    except ToolRuntimeError:
+        digest = await client.tool_digest(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+        if digest is None:
+            # No pinned fuzz image on either side: leave the executor unconfigured
+            # rather than let an unpinned request reach the Runner.
+            return None
+        spec = afl_casr_tool_spec(digest, _fuzz_resource_budget())
+        tool_registry.register(spec)
+    return FuzzJobExecutor(
+        FuzzExecutionService(
+            store,
+            tool_registry,
+            client,
+            fuzz_tool=ToolIdentity(
+                name=spec["name"], version=spec["version"], image_digest=spec["image_digest"]
+            ),
+            crash_tool=ToolIdentity(
+                name=CASR_TOOL_NAME, version=CASR_TOOL_VERSION, image_digest=spec["image_digest"]
+            ),
+        ),
+        crash_sink=_CrashEvidenceSink(database),
+    )
+
+
+def _fuzz_scheduler(database: Database) -> FuzzJobScheduler | None:
+    """Enable automatic fuzz dispatch; the resolver declines when it cannot run."""
+    if not os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip():
+        # Without a pinned fuzz image the scheduler would only ever decline.
+        return None
+    return FuzzJobScheduler(database, target_resolver=_fuzz_target)
+
+
+async def _fuzz_target(
+    repositories: Repositories, finding: Finding, task: Task
+) -> FuzzTarget | None:
+    """Resolve a bounded fuzz target for one Finding, or decline.
+
+    Fuzzing is dynamic execution, so it runs only for reportable memory-safety
+    or injection candidates and only against the artifact the Finding is
+    anchored to. The anchored artifact doubles as the visible seed corpus: it is
+    present in both the fuzz and binary-facts CAS by construction, and the bundle
+    builder keeps the total seed budget bounded. When the deployment has not
+    pinned a fuzz digest, no target is produced and dispatch is skipped.
+    """
+    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
+    if not digest:
+        return None
+    if finding["category"] not in _FUZZABLE_CATEGORIES:
+        return None
+    artifact_version_id = finding["location"]["artifact_version_id"]
+    if artifact_version_id not in set(task["artifact_version_ids"]):
+        # Only fuzz an artifact the task was submitted against; anything else
+        # would run dynamic analysis outside the authorized scope.
+        return None
+    version = await repositories.artifacts.get_version(artifact_version_id)
+    return FuzzTarget(
+        artifact_version_id=artifact_version_id,
+        target_ref=version["object_ref"],
+        seed_refs=(version["object_ref"],),
+        image_digest=digest,
+        max_executions=int(os.environ.get("AFL_MAX_EXECUTIONS", "10000")),
+        max_duration_seconds=int(os.environ.get("AFL_MAX_DURATION_SECONDS", "60")),
+        max_crashes=int(os.environ.get("AFL_MAX_CRASHES", "16")),
+    )
+
+
+_FUZZABLE_CATEGORIES = frozenset(
+    {FindingCategory.MEMORY_CORRUPTION, FindingCategory.INJECTION}
+)
+
+
+class _CrashEvidenceSink:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def persist(
+        self, *, finding_id: str, crashes: tuple[CrashRecord, ...], created_by: str
+    ) -> tuple[str, ...]:
+        async with self._database.transaction() as repositories:
+            return await persist_crash_evidence(
+                repositories, finding_id=finding_id, crashes=crashes, created_by=created_by
+            )
+
+
 async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None, None
-    client = SandboxRunnerClient(
-        runner_url,
-        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
+    client = _sandbox_client(
+        runner_url, float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600"))
     )
     digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip() or None
     if digest is None:

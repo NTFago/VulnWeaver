@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-contracts",
+    "vulnweaver-model-gateway",
     "vulnweaver-sandbox-runner",
     "vulnweaver-tool-runtime",
 ]
@@ -17,6 +18,7 @@ build-backend = "uv_build"
 [tool.uv.sources]
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-contracts = { workspace = true }
+vulnweaver-model-gateway = { workspace = true }
 vulnweaver-sandbox-runner = { workspace = true }
 vulnweaver-tool-runtime = { workspace = true }
 

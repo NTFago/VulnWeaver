@@ -78,6 +78,11 @@ class SandboxRunner:
             raise ValueError("sandbox label is invalid")
         self._label = label
 
+    def tool_digests(self) -> dict[tuple[str, str], str]:
+        """Expose the digest-pinned tool identities this Runner enforces."""
+
+        return self._registry.digests()
+
     async def run(
         self,
         request: SandboxRequest,

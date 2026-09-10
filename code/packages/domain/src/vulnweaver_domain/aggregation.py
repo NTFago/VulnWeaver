@@ -33,6 +33,7 @@ _ACTIVE_JOB_PHASE = {
     JobKind.SEMANTIC_AUDIT: TaskStatus.ANALYZING,
     JobKind.BINARY_ANALYSIS: TaskStatus.ANALYZING,
     JobKind.REVIEW: TaskStatus.REVIEWING,
+    JobKind.FUZZ: TaskStatus.VERIFYING,
     JobKind.PROOF: TaskStatus.VERIFYING,
     JobKind.EXPLOIT: TaskStatus.EXPLOITING,
     JobKind.REPORT: TaskStatus.REPORTING,

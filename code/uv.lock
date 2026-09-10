@@ -1807,6 +1807,7 @@ source = { editable = "apps/analysis-worker" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-binary-analysis" },
+    { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
@@ -1822,6 +1823,7 @@ dependencies = [
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
@@ -1946,6 +1948,7 @@ source = { editable = "packages/fuzzing" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
+    { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-sandbox-runner" },
     { name = "vulnweaver-tool-runtime" },
 ]
@@ -1954,6 +1957,7 @@ dependencies = [
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
+    { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-sandbox-runner", editable = "packages/sandbox-runner" },
     { name = "vulnweaver-tool-runtime", editable = "packages/tool-runtime" },
 ]
@@ -1982,7 +1986,9 @@ dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
     { name = "vulnweaver-domain" },
+    { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-model-gateway" },
+    { name = "vulnweaver-pair" },
     { name = "vulnweaver-persistence" },
     { name = "vulnweaver-queue" },
     { name = "vulnweaver-source-analysis" },
@@ -1995,7 +2001,9 @@ requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },
     { name = "vulnweaver-domain", editable = "packages/domain" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
+    { name = "vulnweaver-pair", editable = "packages/pair" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
     { name = "vulnweaver-queue", editable = "packages/queue" },
     { name = "vulnweaver-source-analysis", editable = "packages/source-analysis" },

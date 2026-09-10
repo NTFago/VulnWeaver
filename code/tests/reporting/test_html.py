@@ -21,6 +21,7 @@ def test_html_escapes_finding_text() -> None:
             "confidence": 0.9,
             "location": {"path": "a&b.py", "line": 2},
             "dataflow": [],
+            "call_path": [],
             "status": "candidate",
             "evidence_ids": [],
             "review_ids": [],
@@ -66,6 +67,7 @@ def test_build_html_counts_proof_runs_per_finding() -> None:
                 "end_column": 10,
             },
             "dataflow": [],
+            "call_path": [],
             "status": "confirmed",
             "evidence_ids": [],
             "review_ids": [],
@@ -103,3 +105,49 @@ def test_build_html_counts_proof_runs_per_finding() -> None:
     html = build_html([finding], [poc])
     assert "<b>Proof runs:</b> 1" in html
     assert build_html([finding]) .count("Proof runs:</b> 0") == 1
+
+
+def test_html_renders_the_projected_call_path() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:call-path",
+            "task_id": "task:1",
+            "category": "memory_corruption",
+            "cwe_id": "CWE-120",
+            "title": "Overflow",
+            "severity": "critical",
+            "confidence": 0.8,
+            "location": {"path": "src/app.c", "line": 10},
+            "dataflow": [],
+            "call_path": [
+                {
+                    "relation": "target",
+                    "function_name": "handler",
+                    "path": "src/app.c",
+                    "line": 10,
+                    "address": None,
+                },
+                {
+                    "relation": "callee",
+                    "function_name": "win_copy",
+                    "path": None,
+                    "line": None,
+                    "address": 0x401000,
+                },
+            ],
+            "status": "confirmed",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "Fix it",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    html = build_html([finding])
+
+    assert "Call path:" in html
+    assert "<code>target</code> handler <code>src/app.c:10</code>" in html
+    assert "<code>callee</code> win_copy <code>0x401000</code>" in html

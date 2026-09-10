@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import cast
+from typing import TypeGuard, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -11,7 +11,13 @@ from vulnweaver_contracts import SandboxRequest, SandboxResult, validate_contrac
 
 
 class SandboxRunnerClient:
-    def __init__(self, base_url: str, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        timeout_seconds: float = 30.0,
+        bearer_token: str | None = None,
+    ) -> None:
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("sandbox runner URL must use http or https")
@@ -19,19 +25,50 @@ class SandboxRunnerClient:
             raise ValueError("sandbox runner URL must not contain credentials or query data")
         if timeout_seconds <= 0 or timeout_seconds > 600:
             raise ValueError("sandbox runner timeout must be between 0 and 600 seconds")
+        if bearer_token is not None and not bearer_token:
+            raise ValueError("sandbox bearer token must not be empty")
         self._url = base_url.rstrip("/") + "/v1/sandbox/runs"
+        self._base = base_url.rstrip("/")
         self._timeout = timeout_seconds
+        self._headers = {"Authorization": f"Bearer {bearer_token}"} if bearer_token else {}
 
     async def tool_digest(self, tool_name: str, tool_version: str) -> str | None:
         """Read a digest registered by the Runner without accessing Docker."""
+        payload = await self._get_json(f"/v1/tools/{tool_name}/{tool_version}")
+        if payload is None:
+            return None
+        digest = payload.get("image_digest")
+        return digest if _is_digest(digest) else None
+
+    async def registered_tools(self) -> dict[tuple[str, str], str]:
+        """List every digest-pinned tool identity the Runner enforces."""
+        payload = await self._get_json("/v1/tools")
+        if payload is None:
+            return {}
+        entries = payload.get("tools")
+        if not isinstance(entries, list):
+            return {}
+        tools: dict[tuple[str, str], str] = {}
+        for entry in cast(list[object], entries):
+            if not isinstance(entry, dict):
+                continue
+            item = cast(dict[str, object], entry)
+            name, version, digest = (
+                item.get("tool_name"),
+                item.get("tool_version"),
+                item.get("image_digest"),
+            )
+            if isinstance(name, str) and isinstance(version, str) and _is_digest(digest):
+                tools[(name, version)] = digest
+        return tools
+
+    async def _get_json(self, path: str) -> dict[str, object] | None:
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-                endpoint = f"{self._url.rsplit('/', 2)[0]}/tools/{tool_name}/{tool_version}"
-                response = await client.get(endpoint)
+                response = await client.get(f"{self._base}{path}", headers=self._headers)
             response.raise_for_status()
-            payload = cast(dict[str, object], response.json())
-            digest = payload.get("image_digest")
-            return digest if isinstance(digest, str) and digest.startswith("sha256:") else None
+            payload = response.json()
+            return cast(dict[str, object], payload) if isinstance(payload, dict) else None
         except (httpx.HTTPError, ValueError, TypeError):
             return None
 
@@ -53,7 +90,7 @@ class SandboxRunnerClient:
     async def _request(self, request: SandboxRequest) -> SandboxResult:
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
-                response = await client.post(self._url, json=request)
+                response = await client.post(self._url, json=request, headers=self._headers)
             response.raise_for_status()
             result = cast(SandboxResult, response.json())
             validate_contract("SandboxResult", result)
@@ -65,6 +102,10 @@ class SandboxRunnerClient:
                 SandboxResult,
                 _failure(request["id"], "sandbox.transport_failed", str(error)),
             )
+
+
+def _is_digest(value: object) -> TypeGuard[str]:
+    return isinstance(value, str) and value.startswith("sha256:")
 
 
 def _failure(request_id: str, code: str, detail: str = "") -> dict[str, object]:

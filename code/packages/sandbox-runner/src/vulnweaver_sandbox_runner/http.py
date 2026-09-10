@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -14,21 +14,45 @@ from vulnweaver_contracts import SandboxRequest, SandboxResult, validate_contrac
 
 from vulnweaver_sandbox_runner.runner import SandboxRunner
 
+ToolDigests = Mapping[tuple[str, str], str] | Callable[[], Mapping[tuple[str, str], str]]
+
 
 def create_sandbox_app(
     runner: SandboxRunner,
     *,
     bearer_token: str | None = None,
-    tool_digests: Mapping[tuple[str, str], str] | None = None,
+    tool_digests: ToolDigests | None = None,
 ) -> FastAPI:
-    """Create the private service boundary around one configured Runner."""
+    """Create the private service boundary around one configured Runner.
+
+    ``tool_digests`` defaults to the Runner's own registry, so the served
+    identities are exactly the ones the Runner will enforce.
+    """
+
     if bearer_token is not None and not bearer_token:
         raise ValueError("sandbox bearer token must not be empty")
     app = FastAPI(title="VulnWeaver Sandbox Runner", docs_url=None, redoc_url=None)
 
+    def current_digests() -> Mapping[tuple[str, str], str]:
+        source = tool_digests if tool_digests is not None else runner.tool_digests
+        return source() if callable(source) else source
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/v1/tools")
+    async def list_tools(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        _authorize(authorization, bearer_token)
+        digests = current_digests()
+        return {
+            "tools": [
+                {"tool_name": name, "tool_version": version, "image_digest": digest}
+                for (name, version), digest in sorted(digests.items())
+            ]
+        }
 
     @app.get("/v1/tools/{tool_name}/{tool_version}")
     async def tool_digest(
@@ -37,7 +61,7 @@ def create_sandbox_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, str]:
         _authorize(authorization, bearer_token)
-        digest = (tool_digests or {}).get((tool_name, tool_version))
+        digest = current_digests().get((tool_name, tool_version))
         if digest is None:
             raise HTTPException(status_code=404, detail="tool is not registered")
         return {"tool_name": tool_name, "tool_version": tool_version, "image_digest": digest}

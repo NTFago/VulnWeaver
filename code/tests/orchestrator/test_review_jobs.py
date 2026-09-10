@@ -163,6 +163,7 @@ def _finding(finding_id: str, task_id: str, version_id: str) -> Finding:
                 "end_column": 2,
             },
             "dataflow": [],
+            "call_path": [],
             "status": FindingStatus.CANDIDATE,
             "evidence_ids": [],
             "review_ids": [],

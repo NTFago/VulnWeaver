@@ -329,6 +329,7 @@ findings = Table(
     Column("confidence", Float(), nullable=False),
     Column("location", JSONB, nullable=False),
     Column("dataflow", JSONB, nullable=False),
+    Column("call_path", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
     Column("evidence_ids", JSONB, nullable=False),
     Column("review_ids", JSONB, nullable=False),

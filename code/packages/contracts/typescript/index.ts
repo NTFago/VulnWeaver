@@ -15,7 +15,7 @@ export type TaskResult = "success" | "partial" | "no_findings";
 
 export type JobStatus = "pending" | "queued" | "running" | "waiting_permission" | "succeeded" | "failed" | "cancelled";
 
-export type JobKind = "validate" | "import" | "source_analysis" | "semantic_audit" | "binary_analysis" | "review" | "proof" | "exploit" | "report";
+export type JobKind = "validate" | "import" | "source_analysis" | "semantic_audit" | "binary_analysis" | "review" | "fuzz" | "proof" | "exploit" | "report";
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -59,6 +59,10 @@ export interface CrashRecord {
   fuzz_tool: ToolIdentity;
   tool: ToolIdentity;
   created_at: string;
+}
+
+export interface HarnessSource {
+  source: string;
 }
 
 export interface FuzzRequest {
@@ -470,6 +474,14 @@ export interface DataflowStep {
   order: number;
 }
 
+export interface CallPathStep {
+  relation: "target" | "caller" | "callee";
+  function_name: string;
+  path: string | null;
+  line: number | null;
+  address: number | null;
+}
+
 export interface NetworkPolicy {
   access: NetworkAccess;
   allowed_hosts: Array<string>;
@@ -588,6 +600,7 @@ export interface Finding {
   confidence: number;
   location: FindingLocation;
   dataflow: Array<DataflowStep>;
+  call_path: Array<CallPathStep>;
   status: FindingStatus;
   evidence_ids: Array<Identifier>;
   review_ids: Array<Identifier>;

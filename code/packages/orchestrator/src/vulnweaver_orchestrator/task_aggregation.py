@@ -47,6 +47,7 @@ _JOB_PHASES = {
     JobKind.SEMANTIC_AUDIT: TaskStatus.ANALYZING,
     JobKind.BINARY_ANALYSIS: TaskStatus.ANALYZING,
     JobKind.REVIEW: TaskStatus.REVIEWING,
+    JobKind.FUZZ: TaskStatus.VERIFYING,
     JobKind.PROOF: TaskStatus.VERIFYING,
     JobKind.EXPLOIT: TaskStatus.EXPLOITING,
     JobKind.REPORT: TaskStatus.REPORTING,
@@ -64,16 +65,26 @@ class ExploitDispatchScheduler(Protocol):
     ) -> str | None: ...
 
 
+class FuzzDispatchScheduler(Protocol):
+    """Implemented by the orchestrator fuzz scheduler; enqueues one fuzz Job."""
+
+    async def schedule_finding_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None: ...
+
+
 class TaskAggregateSettlementHook:
     def __init__(
         self,
         review_scheduler: ReviewJobScheduler | None = None,
         audit_scheduler: SemanticAuditScheduler | None = None,
         exploit_scheduler: ExploitDispatchScheduler | None = None,
+        fuzz_scheduler: FuzzDispatchScheduler | None = None,
     ) -> None:
         self._review_scheduler = review_scheduler
         self._audit_scheduler = audit_scheduler
         self._exploit_scheduler = exploit_scheduler
+        self._fuzz_scheduler = fuzz_scheduler
 
     async def after_terminal(
         self, repositories: Repositories, job: Job, result: WorkerResult
@@ -127,6 +138,21 @@ class TaskAggregateSettlementHook:
                 for finding in findings:
                     if finding["status"] is FindingStatus.CONFIRMED:
                         await self._exploit_scheduler.schedule_in_transaction(
+                            repositories, finding["id"]
+                        )
+        if (
+            self._fuzz_scheduler is not None
+            and job["kind"] is JobKind.REVIEW
+            and not review_pending
+        ):
+            # T32: fuzzing is dynamic execution, so it uses the same explicit
+            # project opt-in as exploit verification. The scheduler resolves the
+            # target and seeds and declines when it has no bounded target to run.
+            project = await repositories.projects.get(task["project_id"])
+            if project["exploit_validation_enabled"]:
+                for finding in findings:
+                    if finding["status"] is not FindingStatus.FALSE_POSITIVE:
+                        await self._fuzz_scheduler.schedule_finding_in_transaction(
                             repositories, finding["id"]
                         )
         aggregate = aggregate_task(

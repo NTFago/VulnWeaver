@@ -124,9 +124,7 @@ class FindingReviewGate:
             if not confirmation_allowed:
                 return ReviewGateResult(False, decision, fact_context)
         transition_finding(finding["status"], outcome, confirmation=decision)
-        await repositories.findings.add_review(
-            review, confirmation_allowed=confirmation_allowed
-        )
+        await repositories.findings.add_review(review, confirmation_allowed=confirmation_allowed)
         return ReviewGateResult(True, decision, fact_context)
 
 

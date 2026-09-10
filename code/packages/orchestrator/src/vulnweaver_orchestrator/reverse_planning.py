@@ -132,9 +132,7 @@ class ReversePlanningAgent:
         self._gateway = gateway
         self._database = database
         self._sink = sink
-        self._budget = budget or AgentLoopBudget(
-            max_planning_rounds=2, max_plan_rejections=1
-        )
+        self._budget = budget or AgentLoopBudget(max_planning_rounds=2, max_plan_rejections=1)
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic: Callable[[], float] | None = monotonic
 
@@ -238,4 +236,3 @@ def planning_context(
             "pseudocode_count": pseudocode_count,
         },
     )
-

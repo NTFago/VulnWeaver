@@ -20,6 +20,7 @@ def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
             "confidence": 0.9,
             "location": {"path": "src/main.py", "line": 12},
             "dataflow": [],
+            "call_path": [],
             "status": "candidate",
             "evidence_ids": [],
             "review_ids": [],
@@ -67,3 +68,79 @@ def test_sarif_validation_rejects_malformed_result() -> None:
         assert "level" in str(error)
     else:
         raise AssertionError("malformed SARIF result was accepted")
+
+
+def test_sarif_expresses_the_call_path_as_a_thread_flow() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:flow",
+            "task_id": "task:1",
+            "category": "memory_corruption",
+            "cwe_id": "CWE-120",
+            "title": "Overflow",
+            "severity": "critical",
+            "confidence": 0.8,
+            "location": {"path": "src/app.c", "line": 10},
+            "dataflow": [],
+            "call_path": [
+                {
+                    "relation": "target",
+                    "function_name": "handler",
+                    "path": "src/app.c",
+                    "line": 10,
+                    "address": None,
+                },
+                {
+                    "relation": "callee",
+                    "function_name": "win_copy",
+                    "path": None,
+                    "line": None,
+                    "address": 0x401000,
+                },
+            ],
+            "status": "confirmed",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "fix",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    result = build_sarif([finding])["runs"][0]["results"][0]
+
+    locations = result["codeFlows"][0]["threadFlows"][0]["locations"]
+    assert [
+        item["location"]["physicalLocation"]["artifactLocation"]["uri"] for item in locations
+    ] == ["src/app.c", "binary://0x401000"]
+    assert locations[0]["location"]["physicalLocation"]["region"]["startLine"] == 10
+    validate_sarif(build_sarif([finding]))
+
+
+def test_sarif_omits_code_flows_without_a_call_path() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:plain",
+            "task_id": "task:1",
+            "category": "injection",
+            "cwe_id": "CWE-078",
+            "title": "Injection",
+            "severity": "high",
+            "confidence": 0.9,
+            "location": {"path": "src/main.py", "line": 12},
+            "dataflow": [],
+            "call_path": [],
+            "status": "candidate",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "fix",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert build_sarif([finding])["runs"][0]["results"][0]["codeFlows"] == []

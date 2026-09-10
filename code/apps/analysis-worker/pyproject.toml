@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "vulnweaver-artifact-store",
     "vulnweaver-binary-analysis",
+    "vulnweaver-fuzzing",
     "vulnweaver-model-gateway",
     "vulnweaver-orchestrator",
     "vulnweaver-persistence",
@@ -28,6 +29,7 @@ build-backend = "uv_build"
 vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-binary-analysis = { workspace = true }
+vulnweaver-fuzzing = { workspace = true }
 vulnweaver-model-gateway = { workspace = true }
 vulnweaver-orchestrator = { workspace = true }
 vulnweaver-persistence = { workspace = true }

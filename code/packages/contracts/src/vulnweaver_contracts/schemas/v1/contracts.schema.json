@@ -30,7 +30,7 @@
     },
     "JobKind": {
       "type": "string",
-      "enum": ["validate", "import", "source_analysis", "semantic_audit", "binary_analysis", "review", "proof", "exploit", "report"]
+      "enum": ["validate", "import", "source_analysis", "semantic_audit", "binary_analysis", "review", "fuzz", "proof", "exploit", "report"]
     },
     "RunStatus": {
       "type": "string",
@@ -106,6 +106,14 @@
         "fuzz_tool": {"$ref": "#/$defs/ToolIdentity"},
         "tool": {"$ref": "#/$defs/ToolIdentity"},
         "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "HarnessSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": {"type": "string", "minLength": 1, "maxLength": 65536}
       }
     },
     "FuzzRequest": {
@@ -748,6 +756,18 @@
         "order": {"type": "integer", "minimum": 0}
       }
     },
+    "CallPathStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relation", "function_name", "path", "line", "address"],
+      "properties": {
+        "relation": {"type": "string", "enum": ["target", "caller", "callee"]},
+        "function_name": {"type": "string", "minLength": 1, "maxLength": 2048},
+        "path": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "line": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "address": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]}
+      }
+    },
     "NetworkPolicy": {
       "type": "object",
       "additionalProperties": false,
@@ -894,7 +914,7 @@
     "Finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "id", "task_id", "category", "cwe_id", "title", "severity", "confidence", "location", "dataflow", "status", "evidence_ids", "review_ids", "poc_ids", "fix_suggestion", "created_at"],
+      "required": ["schema_version", "id", "task_id", "category", "cwe_id", "title", "severity", "confidence", "location", "dataflow", "call_path", "status", "evidence_ids", "review_ids", "poc_ids", "fix_suggestion", "created_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "id": {"$ref": "#/$defs/Identifier"},
@@ -906,6 +926,11 @@
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "location": {"$ref": "#/$defs/FindingLocation"},
         "dataflow": {"type": "array", "items": {"$ref": "#/$defs/DataflowStep"}},
+        "call_path": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/CallPathStep"}
+        },
         "status": {"$ref": "#/$defs/FindingStatus"},
         "evidence_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
         "review_ids": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},

@@ -55,6 +55,7 @@ class JobKind(StrEnum):
     SEMANTIC_AUDIT = 'semantic_audit'
     BINARY_ANALYSIS = 'binary_analysis'
     REVIEW = 'review'
+    FUZZ = 'fuzz'
     PROOF = 'proof'
     EXPLOIT = 'exploit'
     REPORT = 'report'
@@ -229,6 +230,9 @@ class CrashRecord(TypedDict):
     fuzz_tool: ToolIdentity
     tool: ToolIdentity
     created_at: str
+
+class HarnessSource(TypedDict):
+    source: str
 
 class FuzzRequest(TypedDict):
     schema_version: SchemaVersion
@@ -575,6 +579,13 @@ class DataflowStep(TypedDict):
     label: str
     order: int
 
+class CallPathStep(TypedDict):
+    relation: Literal['target', 'caller', 'callee']
+    function_name: str
+    path: str | None
+    line: int | None
+    address: int | None
+
 class NetworkPolicy(TypedDict):
     access: NetworkAccess
     allowed_hosts: list[str]
@@ -684,6 +695,7 @@ class Finding(TypedDict):
     confidence: float
     location: FindingLocation
     dataflow: list[DataflowStep]
+    call_path: list[CallPathStep]
     status: FindingStatus
     evidence_ids: list[Identifier]
     review_ids: list[Identifier]
