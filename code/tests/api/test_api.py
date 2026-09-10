@@ -157,7 +157,7 @@ def test_product_settings_require_auth_and_never_echo_api_key(
     writable = {
         key: value
         for key, value in saved.json().items()
-        if key not in {"api_key_configured", "review_model_api_key"}
+        if key not in {"api_key_configured", "review_model_api_key", "tier_api_keys_configured"}
     }
     preserved = client.put(
         "/api/settings",
@@ -176,6 +176,173 @@ def test_product_settings_require_auth_and_never_echo_api_key(
     )
     assert cleared.status_code == 200
     assert cleared.json()["api_key_configured"] is False
+
+
+def test_product_settings_accept_and_reject_tool_image_digests(
+    client: TestClient,
+) -> None:
+    csrf = _login_and_change_password(client)
+    good = "sha256:" + "a" * 64
+
+    saved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "tool_image_digests": {"binary_tools": good, "proof_tool": None, "afl_casr": None},
+            "sandbox_budgets": {"afl": {"cpu_millis": 5000, "timeout_seconds": 90}},
+            "fuzz_budgets": {
+                "max_executions": 500,
+                "max_duration_seconds": 60,
+                "max_crashes": 8,
+            },
+            "sandbox_runner_timeout_seconds": 45,
+            "fuzz_runner_timeout_seconds": 900,
+            "angr_enabled": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["tool_image_digests"] == {
+        "binary_tools": good,
+        "proof_tool": None,
+        "afl_casr": None,
+    }
+    assert body["sandbox_budgets"]["afl"]["cpu_millis"] == 5000
+    assert body["sandbox_budgets"]["afl"]["timeout_seconds"] == 90
+    assert body["fuzz_budgets"]["max_executions"] == 500
+    assert body["sandbox_runner_timeout_seconds"] == 45
+    assert body["angr_enabled"] is True
+    assert client.get("/api/settings").json() == body
+
+    malformed = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={**body, "tool_image_digests": {"binary_tools": "sha256:xyz"}},
+    )
+    assert malformed.status_code == 422
+    out_of_range = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            **body,
+            "fuzz_budgets": {
+                "max_executions": 2_000_000_000,
+                "max_duration_seconds": 0,
+                "max_crashes": 0,
+            },
+        },
+    )
+    assert out_of_range.status_code == 422
+
+
+def test_product_settings_tier_models_and_api_key_isolation(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+
+    saved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "model_tiers": {
+                "planning": {
+                    "protocol": "anthropic",
+                    "base_url": "https://claude.example/v1/",
+                    "model_name": "claude-planner",
+                    "context_window_tokens": 200000,
+                    "thinking_mode": "custom",
+                    "thinking_budget_tokens": 8192,
+                },
+                "review": {
+                    "protocol": "openai",
+                    "base_url": "https://glm.example/v1",
+                    "model_name": "glm-reviewer",
+                },
+            },
+            "tier_api_keys": {"planning": "claude-key-never-echoed"},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert "claude-key-never-echoed" not in saved.text
+    assert body["model_tiers"]["planning"]["base_url"] == "https://claude.example/v1"
+    assert body["model_tiers"]["planning"]["protocol"] == "anthropic"
+    assert body["model_tiers"]["planning"]["thinking_budget_tokens"] == 8192
+    assert body["tier_api_keys_configured"] == {
+        "planning": True,
+        "audit": False,
+        "review": False,
+        "report": False,
+    }
+    assert "tier_api_keys" not in body
+
+    # a follow-up save without keys preserves the stored tier key
+    preserved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "model_tiers": body["model_tiers"],
+        },
+    )
+    assert preserved.status_code == 200
+    assert preserved.json()["tier_api_keys_configured"]["planning"] is True
+    assert "claude-key-never-echoed" not in preserved.text
+
+    # clearing the tier key removes it without touching other tiers
+    cleared = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "model_tiers": body["model_tiers"],
+            "clear_tier_api_keys": ["planning"],
+        },
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["tier_api_keys_configured"]["planning"] is False
+
+    # custom thinking below the 1024-token floor is rejected
+    invalid_budget = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "model_tiers": {
+                "planning": {
+                    "protocol": "anthropic",
+                    "base_url": "https://claude.example/v1",
+                    "model_name": "claude-planner",
+                    "thinking_mode": "custom",
+                    "thinking_budget_tokens": 512,
+                },
+            },
+        },
+    )
+    assert invalid_budget.status_code == 422
+
+    # a tier with base_url but no model name (or vice versa) is rejected
+    incomplete = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "review_model_base_url": "",
+            "review_model_name": "",
+            "model_tiers": {"audit": {"base_url": "https://x.example/v1", "model_name": ""}},
+        },
+    )
+    assert incomplete.status_code == 422
 
 
 def test_websocket_disconnect_listener_consumes_until_disconnect() -> None:

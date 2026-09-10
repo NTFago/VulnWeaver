@@ -57,6 +57,19 @@ jobs:
 
           echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
 
+      # The whitespace gate lives in this job because it is the only one with a
+      # full clone; the python-quality checkout is shallow and unauthenticated,
+      # so it can neither resolve nor fetch the base commit.
+      - name: Markdown documentation gate
+        if: steps.scope.outputs.code_changed == 'false'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
+          echo "Documentation-only change: full code quality gate skipped."
+
   python-quality:
     name: Python quality gate
     needs: change-scope
@@ -144,10 +157,3 @@ jobs:
       - name: TypeScript workspace
         if: needs.change-scope.outputs.code_changed == 'true'
         run: pnpm run check:typescript
-
-      - name: Markdown documentation gate
-        if: needs.change-scope.outputs.code_changed != 'true'
-        working-directory: .
-        run: |
-          git diff --check "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
-          echo "Documentation-only change: full code quality gate skipped."

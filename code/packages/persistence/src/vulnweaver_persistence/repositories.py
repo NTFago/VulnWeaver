@@ -397,10 +397,17 @@ class TaskRepository:
         return [_task_from_row(row) for row in rows]
 
     async def set_status(
-        self, task_id: str, status: TaskStatus, *, result: TaskResult | None = None
+        self,
+        task_id: str,
+        status: TaskStatus,
+        *,
+        result: TaskResult | None = None,
+        failure: StructuredFailure | None = None,
     ) -> TaskStatusUpdateResult:
         """Atomically update a task status; repeated target status is idempotent."""
 
+        if failure is not None:
+            validate_contract("StructuredFailure", failure)
         current_row = (
             (
                 await self._connection.execute(
@@ -414,7 +421,12 @@ class TaskRepository:
             raise EntityNotFound("task not found", details={"task_id": task_id})
         current = _task_from_row(current_row)
         previous_status = current["status"]
-        if previous_status is status and current["result"] == result:
+        unchanged = (
+            previous_status is status
+            and current["result"] == result
+            and current["failure"] == failure
+        )
+        if unchanged:
             return TaskStatusUpdateResult(current, False, previous_status)
         row = (
             (
@@ -424,6 +436,7 @@ class TaskRepository:
                     .values(
                         status=str(status),
                         result=str(result) if result is not None else None,
+                        failure=failure,
                         updated_at=func.now(),
                         state_version=tasks.c.state_version + 1,
                     )
@@ -2171,6 +2184,7 @@ def _task_from_row(row: RowMapping) -> Task:
         artifact_version_ids=row["artifact_version_ids"],
         status=TaskStatus(row["status"]),
         result=TaskResult(row["result"]) if row["result"] is not None else None,
+        failure=row["failure"],
         idempotency_key=row["idempotency_key"],
         resource_budget=row["resource_budget"],
         created_at=_format_datetime(row["created_at"]),

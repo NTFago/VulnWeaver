@@ -43,3 +43,6 @@ code/artifacts/
 code/reports/
 code/test-results/
 .fuzz-out/
+
+# Local agent tooling scratch
+.zcode/

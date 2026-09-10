@@ -262,6 +262,39 @@ def test_executor_replaces_caller_arguments_and_publishes_crash_input(
     ]
 
 
+def test_sandbox_request_budget_is_clamped_to_the_tool_spec(tmp_path: Path) -> None:
+    """The Runner refuses a budget above the spec, so the executor must clamp it first."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)
+    seed = store.put_stream(io.BytesIO(b"seed"), max_bytes=1024)
+    sandbox = _FakeSandbox(_sandbox_result(store, b"crashing input"))
+    registry = ToolRegistry([spec()])
+    service = FuzzExecutionService(
+        store,
+        registry,
+        sandbox,
+        fuzz_tool=FUZZ_TOOL,
+        crash_tool=CASR_TOOL,
+        now=lambda: datetime(2026, 9, 9, 8, 0, tzinfo=UTC),
+    )
+    oversized = request(target.object_ref, seed.object_ref)
+    oversized["sandbox_request"]["resource_budget"] = budget(
+        cpu_millis=8000,
+        memory_bytes=3 * 1024**3,
+        disk_bytes=10 * 1024**3,
+        timeout_seconds=3600,
+    )
+
+    asyncio.run(service.run(oversized, asyncio.Event()))
+
+    limits = spec()["resource_limits"]
+    request_budget = sandbox.requests[0]["resource_budget"]
+    for key in ("cpu_millis", "memory_bytes", "disk_bytes", "timeout_seconds"):
+        assert request_budget[key] == limits[key]
+    assert sandbox.requests[0]["timeout_seconds"] <= limits["timeout_seconds"]
+
+
 def test_executor_returns_structured_failure_for_digest_mismatch(tmp_path: Path) -> None:
     store = LocalContentAddressedStore(tmp_path / "cas")
     target = store.put_stream(io.BytesIO(b"target"), max_bytes=1024)

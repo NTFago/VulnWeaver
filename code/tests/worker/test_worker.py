@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from redis.asyncio import Redis
@@ -22,6 +23,7 @@ from vulnweaver_persistence.repositories import JobRepository
 from vulnweaver_queue import (
     DeadLetteredMessage,
     QueueSettings,
+    QueueUnavailable,
     RedisStreamsClient,
     StaleClaimBatch,
     StreamMessage,
@@ -683,6 +685,78 @@ def test_heartbeat_lease_failure_wins_when_execution_finishes_in_same_tick(
         finally:
             await queue.close()
             await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class FlakyReadQueue(RedisStreamsClient):
+    """Fail the first ``failures`` reads with a transient Redis stall, then stop the loop."""
+
+    def __init__(self, settings: QueueSettings, stop: asyncio.Event, *, failures: int) -> None:
+        super().__init__(settings)
+        self.stop = stop
+        self.failures = failures
+        self.read_calls = 0
+
+    async def ensure_group(self, stream: str, group: str, *, start_id: str = "0-0") -> None:
+        del stream, group, start_id
+
+    async def claim_stale(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        min_idle_milliseconds: int,
+        count: int = 10,
+        start_id: str = "0-0",
+    ) -> StaleClaimBatch:
+        del stream, group, consumer, min_idle_milliseconds, count, start_id
+        return StaleClaimBatch("0-0", ())
+
+    async def read_group(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        count: int = 10,
+        block_milliseconds: int | None = 1000,
+    ) -> list[StreamMessage]:
+        del stream, group, consumer, count, block_milliseconds
+        self.read_calls += 1
+        if self.failures > 0:
+            self.failures -= 1
+            raise QueueUnavailable(
+                "Redis operation failed", details={"operation": "read_group"}
+            )
+        self.stop.set()
+        return []
+
+
+def test_transient_queue_failure_keeps_the_worker_consuming() -> None:
+    """A Redis stall must not end the consumer; the loop backs off and resumes polling."""
+
+    async def scenario() -> None:
+        stop = asyncio.Event()
+        queue = FlakyReadQueue(_settings("worker-flaky"), stop, failures=2)
+        worker = ReliableWorker(
+            # No message is ever claimed, so the consume loop never touches the database.
+            cast(Database, None),
+            queue,
+            SuccessExecutor(),
+            replace(
+                _worker_settings("worker-flaky"),
+                retry_base_seconds=0.01,
+                retry_max_seconds=0.02,
+            ),
+        )
+        try:
+            await asyncio.wait_for(worker.run(stop), 5)
+            assert queue.failures == 0
+            assert queue.read_calls >= 3
+        finally:
+            await queue.close()
 
     asyncio.run(scenario())
 

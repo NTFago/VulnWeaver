@@ -631,6 +631,7 @@ class Task(TypedDict):
     artifact_version_ids: list[Identifier]
     status: TaskStatus
     result: TaskResult | None
+    failure: StructuredFailure | None
     idempotency_key: IdempotencyKey
     resource_budget: ResourceBudget
     created_at: str
@@ -879,6 +880,7 @@ class TaskStatusChangedPayload(TypedDict):
     previous_status: TaskStatus
     status: TaskStatus
     result: TaskResult | None
+    failure: StructuredFailure | None
 
 class TaskRequestedPayload(TypedDict):
     task_id: Identifier
@@ -953,7 +955,7 @@ class CreateProjectRequest(TypedDict):
     input_scope: list[str]
     permission_mode: PermissionMode
     exploit_validation_enabled: bool
-    resource_budget: ResourceBudget
+    resource_budget: NotRequired[ResourceBudget]
 
 class CreateTaskRequest(TypedDict):
     schema_version: SchemaVersion
@@ -989,6 +991,58 @@ class ProductSettings(TypedDict):
     review_model_min_interval_seconds: float
     review_model_api_key: NotRequired[str | None]
     clear_review_model_api_key: NotRequired[bool]
+    tool_image_digests: NotRequired[ToolImageDigests]
+    model_tiers: NotRequired[ModelTierSettings]
+    tier_api_keys: NotRequired[TierApiKeys]
+    clear_tier_api_keys: NotRequired[list[Literal['planning', 'audit', 'review', 'report']]]
+    sandbox_budgets: NotRequired[SandboxBudgets]
+    fuzz_budgets: NotRequired[FuzzBudgets]
+    sandbox_runner_timeout_seconds: NotRequired[int]
+    fuzz_runner_timeout_seconds: NotRequired[int]
+    angr_enabled: NotRequired[bool | None]
+
+class ToolImageDigests(TypedDict):
+    binary_tools: NotRequired[Sha256Digest | None]
+    proof_tool: NotRequired[Sha256Digest | None]
+    afl_casr: NotRequired[Sha256Digest | None]
+
+class SandboxResourceBudget(TypedDict):
+    cpu_millis: NotRequired[int]
+    memory_bytes: NotRequired[int]
+    disk_bytes: NotRequired[int]
+    timeout_seconds: NotRequired[int]
+
+class SandboxBudgets(TypedDict):
+    afl: NotRequired[SandboxResourceBudget]
+    proof: NotRequired[SandboxResourceBudget]
+    binary: NotRequired[SandboxResourceBudget]
+
+class FuzzBudgets(TypedDict):
+    max_executions: NotRequired[int]
+    max_duration_seconds: NotRequired[int]
+    max_crashes: NotRequired[int]
+
+class ModelTierSettings(TypedDict):
+    planning: NotRequired[TierModelConfig]
+    audit: NotRequired[TierModelConfig]
+    review: NotRequired[TierModelConfig]
+    report: NotRequired[TierModelConfig]
+
+class TierModelConfig(TypedDict):
+    protocol: NotRequired[Literal['openai', 'anthropic']]
+    base_url: NotRequired[str]
+    model_name: NotRequired[str]
+    context_window_tokens: NotRequired[int]
+    thinking_mode: NotRequired[Literal['off', 'default', 'custom']]
+    thinking_budget_tokens: NotRequired[int]
+    timeout_seconds: NotRequired[float]
+    max_attempts: NotRequired[int]
+
+class TierApiKeys(TypedDict):
+    planning: NotRequired[str | None]
+    audit: NotRequired[str | None]
+    review: NotRequired[str | None]
+    report: NotRequired[str | None]
 
 class PasswordChangeRequest(TypedDict):
     schema_version: SchemaVersion

@@ -19,6 +19,7 @@ from vulnweaver_model_gateway.gateway import (
     ModelRoute,
     ModelTier,
     RedactionPolicy,
+    ThinkingConfig,
     TransportResponse,
 )
 
@@ -39,5 +40,6 @@ __all__ = [
     "ModelTier",
     "ModelTransportError",
     "RedactionPolicy",
+    "ThinkingConfig",
     "TransportResponse",
 ]

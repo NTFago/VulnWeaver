@@ -51,6 +51,33 @@ services:
       - analysis-plane
     restart: unless-stopped
 
+  # The artifact volume is shared by non-root consumers (api, analysis-worker) and by the
+  # root-run Sandbox Runner. Whichever process first writes to a fresh volume owns the
+  # staging and object roots, so a root-owned winner would lock the non-root consumers out
+  # and leave them crash-looping. Create the roots once with the deployment's uid instead.
+  artifact-init:
+    image: python:3.12-slim
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        root=/var/lib/vulnweaver/artifacts
+        mkdir -p "$$root/.staging" "$$root/objects"
+        chown -R 10001:10001 "$$root"
+    volumes:
+      - artifact-data:/var/lib/vulnweaver/artifacts
+    networks: []
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+
   migrate:
     image: vulnweaver-dispatcher:dev
     build:
@@ -125,9 +152,13 @@ services:
       MAX_PASSWORD_CONCURRENCY: ${MAX_PASSWORD_CONCURRENCY:-2}
       MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-8}
       SECURE_COOKIE: ${SECURE_COOKIE:-false}
+      TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
+      - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
     networks:
@@ -199,7 +230,10 @@ services:
       REPORT_TOOL_VERSION: ${REPORT_TOOL_VERSION:-1.0.0}
       SANDBOX_RUNNER_URL: ${SANDBOX_RUNNER_URL:-http://sandbox-runner:8080}
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
-      SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-60}
+      # Must exceed the longest registered tool timeout (binary-facts runs for up to 600s);
+      # the margin lets the Runner's own timeout surface as a structured failure.
+      # Capped at 600 by SandboxRunnerClient; binary-facts runs for up to 600s.
+      SANDBOX_RUNNER_TIMEOUT_SECONDS: ${SANDBOX_RUNNER_TIMEOUT_SECONDS:-600}
       FUZZ_RUNNER_TIMEOUT_SECONDS: ${FUZZ_RUNNER_TIMEOUT_SECONDS:-600}
       PROOF_TOOL_NAME: ${PROOF_TOOL_NAME:-proof-tool}
       PROOF_TOOL_VERSION: ${PROOF_TOOL_VERSION:-1.0.0}
@@ -216,6 +250,8 @@ services:
       - artifact-data:/var/lib/vulnweaver/artifacts
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       redis:
@@ -245,6 +281,7 @@ services:
       ARTIFACT_STORE_ROOT: /var/lib/vulnweaver/artifacts
       TOOL_SPEC_DIRECTORY: /etc/vulnweaver/tool-specs
       SANDBOX_ROOT: /var/lib/vulnweaver/sandbox
+      DATABASE_URL: ${SANDBOX_RUNNER_DATABASE_URL:-${DATABASE_URL:-}}
       DOCKER_HOST_SANDBOX_ROOT: ${DOCKER_HOST_SANDBOX_ROOT:-/var/lib/docker/volumes/${COMPOSE_PROJECT_NAME:-vulnweaver}_sandbox-runtime/_data}
       SANDBOX_RUNNER_TOKEN: ${SANDBOX_RUNNER_TOKEN:-}
       BINARY_TOOLS_IMAGE_REF: ${BINARY_TOOLS_IMAGE_REF:-vulnweaver-binary-tools:fixed}
@@ -259,6 +296,8 @@ services:
       - ./deploy/tool-specs:/etc/vulnweaver/tool-specs:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
+      artifact-init:
+        condition: service_completed_successfully
       binary-tools:
         condition: service_started
       migrate:

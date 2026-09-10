@@ -46,12 +46,32 @@ class ModelTier(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class ModelEndpoint:
-    """One remote or local OpenAI-compatible endpoint.
+class ThinkingConfig:
+    """Extended-thinking request for one endpoint.
 
-    ``base_url`` may point at a provider's ``/v1`` root or directly at the
-    ``/chat/completions`` endpoint. The endpoint name is safe metadata and must
-    not contain credentials.
+    ``mode="default"`` lets the provider choose its budget; ``mode="custom"``
+    pins an explicit token budget (Anthropic ``thinking.budget_tokens``; OpenAI
+    ``reasoning_effort`` is mapped from the budget).
+    """
+
+    mode: str = "off"
+    budget_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "default", "custom"}:
+            raise ValueError("thinking mode must be off, default or custom")
+        if self.mode == "custom" and (self.budget_tokens is None or self.budget_tokens < 1024):
+            raise ValueError("custom thinking requires a budget of at least 1024 tokens")
+
+
+@dataclass(frozen=True, slots=True)
+class ModelEndpoint:
+    """One remote or local chat endpoint.
+
+    ``protocol`` selects the wire format: ``openai`` (``/chat/completions``)
+    or ``anthropic`` (``/v1/messages``). ``base_url`` may point at a provider's
+    ``/v1`` root or directly at the chat endpoint. The endpoint name is safe
+    metadata and must not contain credentials.
     """
 
     name: str
@@ -62,6 +82,9 @@ class ModelEndpoint:
     max_attempts: int = 2
     retry_backoff_seconds: float = 0.25
     max_response_bytes: int = 4 * 1024 * 1024
+    protocol: str = "openai"
+    context_window_tokens: int = 0
+    thinking: ThinkingConfig | None = None
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)
@@ -84,6 +107,19 @@ class ModelEndpoint:
         for tier, model in self.models.items():
             if not str(tier) or not model or len(model) > 256:
                 raise ValueError("model names must be non-empty and at most 256 chars")
+        if self.protocol not in {"openai", "anthropic"}:
+            raise ValueError("model endpoint protocol must be openai or anthropic")
+        if self.context_window_tokens < 0:
+            raise ValueError("context window must not be negative")
+        if self.thinking is not None:
+            budget = self.thinking.budget_tokens
+            if (
+                self.thinking.mode == "custom"
+                and self.context_window_tokens
+                and budget
+                and budget >= self.context_window_tokens
+            ):
+                raise ValueError("thinking budget must stay below the context window")
 
     @property
     def chat_completions_url(self) -> str:
@@ -91,6 +127,14 @@ class ModelEndpoint:
         if base.endswith("/chat/completions"):
             return base
         return f"{base}/chat/completions"
+
+    @property
+    def messages_url(self) -> str:
+        base = self.base_url.rstrip("/")
+        if base.endswith("/messages"):
+            return base
+        return f"{base}/messages"
+
 
     def model_for(self, tier: ModelTier) -> str:
         model = self.models.get(tier) or self.models.get(tier.value)
@@ -502,6 +546,8 @@ class ModelGateway:
             endpoints.append(route.fallback)
         for endpoint_index, endpoint in enumerate(endpoints):
             model = endpoint.model_for(tier)
+            if endpoint.context_window_tokens:
+                _check_context_budget(endpoint, messages, max_output_tokens)
             try:
                 outcome = await self._request_endpoint(
                     endpoint, model, messages, max_output_tokens
@@ -563,16 +609,10 @@ class ModelGateway:
         messages: Sequence[Mapping[str, str]],
         max_output_tokens: int | None,
     ) -> _RequestOutcome:
-        payload: JsonObject = {
-            "model": model,
-            "messages": [dict(message) for message in messages],
-            "response_format": {"type": "json_object"},
-        }
-        if max_output_tokens is not None:
-            payload["max_tokens"] = max_output_tokens
-        headers = {"Accept": "application/json", "Content-Type": "application/json"}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
+        if endpoint.protocol == "anthropic":
+            payload, url, headers = _anthropic_request(endpoint, model, messages, max_output_tokens)
+        else:
+            payload, url, headers = _openai_request(endpoint, model, messages, max_output_tokens)
         decisions: list[tuple[str, str]] = []
         last_error: ModelGatewayError | None = None
         for attempt in range(endpoint.max_attempts):
@@ -587,7 +627,7 @@ class ModelGateway:
             response: TransportResponse | None = None
             try:
                 response = await self._transport.post_json(
-                    endpoint.chat_completions_url,
+                    url,
                     headers,
                     payload,
                     timeout_seconds=endpoint.timeout_seconds,
@@ -615,7 +655,10 @@ class ModelGateway:
             if 200 <= response.status_code < 300:
                 try:
                     body = _response_object(response.body)
-                    content, usage = _extract_response(body)
+                    if endpoint.protocol == "anthropic":
+                        content, usage = _extract_anthropic_response(body)
+                    else:
+                        content, usage = _extract_response(body)
                 except ModelGatewayError as error:
                     raise _mark_attempts(error, decisions) from error
                 return _RequestOutcome(
@@ -664,10 +707,159 @@ def _mark_attempts(
     return error
 
 
+_CHARS_PER_TOKEN = 4
+_OUTPUT_RESERVE_FRACTION = 4
+
+
+def _check_context_budget(
+    endpoint: ModelEndpoint,
+    messages: Sequence[Mapping[str, str]],
+    max_output_tokens: int | None,
+) -> None:
+    """Deterministic context-window guard without shipping a tokenizer.
+
+    The estimate is deliberately coarse (4 chars per token) and only rejects
+    requests that cannot possibly fit, so a false negative just falls through
+    to the provider's own limit.
+    """
+
+    window = endpoint.context_window_tokens
+    if window <= 0:
+        return
+    estimated_input = (
+        sum(len(str(message.get("content", ""))) for message in messages) // _CHARS_PER_TOKEN
+    )
+    reserve = max_output_tokens or window // _OUTPUT_RESERVE_FRACTION
+    if estimated_input + reserve > window:
+        raise ModelOutputError(
+            "estimated input exceeds the configured context window",
+            details={
+                "endpoint": endpoint.name,
+                "context_window_tokens": window,
+                "estimated_input_tokens": estimated_input,
+                "reserved_output_tokens": reserve,
+            },
+        )
+
+
 def _response_object(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ModelProtocolError("model response body must be a JSON object", retryable=True)
     return cast(Mapping[str, object], value)
+
+
+def _reasoning_effort(endpoint: ModelEndpoint) -> str | None:
+    """Map a thinking config onto the OpenAI reasoning_effort vocabulary."""
+
+    thinking = endpoint.thinking
+    if thinking is None or thinking.mode == "off":
+        return None
+    if thinking.mode == "default":
+        return "medium"
+    budget = thinking.budget_tokens or 0
+    if budget <= 4096:
+        return "low"
+    if budget <= 16384:
+        return "medium"
+    return "high"
+
+
+def _anthropic_thinking(endpoint: ModelEndpoint) -> dict[str, object] | None:
+    thinking = endpoint.thinking
+    if thinking is None or thinking.mode == "off":
+        return None
+    if thinking.mode == "default":
+        return {"type": "enabled"}
+    return {"type": "enabled", "budget_tokens": thinking.budget_tokens}
+
+
+_JSON_INSTRUCTION = (
+    " Respond with a single JSON object and nothing else; no prose, no code fences."
+)
+
+
+def _openai_request(
+    endpoint: ModelEndpoint,
+    model: str,
+    messages: Sequence[Mapping[str, str]],
+    max_output_tokens: int | None,
+) -> tuple[JsonObject, str, dict[str, str]]:
+    payload: JsonObject = {
+        "model": model,
+        "messages": [dict(message) for message in messages],
+        "response_format": {"type": "json_object"},
+    }
+    if max_output_tokens is not None:
+        payload["max_tokens"] = max_output_tokens
+    effort = _reasoning_effort(endpoint)
+    if effort is not None:
+        payload["reasoning_effort"] = effort
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if endpoint.api_key:
+        headers["Authorization"] = f"Bearer {endpoint.api_key}"
+    return payload, endpoint.chat_completions_url, headers
+
+
+def _anthropic_request(
+    endpoint: ModelEndpoint,
+    model: str,
+    messages: Sequence[Mapping[str, str]],
+    max_output_tokens: int | None,
+) -> tuple[JsonObject, str, dict[str, str]]:
+    """Build a ``/v1/messages`` payload from the neutral chat messages."""
+
+    system_parts = [
+        str(message["content"])
+        for message in messages
+        if str(message.get("role", "")) == "system"
+    ]
+    chat_messages = [
+        {"role": str(message["role"]), "content": str(message["content"])}
+        for message in messages
+        if str(message.get("role", "")) != "system"
+    ]
+    if chat_messages and str(chat_messages[-1]["role"]) == "user":
+        chat_messages[-1]["content"] = str(chat_messages[-1]["content"]) + _JSON_INSTRUCTION
+    else:
+        system_parts.append(_JSON_INSTRUCTION.strip())
+    payload: dict[str, object] = {
+        "model": model,
+        "max_tokens": max_output_tokens
+        or (endpoint.context_window_tokens // 4 if endpoint.context_window_tokens else 4096),
+        "messages": chat_messages,
+    }
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    thinking = _anthropic_thinking(endpoint)
+    if thinking is not None:
+        payload["thinking"] = thinking
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+    }
+    if endpoint.api_key:
+        headers["x-api-key"] = endpoint.api_key
+    return cast(JsonObject, payload), endpoint.messages_url, headers
+
+
+def _extract_anthropic_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
+    content_blocks = body.get("content")
+    if not isinstance(content_blocks, list) or not content_blocks:
+        raise ModelProtocolError("model response did not contain content", retryable=True)
+    parts: list[str] = []
+    for block in cast(list[object], content_blocks):
+        if not isinstance(block, Mapping):
+            continue
+        block_mapping = cast(Mapping[str, object], block)
+        # Extended-thinking blocks carry reasoning, not answer text; skip them.
+        if block_mapping.get("type") == "text" and isinstance(block_mapping.get("text"), str):
+            parts.append(str(block_mapping["text"]))
+    if not parts:
+        raise ModelProtocolError("model response contained no text content", retryable=True)
+    usage_value = body.get("usage")
+    usage = _parse_usage(usage_value)
+    return "".join(parts), usage
 
 
 def _extract_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:

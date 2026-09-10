@@ -21,7 +21,7 @@ from vulnweaver_orchestrator import (
     PostgresCheckpointStore,
 )
 from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound
-from vulnweaver_queue import QueueSettings, RedisStreamsClient, StreamMessage
+from vulnweaver_queue import QueueSettings, QueueUnavailable, RedisStreamsClient, StreamMessage
 from vulnweaver_tool_runtime import PolicyEngine, ToolRegistry
 
 from tests.persistence.factories import artifact, artifact_version, budget, project, task
@@ -140,6 +140,34 @@ class FakeQueue:
         del stream, group
         self.acknowledged.append(message_id)
         return True
+
+
+class FlakyReadQueue(FakeQueue):
+    """Fail the first ``failures`` reads with a transient Redis stall."""
+
+    def __init__(self, messages: list[StreamMessage], *, failures: int) -> None:
+        super().__init__(messages)
+        self.failures = failures
+        self.read_calls = 0
+
+    async def read_group(
+        self,
+        stream: str,
+        group: str,
+        consumer: str,
+        *,
+        count: int,
+        block_milliseconds: int | None,
+    ) -> list[StreamMessage]:
+        self.read_calls += 1
+        if self.failures > 0:
+            self.failures -= 1
+            raise QueueUnavailable(
+                "Redis operation failed", details={"operation": "read_group"}
+            )
+        return await super().read_group(
+            stream, group, consumer, count=count, block_milliseconds=block_milliseconds
+        )
 
 
 def make_orchestrator(
@@ -318,6 +346,36 @@ def test_binary_tool_without_artifact_argument_gets_no_extra_property(
     asyncio.run(scenario())
 
 
+def test_transient_queue_failure_keeps_the_orchestrator_polling() -> None:
+    """A Redis stall must not end the process; the loop backs off and resumes polling."""
+
+    async def scenario() -> None:
+        queue = FlakyReadQueue([], failures=2)
+        orchestrator = Orchestrator(
+            # No message is ever handled, so the read loop never touches the database.
+            cast(Database, None),
+            queue,  # type: ignore[arg-type]
+            ToolRegistry([]),
+            settings=OrchestratorSettings(
+                consumer_name="orch-flaky",
+                consumer_group="orch-flaky",
+                read_block_milliseconds=10,
+                retry_base_seconds=0.01,
+                retry_max_seconds=0.02,
+            ),
+        )
+        stop = asyncio.Event()
+        batches: list[tuple[object, ...]] = []
+        async for results in orchestrator.run(stop):
+            batches.append(tuple(results))
+            stop.set()
+        assert queue.failures == 0
+        assert queue.read_calls >= 3
+        assert batches == [()]
+
+    asyncio.run(scenario())
+
+
 def test_policy_denial_fails_task_without_creating_job(
     persistence_database_url: str,
 ) -> None:
@@ -364,6 +422,13 @@ def test_policy_denial_fails_task_without_creating_job(
             async with database.transaction() as repositories:
                 stored_task = await repositories.tasks.get("task:t11-denied")
                 assert stored_task["status"] is TaskStatus.FAILED
+                # The orchestration failure must survive on the Task and in its status event,
+                # otherwise the API and UI can only report that the task failed.
+                assert stored_task["failure"] == result.failure
+                events = await repositories.task_events.list_after("task:t11-denied")
+                status_event = events[-1]
+                assert status_event["event_type"] == "task.status_changed"
+                assert status_event["payload"]["failure"] == result.failure
                 with pytest.raises(EntityNotFound):
                     await repositories.jobs.get("job:missing")
         finally:

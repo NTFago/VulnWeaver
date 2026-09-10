@@ -53,6 +53,7 @@ from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, I
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
+from vulnweaver_tool_runtime import ToolSpecLoader
 
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
@@ -60,6 +61,7 @@ from vulnweaver_api.auth import (
     PasswordChangeRequired,
     PersonalAuthService,
 )
+from vulnweaver_api.budgets import resolve_project_budget
 from vulnweaver_api.cookies import delete_session_cookies, set_session_cookies
 from vulnweaver_api.errors import ApiInputError, install_error_handlers
 from vulnweaver_api.events import task_cancelled, task_requested
@@ -89,6 +91,7 @@ from vulnweaver_api.uploads import remove_stale_uploads, stage_upload
 
 LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
+_TIER_NAMES = ("planning", "audit", "review", "report")
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
 
 
@@ -106,6 +109,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
     upload_slots = asyncio.Semaphore(configuration.max_upload_concurrency)
     review_gate = FindingReviewGate(database)
+    tool_registry = (
+        ToolSpecLoader.load_directory(configuration.tool_spec_directory)
+        if configuration.tool_spec_directory is not None
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -263,6 +271,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "schema_version",
                 "review_model_api_key",
                 "clear_review_model_api_key",
+                "tier_api_keys",
+                "clear_tier_api_keys",
             },
         )
         validate_contract("ProductSettings", body.model_dump(mode="json"))
@@ -286,6 +296,32 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "API key cannot be replaced and cleared in the same request",
                 "clear_review_model_api_key",
             )
+        for tier_name, tier in values["model_tiers"].items():
+            tier_base_url = str(tier["base_url"]).strip().rstrip("/")
+            tier_model = str(tier["model_name"]).strip()
+            if bool(tier_base_url) != bool(tier_model):
+                raise ApiInputError(
+                    "incomplete_model_configuration",
+                    "model endpoint and model name must be configured together",
+                    f"model_tiers.{tier_name}",
+                )
+            if tier_base_url and not tier_base_url.startswith(("https://", "http://")):
+                raise ApiInputError(
+                    "invalid_model_endpoint",
+                    "model endpoint must use HTTP or HTTPS",
+                    f"model_tiers.{tier_name}.base_url",
+                )
+            if (
+                tier["thinking_mode"] == "custom"
+                and int(tier["thinking_budget_tokens"] or 0) < 1024
+            ):
+                raise ApiInputError(
+                    "invalid_thinking_budget",
+                    "custom thinking mode requires a budget of at least 1024 tokens",
+                    f"model_tiers.{tier_name}.thinking_budget_tokens",
+                )
+            tier["base_url"] = tier_base_url
+            tier["model_name"] = tier_model
         values["review_model_base_url"] = base_url
         values["review_model_name"] = model_name
         async with database.transaction() as repositories:
@@ -297,6 +333,20 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 stored_key = body.review_model_api_key
             if stored_key is not None:
                 values["review_model_api_key"] = stored_key
+            previous_tier_keys = cast(
+                dict[str, object], previous.get("tier_api_keys") or {}
+            )
+            tier_keys: dict[str, object] = {
+                key: value
+                for key, value in previous_tier_keys.items()
+                if key in _TIER_NAMES and key not in body.clear_tier_api_keys
+            }
+            for tier_name in _TIER_NAMES:
+                supplied = getattr(body.tier_api_keys, tier_name)
+                if supplied is not None:
+                    tier_keys[tier_name] = supplied
+            if tier_keys:
+                values["tier_api_keys"] = tier_keys
             await repositories.product_settings.replace(values)
         return _product_settings_response(values)
 
@@ -323,8 +373,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
     ) -> Project:
         key = normalize_idempotency_key(idempotency_key)
-        payload = body.model_dump(mode="json")
+        # An omitted budget is resolved from the registered tool specs rather than sent as null,
+        # because the contract types the property as a ResourceBudget when it is present.
+        payload = body.model_dump(mode="json", exclude_none=True)
         validate_contract("CreateProjectRequest", payload)
+        payload["resource_budget"] = resolve_project_budget(
+            tool_registry,
+            payload.get("resource_budget"),
+            exploit_validation_enabled=bool(payload["exploit_validation_enabled"]),
+        )
         fingerprint = request_fingerprint(payload)
         async with database.transaction() as repositories:
             await repositories.api_requests.lock(scope="projects:create", key=key)
@@ -524,6 +581,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             artifact_version_ids=payload["artifact_version_ids"],
             status=TaskStatus.CREATED,
             result=None,
+            failure=None,
             idempotency_key=key,
             resource_budget=cast(ResourceBudget, payload["resource_budget"]),
             created_at=now,
@@ -1041,8 +1099,21 @@ def _personal_author_id(username: str) -> str:
 
 
 def _product_settings_response(values: dict[str, object]) -> ProductSettingsResponse:
-    public_values = {key: value for key, value in values.items() if key != "review_model_api_key"}
+    public_values = {
+        key: value
+        for key, value in values.items()
+        if key not in {"review_model_api_key", "tier_api_keys"}
+    }
     parsed = ProductSettingsBody.model_validate({"schema_version": "1.0.0", **public_values})
+    stored_tier_keys = values.get("tier_api_keys")
+    stored_key_map: dict[str, object] = (
+        {str(k): v for k, v in cast(dict[str, object], stored_tier_keys).items()}
+        if isinstance(stored_tier_keys, dict)
+        else {}
+    )
+    configured: dict[str, bool] = {
+        tier: tier in stored_key_map for tier in _TIER_NAMES
+    }
     return ProductSettingsResponse(
         review_model_base_url=parsed.review_model_base_url,
         review_model_name=parsed.review_model_name,
@@ -1051,6 +1122,14 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         review_model_repair_attempts=parsed.review_model_repair_attempts,
         review_model_min_interval_seconds=parsed.review_model_min_interval_seconds,
         api_key_configured="review_model_api_key" in values,
+        tool_image_digests=parsed.tool_image_digests,
+        sandbox_budgets=parsed.sandbox_budgets,
+        fuzz_budgets=parsed.fuzz_budgets,
+        sandbox_runner_timeout_seconds=parsed.sandbox_runner_timeout_seconds,
+        fuzz_runner_timeout_seconds=parsed.fuzz_runner_timeout_seconds,
+        angr_enabled=parsed.angr_enabled,
+        model_tiers=parsed.model_tiers,
+        tier_api_keys_configured=configured,
     )
 
 

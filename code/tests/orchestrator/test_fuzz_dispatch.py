@@ -14,6 +14,7 @@ _TASK = {
     "artifact_version_ids": ["artifact-version:target"],
     "status": "reviewing",
     "result": None,
+    "failure": None,
     "idempotency_key": "task:fuzz-dispatch",
     "resource_budget": {
         "max_model_tokens": 0,

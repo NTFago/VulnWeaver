@@ -834,7 +834,7 @@
     "Task": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "id", "project_id", "artifact_version_ids", "status", "result", "idempotency_key", "resource_budget", "created_at", "updated_at"],
+      "required": ["schema_version", "id", "project_id", "artifact_version_ids", "status", "result", "failure", "idempotency_key", "resource_budget", "created_at", "updated_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "id": {"$ref": "#/$defs/Identifier"},
@@ -842,6 +842,7 @@
         "artifact_version_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/Identifier"}},
         "status": {"$ref": "#/$defs/TaskStatus"},
         "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]},
         "idempotency_key": {"$ref": "#/$defs/IdempotencyKey"},
         "resource_budget": {"$ref": "#/$defs/ResourceBudget"},
         "created_at": {"type": "string", "format": "date-time"},
@@ -1231,12 +1232,13 @@
     "TaskStatusChangedPayload": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["task_id", "previous_status", "status", "result"],
+      "required": ["task_id", "previous_status", "status", "result", "failure"],
       "properties": {
         "task_id": {"$ref": "#/$defs/Identifier"},
         "previous_status": {"$ref": "#/$defs/TaskStatus"},
         "status": {"$ref": "#/$defs/TaskStatus"},
-        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]}
+        "result": {"anyOf": [{"$ref": "#/$defs/TaskResult"}, {"type": "null"}]},
+        "failure": {"anyOf": [{"$ref": "#/$defs/StructuredFailure"}, {"type": "null"}]}
       }
     },
     "TaskRequestedPayload": {
@@ -1350,7 +1352,7 @@
     "CreateProjectRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "name", "input_scope", "permission_mode", "exploit_validation_enabled", "resource_budget"],
+      "required": ["schema_version", "name", "input_scope", "permission_mode", "exploit_validation_enabled"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "name": {"type": "string", "minLength": 1, "maxLength": 256},
@@ -1422,11 +1424,95 @@
         "review_model_base_url": {"type": "string", "maxLength": 2048},
         "review_model_name": {"type": "string", "maxLength": 256},
         "review_model_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
-        "review_model_max_attempts": {"type": "integer", "minimum": 1, "maximum": 10},
-        "review_model_repair_attempts": {"type": "integer", "minimum": 0, "maximum": 5},
-        "review_model_min_interval_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
+        "review_model_max_attempts": {"type": "integer", "minimum": 1, "maximum": 8},
+        "review_model_repair_attempts": {"type": "integer", "minimum": 0, "maximum": 3},
+        "review_model_min_interval_seconds": {"type": "number", "minimum": 0, "maximum": 60},
         "review_model_api_key": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
-        "clear_review_model_api_key": {"type": "boolean"}
+        "clear_review_model_api_key": {"type": "boolean"},
+        "tool_image_digests": {"$ref": "#/$defs/ToolImageDigests"},
+        "model_tiers": {"$ref": "#/$defs/ModelTierSettings"},
+        "tier_api_keys": {"$ref": "#/$defs/TierApiKeys"},
+        "clear_tier_api_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "enum": ["planning", "audit", "review", "report"]}
+        },
+        "sandbox_budgets": {"$ref": "#/$defs/SandboxBudgets"},
+        "fuzz_budgets": {"$ref": "#/$defs/FuzzBudgets"},
+        "sandbox_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "fuzz_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "angr_enabled": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
+      }
+    },
+    "ToolImageDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "binary_tools": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "proof_tool": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "afl_casr": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]}
+      }
+    },
+    "SandboxResourceBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu_millis": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "memory_bytes": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 0},
+        "timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}
+      }
+    },
+    "SandboxBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "afl": {"$ref": "#/$defs/SandboxResourceBudget"},
+        "proof": {"$ref": "#/$defs/SandboxResourceBudget"},
+        "binary": {"$ref": "#/$defs/SandboxResourceBudget"}
+      }
+    },
+    "FuzzBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "max_duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "max_crashes": {"type": "integer", "minimum": 0, "maximum": 10000}
+      }
+    },
+    "ModelTierSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planning": {"$ref": "#/$defs/TierModelConfig"},
+        "audit": {"$ref": "#/$defs/TierModelConfig"},
+        "review": {"$ref": "#/$defs/TierModelConfig"},
+        "report": {"$ref": "#/$defs/TierModelConfig"}
+      }
+    },
+    "TierModelConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {"type": "string", "enum": ["openai", "anthropic"]},
+        "base_url": {"type": "string", "maxLength": 2048},
+        "model_name": {"type": "string", "maxLength": 256},
+        "context_window_tokens": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "thinking_mode": {"type": "string", "enum": ["off", "default", "custom"]},
+        "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "timeout_seconds": {"type": "number", "minimum": 0, "maximum": 600},
+        "max_attempts": {"type": "integer", "minimum": 0, "maximum": 8}
+      }
+    },
+    "TierApiKeys": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planning": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "audit": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "review": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]},
+        "report": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 4096}, {"type": "null"}]}
       }
     },
     "PasswordChangeRequest": {
