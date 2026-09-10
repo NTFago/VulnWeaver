@@ -72,7 +72,10 @@ class FuzzJobExecutor:
                     return _failed(job, "fuzz.harness_fixtures_invalid", FailureKind.VALIDATION)
                 built = await self._harness_pipeline.build(
                     task_id=job["task_id"],
-                    job_id=job["id"],
+                    # AgentRun ids derive from this value: scope them per attempt
+                    # so a retry cannot collide with the run recorded by the
+                    # failed attempt.
+                    job_id=f"{job['id']}:attempt:{job['attempt']}",
                     artifact_version_id=request["artifact_version_id"],
                     context=cast(JsonObject, harness_context),
                     budget=cast(ResourceBudget, dict(job["resource_budget"])),
