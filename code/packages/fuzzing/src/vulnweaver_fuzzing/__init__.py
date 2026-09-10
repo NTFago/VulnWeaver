@@ -6,6 +6,7 @@ from vulnweaver_fuzzing.harness_loop import (
     HarnessLoopResult,
     compile_repair_loop,
 )
+from vulnweaver_fuzzing.harness_generator import HarnessGenerator, HarnessModel
 from vulnweaver_fuzzing.profiles import (
     AFL_CASR_OUTPUT_NAMES,
     AFL_CASR_PROFILE,
@@ -43,4 +44,6 @@ __all__ = [
     "HarnessDiagnostic",
     "HarnessLoopResult",
     "compile_repair_loop",
+    "HarnessGenerator",
+    "HarnessModel",
 ]
