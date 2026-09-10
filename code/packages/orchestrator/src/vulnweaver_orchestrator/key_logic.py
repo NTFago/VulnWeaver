@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
 from typing import Protocol, cast
 
 from vulnweaver_contracts import AgentRun, JsonObject, RunStatus
@@ -37,14 +36,6 @@ class CriticalLogicSink(Protocol):
     async def add(self, run: AgentRun) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class CriticalLogicVerdict:
-    function_name: str
-    category: str
-    confirmed: bool
-    rationale: str
-
-
 class CriticalLogicConfirmer:
     """One bounded confirmation call for a batch of candidate functions."""
 
@@ -59,7 +50,7 @@ class CriticalLogicConfirmer:
 
     async def confirm(
         self, *, task_id: str, job_id: str, candidates: JsonObject
-    ) -> dict[str, list[CriticalLogicVerdict]]:
+    ) -> dict[str, list[JsonObject]]:
         run_id = f"agent-run:key-logic:{_stable_id(job_id)}"
         response = await self._model.complete_structured(
             tier=ModelTier.PLANNING,
@@ -88,17 +79,20 @@ class CriticalLogicConfirmer:
             if self._sink is not None:
                 await self._sink.add(cast(AgentRun, run))
             return {}
-        verdicts: dict[str, list[CriticalLogicVerdict]] = {}
+        verdicts: dict[str, list[JsonObject]] = {}
         for item in cast(list[JsonObject], output.get("assessments", [])):
             name = str(item.get("function_name", ""))
             if not name:
                 continue
             verdicts.setdefault(name, []).append(
-                CriticalLogicVerdict(
-                    function_name=name,
-                    category=str(item.get("category", "")),
-                    confirmed=bool(item.get("confirmed")),
-                    rationale=str(item.get("rationale", "")),
+                cast(
+                    JsonObject,
+                    {
+                        "function_name": name,
+                        "category": str(item.get("category", "")),
+                        "confirmed": bool(item.get("confirmed")),
+                        "rationale": str(item.get("rationale", "")),
+                    },
                 )
             )
         if self._sink is not None:

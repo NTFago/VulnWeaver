@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
-- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已合并入 `main`（PR #31，待真实任务轨迹验收）；T29 语义审计（源码 PR #32 + 二进制伪代码 PR #39）、T27 逆向规划接入（PR #38）、T31 自动利用（PR #37）、T33 工作台（PR #36）、AuditPlan 门禁（PR #35）均已合并入 `main`；T28/T30/T32/T34 由并行会话推进中；真实模型端到端验收待部署配置。
+- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已合并入 `main`（PR #31，待真实任务轨迹验收）；T29 语义审计（源码 PR #32 + 二进制伪代码 PR #39）、T27 逆向规划接入（PR #38）、T31 自动利用（PR #37）、T33 工作台（PR #36）、AuditPlan 门禁（PR #35）均已合并入 `main`；T30 关键逻辑标定已完成分支门禁、待 PR 合并及真实模型 E2E；T28/T32/T34 由并行会话推进中；真实模型端到端验收待部署配置。
 - **当前分支**：`main`（T25 位于 `feat/t25-agent-loop` 独立 worktree，已 rebase 至最新 `origin/main`）。
 - **当前负责人**：Codex（T01-T24）；T25 Codex（`feat/t25-agent-loop`）；T26-T34 各行见进度表。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
@@ -52,7 +52,7 @@
 | T27 逆向分析智能体与混淆特征识别 | 待验证 | Codex（`feat/t27-reverse-agent`） | 扁平化启发式识别器 + 新增 `orchestrator/reverse_planning.py`（ReversePlanningAgent 复用 T25 AgentLoop：angr-targeted-analysis 进程内 ToolSpec 经 PolicyEngine 校验、DatabaseAgentRunSink 持久化决策轨迹）；binary executor 新增 `planning_hook`：facts 阶段后由模型基于壳/混淆/函数事实规划 angr 定点目标（`_plan_with_agent` 经 run_angr 闭包真实执行 angr 并合并结果，规划失败结构化降级为固定管线不中断 Job），`target_addresses` 由规划合并进 generation_config；analysis-worker 已装配（模型未配置时自动关闭）；新增 4 项测试（规划执行/降级/Sink 持久化/执行器钩子全链），全量 376 passed | 真实模型差异化规划验收（加壳 vs 未加壳样本）归真实模型 E2E | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
 | T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed；二进制侧已接入：`SemanticAuditFinding` 契约支持 address 锚定（oneOf 源码/二进制），审计遍历 ELF/PE/DERIVED 版本的 PAIR 函数并以伪代码为代码上下文，模型 finding 经 `functions_at_address` 锚定 BinaryLocation | 真实模型二进制端到端验收（依赖 T26 沙箱产出伪代码 + AUDIT 模型配置） | 2026-09-10 |
-| T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器（既有）＋WIP（`feat/t30-key-logic` 分支提交 `12eca83`，未合并）：① `CriticalLogicAssessment` 公共契约（已生成 Python/TS 视图）；② binary executor：`_attach_critical_logic_candidates` 将候选（category/score/evidence/confirmed=None）写入函数 attributes 并随 PAIR 持久化，`CriticalLogicHook` 协议 + `_confirm_critical_logic` 将模型 verdict（confirmed/rationale）按 (function_name, category) 合并回 attributes，确认失败结构化降级不中断 Job，`configured()` 透传；③ orchestrator `key_logic.py`：`CriticalLogicConfirmer`（PLANNING 档单次结构化调用 + AgentRun sink）已导出；④ analysis-worker 已装配（模型未配置时自动关闭）；⑤ Web 函数列表徽章（类别）+ 详情「关键逻辑标定」面板（类别/模型确认状态/依据关键词/分数/rationale），svelte-check 0 错误、build 成功 | 未完成（接手入口）：1) 新建 tests/binary_analysis/test_critical_logic_confirm.py（勿改并行会话的 test_critical_logic.py）：a. 候选写入断言（`_attach_critical_logic_candidates` 后 confirmed 均为 None）；b. `_confirm_critical_logic` 合并 verdict（auth 确认/crypto 否定）；c. `CriticalLogicConfirmer` 单元（映射模型 assessments / 失败返回空）。注意：inspect_binary 需要 tmp Path 而非 bytes；BinaryImport 字段为 library/name/ordinal/address，BinaryString 为 value/encoding/file_offset/virtual_address；2) 全量门禁（ruff/pyright/pytest/契约 --check，上一轮静态检查已全绿）；3) 台账更新 + PR + merge | 2026-09-10 |
+| T30 关键逻辑标定 | 待验证 | Codex（`feat/t30-key-logic`） | `CriticalLogicAssessment` 契约与 Python/TS 视图；二进制候选写入 PAIR attributes、模型 verdict 合并与失败降级；analysis-worker 自动装配；函数类别徽章和详情面板均已实现。新增 `test_critical_logic_confirm.py` 覆盖候选暂存、auth/crypto verdict 合并、模型映射和失败降级；同时修复确认钩子签名/JSON 返回值不匹配及 WIP 误覆盖的 orchestrator 导出面。Linux Dev Container 全量 380 passed、5 skipped，ruff/pyright 0，契约 --check 无漂移 | 创建并合并 PR；在产品设置配置 PLANNING 模型及二进制工具摘要后，以教学 ELF 验收认证与加解密标定、PAIR API 和前端展示 | 2026-09-10 |
 | T31 漏洞自动利用智能体 | 待验证 | Codex（`feat/t31-auto-exploit`） | 新增 `ExploitScript` 公共契约与 `AutoExploitScheduler`：复核结算后对 confirmed 且项目开启利用验证的 Finding 自动投递 EXPLOIT Job（幂等，未确认/未开启自动跳过）；`ExploitScriptGenerator` 执行期按 Finding 事实调用 PLANNING 档模型生成脚本，经 `validate_generated_script` 安全红线校验后登记为输入工件的派生版本（可追溯 produced_by/parent），再走既有沙箱 Proof 链路并落 Poc 证据链；5 项新测试覆盖投递门禁、生成执行全链、危险脚本拒绝、钩子自动投递。全量 370 passed | 真实模型端到端（配置 `PROOF_TOOL_IMAGE_DIGEST` + 模型后对教学样本验收） | 2026-09-10 |
 | T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex | 新增不执行命令的有界 harness 编译—诊断—修正循环抽象，支持结构化诊断与预算耗尽结果；Dev Container 定向测试待提交前复核 | 接入 LLM harness 生成、Sandbox 编译执行、fuzz Job 自动调度和 Finding 证据挂接 | 2026-09-10 |
 | T33 前端逆向工作台与人工复核 | 待验证 | Codex | 任务页新增「函数与调用链」工作台：函数列表点击选中、caller/callee 双列联动跳转、二进制伪代码代码视图；新增「智能体运行轨迹」区（模型、决策数、token、耗时、失败码）渲染 agent-runs；人工复核与标注入口此前已并入 Finding 详情 | 真实二进制样本浏览器回归验证（依赖 T26 沙箱链路产出伪代码） | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T30 关键逻辑标定（`feat/t30-key-logic`） | 候选暂存、模型确认/否定合并及模型失败降级的 3 项新增测试通过；修复执行器与确认器签名/数据形状不匹配，恢复被 WIP 误覆盖的 orchestrator 公共导出；Linux Dev Container：380 passed、5 skipped，ruff/pyright 0，契约 --check 无漂移 | PR 合并后用已配置 PLANNING 模型和教学 ELF 完成真实 E2E |
 | 2026-09-10 | T29 二进制伪代码审计接入（`feat/t29-binary-audit`） | `SemanticAuditFinding` 支持 address 锚定；审计遍历二进制 PAIR 函数（伪代码为上下文）；模型 finding 经 functions_at_address 锚定 BinaryLocation，幻觉地址丢弃；新增二进制锚定测试，全量 377 passed（ruff/pyright 0、契约 --check 无漂移） | 真实模型二进制端到端验收 |
 | 2026-09-10 | T27 逆向规划接入 AgentLoop（`feat/t27-reverse-agent`） | ReversePlanningAgent 经 T25 循环规划 angr 定点目标并真实执行；规划失败降级固定管线；新增 4 项测试，Dev Container 全量 376 passed（ruff/pyright 0 错误） | 真实模型差异化规划验收归 E2E |
 | 2026-09-10 | T31 漏洞自动利用智能体（`feat/t31-auto-exploit`） | 复核结算后自动投递 EXPLOIT Job；执行期模型生成脚本→安全红线校验→派生工件登记→沙箱执行→Poc 证据链；新增 `ExploitScript` 契约；测试 5 项新增，全量 370 passed（ruff/pyright 0 错误、契约 --check 无漂移） | 真实模型端到端验收（需 `PROOF_TOOL_IMAGE_DIGEST` 与产品模型配置） |
@@ -168,6 +169,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T30 分支全量门禁（worktree `feat/t30-key-logic`） | Dev Container 内 ruff 通过；pyright 0 errors/0 warnings；`pytest -q` 在 PostgreSQL/Redis 集成环境下 380 passed、5 skipped；`generate_contracts.py --check` 无漂移。5 个跳过均为需真实 Proof/Sandbox Runner 的 opt-in 回放 | 配置 PLANNING 模型和 `BINARY_TOOLS_IMAGE_DIGEST` 后的真实教学 ELF 端到端（候选→确认→PAIR API→前端） |
 | 2026-09-10 | T29 二进制侧定向门禁（worktree `feat/t29-binary-audit`） | 新增二进制锚定测试（伪代码上下文进审计、address 锚定 BinaryLocation、幻觉地址丢弃）通过；全量 377 passed、ruff/pyright 0 错误、契约 --check 无漂移 | 真实模型 + 真实二进制样本端到端 |
 | 2026-09-10 | T27 定向门禁（worktree `feat/t27-reverse-agent`） | 规划智能体 3 项测试（执行/降级/Sink 持久化）+ 执行器钩子集成测试（facts 传递、run_angr 真实执行、targets 进 generation_config）通过；全量 376 passed、ruff/pyright 0 错误 | 真实模型规划质量验收（需 AUDIT/PLANNING 模型配置） |
 | 2026-09-10 | T31 定向门禁（worktree `feat/t31-auto-exploit`） | 新增 5 项测试（调度门禁×2、生成执行全链、危险脚本拒绝、钩子自动投递）通过；Dev Container 全量 370 passed（PG/Redis 集成实跑）、ruff/pyright 0 错误、契约 --check 无漂移 | 真实模型生成与真实沙箱镜像的端到端回放 |
@@ -195,7 +197,7 @@
 
 ## 10. 下一步
 
-1. 评审并合并 `feat/t25-agent-loop`（T25 智能体规划执行框架，已 rebase 至最新 main，定向门禁全绿）；合并时执行全量门禁确认覆盖率与集成测试。
+1. 评审并合并 `feat/t30-key-logic`：候选标定、PLANNING 确认、PAIR attributes/API 和工作台展示已通过分支门禁；合并后在产品设置配置模型与二进制工具摘要，执行教学 ELF 真实 E2E。
 2. T27/T29/T31 在各自接入点消费 `AgentLoop`（`orchestrator/agent_loop.py`）：注入 PLANNING 档位 PlannerGateway、ToolRegistry/PolicyEngine 与领域 StepExecutor，经 Sink 持久化聚合 AgentRun，供 `GET /api/tasks/{id}/agent-runs` 查询。
 3. 评审并合并 `feat/t29-semantic-audit`；合并后在产品设置配置 AUDIT 模型并跑一次真实源码样本，验证语义审计候选 Finding → 独立复核 → 报告链路。
 4. T26 继续：配置 BINARY_TOOLS_IMAGE_DIGEST 摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查；随后将伪代码审计接入 T29 语义审计链路。

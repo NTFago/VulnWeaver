@@ -88,7 +88,9 @@ class BinaryAnalysisExecutionError(RuntimeError):
 class CriticalLogicHook(Protocol):
     """Confirm stamped critical-logic candidates via the planning model."""
 
-    async def confirm(self, candidates: JsonObject) -> JsonObject: ...
+    async def confirm(
+        self, *, task_id: str, job_id: str, candidates: JsonObject
+    ) -> dict[str, list[JsonObject]]: ...
 
 
 class AngrRunner(Protocol):
@@ -743,7 +745,9 @@ async def _confirm_critical_logic(
     if not candidates:
         return
     try:
-        assessments = await hook.confirm(candidates)
+        assessments = await hook.confirm(
+            task_id=job["task_id"], job_id=job["id"], candidates=candidates
+        )
     except Exception as error:  # confirmation degrades, never aborts the job
         LOGGER.warning(
             "critical_logic_confirmation_degraded",
@@ -754,12 +758,14 @@ async def _confirm_critical_logic(
         verdicts = assessments.get(function["name"])
         if not isinstance(verdicts, list):
             continue
-        for entry in function["attributes"].get("critical_logic", []):
-            if not isinstance(entry, dict):
+        entries = function["attributes"].get("critical_logic")
+        if not isinstance(entries, list):
+            continue
+        for candidate_entry in entries:
+            if not isinstance(candidate_entry, dict):
                 continue
+            entry = cast(JsonObject, candidate_entry)
             for verdict in verdicts:
-                if not isinstance(verdict, dict):
-                    continue
                 if (
                     verdict.get("function_name") == function["name"]
                     and verdict.get("category") == entry.get("category")
