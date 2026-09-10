@@ -244,10 +244,41 @@
     projects = await api.projects();
   }
 
+  type TierName = "planning" | "audit" | "review" | "report";
+  const tierNames: TierName[] = ["planning", "audit", "review", "report"];
+  const tierLabels: Record<TierName, string> = {
+    planning: "规划 PLANNING",
+    audit: "语义审计 AUDIT",
+    review: "独立复核 REVIEW",
+    report: "报告 REPORT",
+  };
+  let tierApiKeys: Record<TierName, string> = { planning: "", audit: "", review: "", report: "" };
+  let clearTierApiKeys: TierName[] = [];
+  let expandedTier: TierName | null = null;
+
+  function emptyTierConfig() {
+    return {
+      protocol: "openai" as const,
+      base_url: "",
+      model_name: "",
+      context_window_tokens: 0,
+      thinking_mode: "off" as const,
+      thinking_budget_tokens: 0,
+      timeout_seconds: 0,
+      max_attempts: 0,
+    };
+  }
+
   function withDeploymentDefaults(raw: ProductSettings): ProductSettings {
     // Older installations may not have the deployment fields persisted yet.
+    const tiers = { ...raw.model_tiers };
+    for (const tier of tierNames) {
+      tiers[tier] = { ...emptyTierConfig(), ...(tiers[tier] ?? {}) };
+    }
     return {
       ...raw,
+      model_tiers: tiers,
+      tier_api_keys_configured: raw.tier_api_keys_configured ?? {},
       tool_image_digests: raw.tool_image_digests ?? { binary_tools: null, proof_tool: null, afl_casr: null },
       sandbox_budgets: raw.sandbox_budgets ?? {
         afl: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
@@ -261,9 +292,23 @@
     };
   }
 
+  function toggleTierKey(tier: TierName, checked: boolean): void {
+    if (checked) {
+      if (!clearTierApiKeys.includes(tier)) clearTierApiKeys = [...clearTierApiKeys, tier];
+    } else {
+      clearTierApiKeys = clearTierApiKeys.filter((item) => item !== tier);
+    }
+  }
+
   async function openSettings(): Promise<void> {
     begin();
-    try { socket?.close(); view = "settings"; productSettings = withDeploymentDefaults(await api.settings()); done(); }
+    try {
+      socket?.close(); view = "settings";
+      productSettings = withDeploymentDefaults(await api.settings());
+      tierApiKeys = { planning: "", audit: "", review: "", report: "" };
+      clearTierApiKeys = [];
+      done();
+    }
     catch (caught) { busy = false; showError(caught); }
   }
 
@@ -271,13 +316,21 @@
     if (!productSettings) return;
     begin();
     try {
-      const { schema_version: _schema, api_key_configured: _configured, ...values } = productSettings;
+      const { schema_version: _schema, api_key_configured: _configured, tier_api_keys_configured: _tierKeys, ...values } = productSettings;
+      const suppliedKeys: Record<string, string> = {};
+      for (const tier of tierNames) {
+        if (tierApiKeys[tier].trim()) suppliedKeys[tier] = tierApiKeys[tier].trim();
+      }
       productSettings = withDeploymentDefaults(await api.updateSettings({
         ...values,
         review_model_api_key: reviewApiKey || null,
         clear_review_model_api_key: clearReviewApiKey,
+        tier_api_keys: suppliedKeys,
+        clear_tier_api_keys: clearTierApiKeys,
       }));
       reviewApiKey = ""; clearReviewApiKey = false;
+      tierApiKeys = { planning: "", audit: "", review: "", report: "" };
+      clearTierApiKeys = [];
       done("设置已保存；模型与执行配置由 Worker 在下一次任务时自动生效");
     } catch (caught) { busy = false; showError(caught); }
   }
@@ -524,6 +577,35 @@
           <label>API Key<input bind:value={reviewApiKey} type="password" autocomplete="new-password" placeholder={productSettings.api_key_configured ? "留空以保留现有值" : "输入 API Key"} /></label>
           {#if productSettings.api_key_configured}<label class="check"><input type="checkbox" bind:checked={clearReviewApiKey} /><span><b>清除已保存的 API Key</b><small>保存后立即删除；输入新值会在未勾选时替换旧值。</small></span></label>{/if}
           <div class="settings-grid"><label>超时（秒）<input bind:value={productSettings.review_model_timeout_seconds} type="number" min="1" max="600" /></label><label>最大尝试次数<input bind:value={productSettings.review_model_max_attempts} type="number" min="1" max="10" /></label><label>结构修复次数<input bind:value={productSettings.review_model_repair_attempts} type="number" min="0" max="5" /></label><label>请求最小间隔（秒）<input bind:value={productSettings.review_model_min_interval_seconds} type="number" min="0" max="3600" step="0.1" /></label></div>
+          <div class="settings-grid"><label>超时（秒）<input bind:value={productSettings.review_model_timeout_seconds} type="number" min="1" max="600" /></label><label>最大尝试次数<input bind:value={productSettings.review_model_max_attempts} type="number" min="1" max="10" /></label><label>结构修复次数<input bind:value={productSettings.review_model_repair_attempts} type="number" min="0" max="5" /></label><label>请求最小间隔（秒）<input bind:value={productSettings.review_model_min_interval_seconds} type="number" min="0" max="3600" step="0.1" /></label></div>
+          <div class="section-head digest-head"><div><span>MODEL TIERS</span><h2>分档位模型</h2></div><small>未配置的档位回退到上方独立复核模型；各档位独立生效</small></div>
+          {#each tierNames as tier (tier)}
+            <div class="tier-group">
+              <button type="button" class="tier-toggle" on:click={() => (expandedTier = expandedTier === tier ? null : tier)}>
+                <b>{tierLabels[tier]}</b>
+                <span class="tier-state" class:enabled={productSettings.tier_api_keys_configured?.[tier] || productSettings.model_tiers[tier].model_name}>
+                  {productSettings.model_tiers[tier].model_name ? `${productSettings.model_tiers[tier].protocol} · ${productSettings.model_tiers[tier].model_name}` : "未配置（回退）"}
+                </span>
+                <span class="arrow">{expandedTier === tier ? "▾" : "→"}</span>
+              </button>
+              {#if expandedTier === tier}
+                <div class="tier-body">
+                  <label>协议<select bind:value={productSettings.model_tiers[tier].protocol}><option value="openai">OpenAI 兼容（/chat/completions）</option><option value="anthropic">Anthropic（/v1/messages）</option></select></label>
+                  <label>端点<input bind:value={productSettings.model_tiers[tier].base_url} placeholder="https://example.com/v1" /></label>
+                  <label>模型名称<input bind:value={productSettings.model_tiers[tier].model_name} placeholder={`${tier}-model`} /></label>
+                  <label>API Key<input bind:value={tierApiKeys[tier]} type="password" autocomplete="new-password" placeholder={productSettings.tier_api_keys_configured?.[tier] ? "留空以保留现有值" : "输入 API Key（可留空继承全局）"} /></label>
+                  {#if productSettings.tier_api_keys_configured?.[tier]}<label class="check"><input type="checkbox" checked={clearTierApiKeys.includes(tier)} on:change={(e) => toggleTierKey(tier, e.currentTarget.checked)} /><span><b>清除该档位已保存的 API Key</b></span></label>{/if}
+                  <div class="settings-grid">
+                    <label>上下文窗口（token，0=不限）<input bind:value={productSettings.model_tiers[tier].context_window_tokens} type="number" min="0" /></label>
+                    <label>思考模式<select bind:value={productSettings.model_tiers[tier].thinking_mode}><option value="off">关闭</option><option value="default">开启（供应商默认预算）</option><option value="custom">自定义预算</option></select></label>
+                    {#if productSettings.model_tiers[tier].thinking_mode === "custom"}<label>思考预算（token，≥1024）<input bind:value={productSettings.model_tiers[tier].thinking_budget_tokens} type="number" min="1024" /></label>{/if}
+                    <label>超时（秒，0=沿用全局）<input bind:value={productSettings.model_tiers[tier].timeout_seconds} type="number" min="0" max="600" /></label>
+                    <label>最大尝试（0=沿用全局）<input bind:value={productSettings.model_tiers[tier].max_attempts} type="number" min="0" max="8" /></label>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          {/each}
           <div class="section-head digest-head"><div><span>TOOL IMAGE REGISTRATION</span><h2>工具镜像登记</h2></div><small>留空 = 自动发现（Runner 端点 / 本地镜像）</small></div>
           <label>binary-tools 摘要（Ghidra / 关键逻辑 / 调用路径）<input bind:value={productSettings.tool_image_digests.binary_tools} placeholder="sha256:…（留空自动发现）" /></label>
           <label>proof-tool 摘要（自动利用 / Proof）<input bind:value={productSettings.tool_image_digests.proof_tool} placeholder="sha256:…（留空自动发现）" /></label>
