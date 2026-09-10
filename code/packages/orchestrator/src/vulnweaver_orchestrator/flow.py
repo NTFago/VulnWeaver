@@ -447,7 +447,6 @@ class Orchestrator:
             plan,
             PolicyContext(
                 artifact_kinds=state["artifact_kinds"],
-                resource_budget=state["resource_budget"],
                 permission_mode=PermissionMode(state["permission_mode"]),
             ),
         )

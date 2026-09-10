@@ -131,9 +131,8 @@ class ReviewJobExecutor:
         finding_id = _finding_id(job)
         if finding_id is None:
             return _failed(job["id"], "review.finding_id_required", FailureKind.VALIDATION)
-        max_tokens = job["resource_budget"]["max_model_tokens"]
-        if max_tokens < 1:
-            return _failed(job["id"], "review.model_budget_exhausted", FailureKind.POLICY)
+        # max_model_tokens 0 means uncapped; compute-resource budgets no longer gate jobs.
+        max_tokens = job["resource_budget"]["max_model_tokens"] or None
         if self._reviewer is None:
             return _failed(job["id"], "review.model_unconfigured", FailureKind.DEPENDENCY)
         try:

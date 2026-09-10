@@ -150,7 +150,6 @@ def failure_stub(code: str) -> StructuredFailure:
 def full_access_context() -> PolicyContext:
     return PolicyContext(
         artifact_kinds={"version:1": ArtifactKind.SOURCE_ARCHIVE},
-        resource_budget=budget_limits(),
         permission_mode=PermissionMode.FULL_ACCESS,
     )
 
@@ -428,7 +427,6 @@ async def _waiting_permission_stops_the_loop() -> None:
         context={"artifact": "version:1"},
         policy_context=PolicyContext(
             artifact_kinds={"version:1": ArtifactKind.SOURCE_ARCHIVE},
-            resource_budget=budget_limits(),
             permission_mode=PermissionMode.REQUEST_PERMISSION,
         ),
         input_refs=("version:1",),
