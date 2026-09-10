@@ -106,6 +106,7 @@ def _result(finding: Finding) -> dict[str, Any]:
             "status": _enum_value(finding["status"]),
             "confidence": finding["confidence"],
         },
+        "fixes": [{"description": {"text": finding["fix_suggestion"][:4096]}}],
     }
 
 
