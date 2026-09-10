@@ -130,6 +130,44 @@ def test_event_type_and_payload_shape_cannot_be_mixed() -> None:
         )
 
 
+def test_task_status_event_carries_a_structured_failure() -> None:
+    """A failed task must publish why, and the field is required so it cannot be dropped."""
+
+    event = {
+        "schema_version": "1.0.0",
+        "event_id": "evt:00000002",
+        "event_type": "task.status_changed",
+        "aggregate_id": "task:00000001",
+        "sequence": 1,
+        "occurred_at": "2026-09-07T08:00:00Z",
+        "correlation_id": "task:00000001",
+        "causation_id": "evt:00000001",
+        "payload": {
+            "task_id": "task:00000001",
+            "previous_status": "created",
+            "status": "failed",
+            "result": None,
+            "failure": {
+                "code": "initial_job_policy_denied",
+                "kind": "policy",
+                "message": "Policy Engine denied the initial analysis step",
+                "retryable": False,
+                "details": {"reason_codes": ["resource_limit_exceeded"]},
+            },
+        },
+    }
+    validate_contract("QueueEvent", event)
+
+    without_failure = {
+        **event,
+        "payload": {
+            key: value for key, value in event["payload"].items() if key != "failure"
+        },
+    }
+    with pytest.raises(ContractValidationError):
+        validate_contract("QueueEvent", without_failure)
+
+
 def test_action_plan_rejects_an_arbitrary_command_field() -> None:
     with pytest.raises(ContractValidationError) as captured:
         validate_contract(

@@ -271,6 +271,7 @@ tasks = Table(
     Column("artifact_version_ids", JSONB, nullable=False),
     Column("status", String(32), nullable=False),
     Column("result", String(32), nullable=True),
+    Column("failure", JSONB(none_as_null=True), nullable=True),
     Column("idempotency_key", String(128), nullable=False),
     Column("request_fingerprint", String(64), nullable=False),
     Column("resource_budget", JSONB, nullable=False),

@@ -5,12 +5,14 @@
     ArtifactKind,
     ArtifactVersion,
     Finding,
+    FindingStatus,
     PairFunction,
   Poc,
     Job,
     Project,
     QueueEvent,
     ResourceBudget,
+    Review,
     Task,
     TaskResult,
     TaskStatus,
@@ -19,14 +21,27 @@
 
   type View = "overview" | "project" | "task" | "settings";
 
-  const defaultBudget: ResourceBudget = {
-    max_model_tokens: 100000,
-    cpu_millis: 2000,
-    memory_bytes: 2147483648,
-    disk_bytes: 10737418240,
-    max_tool_concurrency: 2,
-    max_dynamic_runs: 0,
-    timeout_seconds: 3600,
+  type BudgetInputs = {
+    max_model_tokens: string;
+    cpu_millis: string;
+    memory_bytes: string;
+    disk_bytes: string;
+    max_tool_concurrency: string;
+    max_dynamic_runs: string;
+    timeout_seconds: string;
+  };
+  const blankBudgetInputs = (): BudgetInputs => ({
+    max_model_tokens: "", cpu_millis: "", memory_bytes: "", disk_bytes: "",
+    max_tool_concurrency: "", max_dynamic_runs: "", timeout_seconds: "",
+  });
+  const budgetLabels: Record<keyof BudgetInputs, string> = {
+    cpu_millis: "CPU（毫核）",
+    memory_bytes: "内存（字节）",
+    disk_bytes: "磁盘（字节）",
+    timeout_seconds: "超时（秒）",
+    max_model_tokens: "模型 token 上限",
+    max_tool_concurrency: "并发工具数",
+    max_dynamic_runs: "动态运行额度",
   };
 
   const statusText: Record<TaskStatus, string> = {
@@ -58,22 +73,28 @@
   let selectedFinding: Finding | null = null;
   let selectedEvidence: FindingEvidenceDetail[] = [];
   let selectedPocs: Poc[] = [];
+  let selectedReviews: Review[] = [];
   let proofScriptRef = "";
   let proofImageDigest = "sha256:";
   let reportVersionIds: string[] = [];
   let events: QueueEvent[] = [];
   let observability: Record<string, unknown> = {};
   let socket: WebSocket | null = null;
+  let socketGeneration = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let productSettings: ProductSettings | null = null;
   let reviewApiKey = "";
   let clearReviewApiKey = false;
   let showAdvancedSettings = false;
   let annotationNote = "";
   let reviewRationale = "";
+  let reviewOutcome: FindingStatus = "candidate";
   let pairNeighborhood: Record<string, unknown> | null = null;
   let pairFunctions: PairFunction[] = [];
   let agentRuns: Record<string, unknown>[] = [];
   let selectedFunctionId: string | null = null;
+  let customBudget = false;
+  let budgetInputs: BudgetInputs = blankBudgetInputs();
 
   type PairNodeLike = { id: string; function_id: string | null };
   type PairEdgeLike = { source_node_id: string; target_node_id: string; type: string };
@@ -159,7 +180,7 @@
         booting = false;
       }
     })();
-    return () => socket?.close();
+    return disconnectEvents;
   });
 
   function showError(caught: unknown): void {
@@ -172,6 +193,27 @@
 
   function displayResult(result: TaskResult | null): string {
     return result ? resultText[result] : "尚未生成";
+  }
+
+  function budgetFromForm(): ResourceBudget | undefined {
+    if (!customBudget) return undefined;
+    const parsed: Record<string, number> = {};
+    for (const key of Object.keys(budgetInputs) as (keyof BudgetInputs)[]) {
+      const value = Number(budgetInputs[key].trim());
+      if (!Number.isInteger(value) || value < 0) {
+        throw new Error(`资源预算「${budgetLabels[key]}」必须是不小于 0 的整数`);
+      }
+      parsed[key] = value;
+    }
+    return parsed as unknown as ResourceBudget;
+  }
+
+  function taskFailureContext(task: Task): string {
+    if (!task.failure) return "";
+    const reasons = task.failure.details.reason_codes;
+    return [task.failure.code, task.failure.message, Array.isArray(reasons) ? reasons.join(", ") : ""]
+      .filter(Boolean)
+      .join(" · ");
   }
 
   function failureContext(job: Job): string {
@@ -351,9 +393,10 @@
     try {
       const project = await api.createProject({
         name: projectName.trim(), input_scope: [projectScope.trim()], permission_mode: permissionMode,
-        exploit_validation_enabled: exploitEnabled, resource_budget: defaultBudget,
+        exploit_validation_enabled: exploitEnabled, resource_budget: budgetFromForm(),
       });
       projects = [project, ...projects]; showProjectForm = false; projectName = "";
+      customBudget = false; budgetInputs = blankBudgetInputs();
       await openProject(project); done("项目已创建");
     } catch (caught) { busy = false; showError(caught); }
   }
@@ -392,7 +435,7 @@
     begin();
     try {
       const task = await api.createTask(selectedProject.id, {
-        artifact_version_ids: selectedVersionIds, resource_budget: defaultBudget,
+        artifact_version_ids: selectedVersionIds, resource_budget: selectedProject.resource_budget,
       });
       tasks = [task, ...tasks.filter((item) => item.id !== task.id)];
       await openTask(task); done("分析任务已投递");
@@ -402,26 +445,57 @@
   async function openTask(task: Task): Promise<void> {
     begin();
     try {
-      socket?.close(); selectedTask = await api.task(task.id); view = "task";
-      selectedFinding = null; selectedEvidence = []; selectedPocs = [];
+      disconnectEvents(); selectedTask = await api.task(task.id); view = "task";
+      selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
       [jobs, events, findings, observability, pairFunctions, agentRuns] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id), api.observability(task.id), api.pair(task.id), api.agentRuns(task.id)]);
       await refreshReportResults();
       connectEvents(task.id); done();
     } catch (caught) { busy = false; showError(caught); }
   }
 
-  function connectEvents(taskId: string): void {
+  function disconnectEvents(): void {
+    socketGeneration += 1;
+    if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    socket?.close();
+    socket = null;
+  }
+
+  function connectEvents(taskId: string, attempt = 0, generation = socketGeneration): void {
     const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
-    socket = taskEventSocket(taskId, after);
-    socket.onmessage = async (message) => {
+    const current = taskEventSocket(taskId, after);
+    socket = current;
+    current.onmessage = async (message) => {
       const event = JSON.parse(message.data as string) as QueueEvent;
       if (!events.some((item) => item.event_id === event.event_id)) events = [...events, event];
       if (event.event_type === "task.status_changed" && selectedTask) {
-        selectedTask = { ...selectedTask, status: event.payload.status, result: event.payload.result };
+        selectedTask = {
+          ...selectedTask, status: event.payload.status,
+          result: event.payload.result, failure: event.payload.failure,
+        };
       }
       [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
       await refreshReportResults();
     };
+    current.onclose = () => {
+      if (generation !== socketGeneration || selectedTask?.id !== taskId || view !== "task") return;
+      reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
+    };
+  }
+
+  async function recoverEvents(taskId: string, attempt: number, generation: number): Promise<void> {
+    if (generation !== socketGeneration || selectedTask?.id !== taskId || view !== "task") return;
+    try {
+      const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
+      const recovered = await api.events(taskId, after);
+      const known = new Set(events.map((event) => event.event_id));
+      events = [...events, ...recovered.filter((event) => !known.has(event.event_id))];
+      [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
+      await refreshReportResults();
+      connectEvents(taskId, 0, generation);
+    } catch {
+      reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
+    }
   }
 
   async function refreshReportResults(): Promise<void> {
@@ -440,12 +514,14 @@
     if (!proofScriptRef || !proofImageDigest || proofImageDigest === "sha256:") {
       error = "请填写脚本引用和固定镜像摘要"; return;
     }
+    const budget = selectedTask?.resource_budget ?? selectedProject?.resource_budget;
+    if (!budget) { error = "请先选择任务"; return; }
     begin();
     try {
       const job = await api.createProof(selectedFinding.id, {
         script_ref: proofScriptRef, image_digest: proofImageDigest,
         permission_mode: selectedProject?.permission_mode ?? "request_permission",
-        resource_budget: selectedTask?.resource_budget ?? defaultBudget, kind,
+        resource_budget: budget, kind,
       });
       jobs = [job, ...jobs.filter((item) => item.id !== job.id)];
       done(`${kind === "exploit" ? "Exploit" : "Proof"} Job 已投递`);
@@ -455,9 +531,10 @@
   async function selectFinding(finding: Finding): Promise<void> {
     selectedFinding = finding;
     try {
-      [selectedEvidence, selectedPocs] = await Promise.all([
+      [selectedEvidence, selectedPocs, selectedReviews] = await Promise.all([
         api.findingEvidence(finding.id),
         api.findingPocs(finding.id),
+        api.findingReviews(finding.id),
       ]);
     } catch (caught) { showError(caught); }
   }
@@ -475,8 +552,11 @@
     if (!selectedFinding || !reviewRationale.trim()) return;
     begin();
     try {
-      await api.reviewFinding(selectedFinding.id, "candidate", reviewRationale.trim());
-      reviewRationale = ""; done("复核意见已保存");
+      await api.reviewFinding(selectedFinding.id, reviewOutcome, reviewRationale.trim());
+      findings = await api.findings(selectedFinding.task_id);
+      selectedFinding = findings.find((item) => item.id === selectedFinding?.id) ?? selectedFinding;
+      selectedReviews = await api.findingReviews(selectedFinding.id);
+      reviewRationale = ""; done("复核意见与结论已保存");
     } catch (caught) { busy = false; showError(caught); }
   }
 
@@ -512,7 +592,7 @@
   }
 
   function goOverview(): void {
-    socket?.close(); view = "overview"; selectedProject = null; selectedTask = null;
+    disconnectEvents(); view = "overview"; selectedProject = null; selectedTask = null;
   }
 
   function shortId(id: string): string { return id.includes(":") ? id.split(":")[1].slice(0, 8) : id.slice(0, 8); }
@@ -651,7 +731,7 @@
       {:else if view === "overview"}
         <section class="page-heading"><div><p class="eyebrow">AUTHORIZED WORKSPACE</p><h1>项目与分析范围</h1><p>每个项目隔离样本、任务和证据链，运行前明确授权边界。</p></div><button class="primary" on:click={() => showProjectForm = !showProjectForm}>{showProjectForm ? "收起" : "+ 新建项目"}</button></section>
         <section class="metric-strip"><div><strong>{projects.length}</strong><span>已授权项目</span></div><div><strong>{projects.filter((p) => p.exploit_validation_enabled).length}</strong><span>开启利用验证</span></div><div><strong>{projects.filter((p) => p.permission_mode === "request_permission").length}</strong><span>需运行许可</span></div></section>
-        {#if showProjectForm}<form class="inline-form" on:submit|preventDefault={createProject}><div class="form-title"><span>NEW SCOPE</span><h2>创建项目</h2></div><label>项目名称<input bind:value={projectName} placeholder="例：网关 2.4 安全复核" required /></label><label>授权范围<input bind:value={projectScope} required /></label><label>运行模式<select bind:value={permissionMode}><option value="request_permission">每次动态执行前请求许可</option><option value="full_access">在已授权范围内自动执行</option></select></label><label class="check"><input type="checkbox" bind:checked={exploitEnabled} /><span><b>允许利用验证</b><small>仅对 confirmed Finding，且仍需经策略门禁。</small></span></label><button class="primary" disabled={busy}>创建并进入</button></form>{/if}
+        {#if showProjectForm}<form class="inline-form" on:submit|preventDefault={createProject}><div class="form-title"><span>NEW SCOPE</span><h2>创建项目</h2></div><label>项目名称<input bind:value={projectName} placeholder="例：网关 2.4 安全复核" required /></label><label>授权范围<input bind:value={projectScope} required /></label><label>运行模式<select bind:value={permissionMode}><option value="request_permission">每次动态执行前请求许可</option><option value="full_access">在已授权范围内自动执行</option></select></label><label class="check"><input type="checkbox" bind:checked={exploitEnabled} /><span><b>允许利用验证</b><small>仅对 confirmed Finding，且仍需经策略门禁。</small></span></label><label class="check"><input type="checkbox" bind:checked={customBudget} /><span><b>自定义资源预算</b><small>不勾选则使用覆盖全部已注册工具的默认预算；低于工具要求的预算会被拒绝。</small></span></label>{#if customBudget}<label>CPU（毫核）<input type="text" inputmode="numeric" bind:value={budgetInputs.cpu_millis} required /></label><label>内存（字节）<input type="text" inputmode="numeric" bind:value={budgetInputs.memory_bytes} required /></label><label>磁盘（字节）<input type="text" inputmode="numeric" bind:value={budgetInputs.disk_bytes} required /></label><label>超时（秒）<input type="text" inputmode="numeric" bind:value={budgetInputs.timeout_seconds} required /></label><label>模型 token 上限<input type="text" inputmode="numeric" bind:value={budgetInputs.max_model_tokens} required /></label><label>并发工具数<input type="text" inputmode="numeric" bind:value={budgetInputs.max_tool_concurrency} required /></label><label>动态运行额度<input type="text" inputmode="numeric" bind:value={budgetInputs.max_dynamic_runs} required /></label>{/if}<button class="primary" disabled={busy}>创建并进入</button></form>{/if}
         {#if projects.length === 0}<section class="empty"><span class="empty-index">00</span><h2>还没有分析项目</h2><p>先创建一个明确的授权范围，再导入源码压缩包或 ELF / PE 样本。</p><button class="secondary" on:click={() => showProjectForm = true}>定义第一个项目</button></section>{:else}<section class="project-list" aria-label="项目列表">{#each projects as project, index}<button class="project-row" on:click={() => openProject(project)}><span class="row-index">{String(index + 1).padStart(2, "0")}</span><span class="project-main"><b>{project.name}</b><small>{project.input_scope.join(" · ")}</small></span><span class="mode">{project.permission_mode === "request_permission" ? "请求许可" : "完全访问"}</span><span class:enabled={project.exploit_validation_enabled} class="exploit">{project.exploit_validation_enabled ? "EXPLOIT ON" : "EXPLOIT OFF"}</span><time>{formatDate(project.created_at)}</time><span class="arrow">→</span></button>{/each}</section>{/if}
       {:else if view === "project" && selectedProject}
         <section class="page-heading"><div><button class="breadcrumb" on:click={goOverview}>项目 /</button><p class="eyebrow">{shortId(selectedProject.id)}</p><h1>{selectedProject.name}</h1><p>{selectedProject.input_scope.join(" · ")}</p></div><span class="scope-badge">{selectedProject.permission_mode === "request_permission" ? "动态执行需许可" : "授权范围内自动执行"}</span></section>
@@ -659,9 +739,9 @@
           <div class="section-block"><div class="section-head"><div><span>ANALYSIS / 02</span><h2>创建任务</h2></div><small>选择一个或多个样本版本</small></div>{#if artifacts.length === 0}<div class="compact-empty">导入样本后，可在此创建分析任务。</div>{:else}<div class="sample-options">{#each artifacts as artifact}<label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option"><input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} /><span><b>{fileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span></label>{/each}</div><button class="primary" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务 <span>{selectedVersionIds.length || ""}</span></button>{/if}</div></section>
         <section class="section-block full"><div class="section-head"><div><span>RUNS / 03</span><h2>最近任务</h2></div><small>{tasks.length} 条记录</small></div>{#if tasks.length === 0}<div class="compact-empty">暂无执行记录。</div>{:else}<div class="task-list">{#each tasks as task}<button on:click={() => openTask(task)}><span class={`status-dot ${task.status}`}></span><span><b>{statusText[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span><time>{formatDate(task.updated_at)}</time><span>→</span></button>{/each}</div>{/if}</section>
       {:else if view === "task" && selectedTask}
-        <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1><p>结果：{displayResult(selectedTask.result)} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
+        <section class="page-heading task-heading"><div><button class="breadcrumb" on:click={() => openProject(selectedProject!)}>{selectedProject?.name} /</button><p class="eyebrow">TASK {shortId(selectedTask.id)}</p><h1>{statusText[selectedTask.status]}</h1>{#if selectedTask.failure}<p class="task-failure">失败原因：{taskFailureContext(selectedTask)}</p>{/if}<p>结果：{displayResult(selectedTask.result)} · 更新于 {formatDate(selectedTask.updated_at)}</p></div><div class="task-actions"><span class={`large-status ${selectedTask.status}`}>{selectedTask.status.toUpperCase()}</span>{#if !["completed", "failed", "cancelled"].includes(selectedTask.status)}<button class="danger" on:click={cancelTask} disabled={busy}>取消任务</button>{/if}</div></section>
         <section class="metric-strip task-metrics"><div><strong>{JSON.stringify(observability.jobs_by_status ?? {})}</strong><span>状态汇总</span></div><div><strong>{jobs.length}</strong><span>Jobs</span></div><div><strong>{events.length}</strong><span>事件</span></div><div><strong>{findings.length}</strong><span>候选问题</span></div><div><strong>{selectedTask.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div></section>
-        <section class="section-block full"><div class="section-head"><div><span>FINDINGS / REPORTS</span><h2>问题与报告</h2></div><div class="task-actions"><button class="secondary" on:click={() => createReport("markdown")} disabled={busy}>生成 Markdown</button><button class="secondary" on:click={() => createReport("sarif")} disabled={busy}>生成 SARIF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button></div></div>{#if findings.length === 0}<div class="compact-empty">当前任务尚未产生候选问题。</div>{:else}<div class="finding-list">{#each findings as finding}<button class="finding-row" on:click={() => void selectFinding(finding)}><span class={`status-dot ${finding.status}`}></span><div><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></div><span>{Math.round(finding.confidence * 100)}%</span></button>{/each}</div>{/if}{#if selectedFinding}<article class="finding-detail"><b>{selectedFinding.title}</b><p>{selectedFinding.fix_suggestion}</p><small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small><div class="proof-actions"><label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS/object reference" /></label><label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label><button class="secondary" on:click={() => void createProof("proof_of_concept")} disabled={busy}>发起 Proof</button>{#if selectedFinding.status === "confirmed" && selectedProject?.exploit_validation_enabled}<button class="danger" on:click={() => void createProof("exploit")} disabled={busy}>发起 Exploit</button>{/if}</div><div class="proof-actions"><label>人工复核意见<textarea bind:value={reviewRationale} placeholder="记录复核结论与依据"></textarea></label><button class="secondary" on:click={() => void submitReview()} disabled={busy || !reviewRationale.trim()}>保存复核</button><label>标注<textarea bind:value={annotationNote} placeholder="记录问题标签或修正说明"></textarea></label><button class="secondary" on:click={() => void submitAnnotation()} disabled={busy || !annotationNote.trim()}>保存标注</button></div>{#if selectedEvidence.length > 0}<div class="detail-evidence"><b>证据链</b>{#each selectedEvidence as item}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>{/if}{#if selectedPocs.length > 0}<div class="detail-evidence"><b>复现记录</b>{#each selectedPocs as poc}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>{/if}</article>{/if}{#if reportVersionIds.length > 0}<div class="report-links">{#each reportVersionIds as versionId}{#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}{/each}</div>{/if}</section>
+        <section class="section-block full"><div class="section-head"><div><span>FINDINGS / REPORTS</span><h2>问题与报告</h2></div><div class="task-actions"><button class="secondary" on:click={() => createReport("markdown")} disabled={busy}>生成 Markdown</button><button class="secondary" on:click={() => createReport("sarif")} disabled={busy}>生成 SARIF</button><button class="secondary" on:click={() => createReport("pdf")} disabled={busy}>生成 PDF</button></div></div>{#if findings.length === 0}<div class="compact-empty">当前任务尚未产生候选问题。</div>{:else}<div class="finding-list">{#each findings as finding}<button class="finding-row" on:click={() => void selectFinding(finding)}><span class={`status-dot ${finding.status}`}></span><div><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></div><span>{Math.round(finding.confidence * 100)}%</span></button>{/each}</div>{/if}{#if selectedFinding}<article class="finding-detail"><b>{selectedFinding.title}</b><p>{selectedFinding.fix_suggestion}</p><small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small><div class="proof-actions"><label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS/object reference" /></label><label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label><button class="secondary" on:click={() => void createProof("proof_of_concept")} disabled={busy}>发起 Proof</button>{#if selectedFinding.status === "confirmed" && selectedProject?.exploit_validation_enabled}<button class="danger" on:click={() => void createProof("exploit")} disabled={busy}>发起 Exploit</button>{/if}</div><div class="proof-actions"><label>复核结论<select bind:value={reviewOutcome}><option value="candidate">候选</option><option value="confirmed">确认</option><option value="false_positive">误报</option><option value="disputed">有争议</option><option value="unverifiable">无法验证</option></select></label><label>人工复核意见<textarea bind:value={reviewRationale} placeholder="记录复核结论与依据"></textarea></label><button class="secondary" on:click={() => void submitReview()} disabled={busy || !reviewRationale.trim()}>保存复核</button><label>标注<textarea bind:value={annotationNote} placeholder="记录问题标签或修正说明"></textarea></label><button class="secondary" on:click={() => void submitAnnotation()} disabled={busy || !annotationNote.trim()}>保存标注</button></div>{#if selectedReviews.length > 0}<div class="detail-evidence"><b>复核历史</b>{#each selectedReviews as review}<small>{review.outcome} · {review.model} · {review.rationale}</small>{/each}</div>{/if}{#if selectedEvidence.length > 0}<div class="detail-evidence"><b>证据链</b>{#each selectedEvidence as item}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>{/if}{#if selectedPocs.length > 0}<div class="detail-evidence"><b>复现记录</b>{#each selectedPocs as poc}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>{/if}</article>{/if}{#if reportVersionIds.length > 0}<div class="report-links">{#each reportVersionIds as versionId}{#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}{/each}</div>{/if}</section>
         <section class="section-block full"><div class="section-head"><div><span>FUNCTION WORKBENCH</span><h2>函数与调用链</h2></div><small>点击函数联动调用关系与伪代码</small></div>
           {#if pairFunctions.length === 0}<div class="compact-empty">样本索引完成后，此处将列出函数、伪代码与调用链。</div>{:else}
           <div class="workbench">

@@ -13,6 +13,7 @@ from vulnweaver_contracts import (
     Job,
     JobKind,
     JobStatus,
+    JsonObject,
     ResourceBudget,
     SandboxRequest,
     SchemaVersion,
@@ -22,6 +23,7 @@ from vulnweaver_contracts import (
 )
 
 from vulnweaver_fuzzing.executor import FuzzExecutionService
+from vulnweaver_fuzzing.harness_pipeline import HarnessPipeline
 
 
 class CrashEvidenceSink(Protocol):
@@ -34,10 +36,15 @@ class FuzzJobExecutor:
     """Execute only an explicitly structured FuzzRequest attached to a fuzz Job."""
 
     def __init__(
-        self, service: FuzzExecutionService, *, crash_sink: CrashEvidenceSink | None = None
+        self,
+        service: FuzzExecutionService,
+        *,
+        crash_sink: CrashEvidenceSink | None = None,
+        harness_pipeline: HarnessPipeline | None = None,
     ) -> None:
         self._service = service
         self._crash_sink = crash_sink
+        self._harness_pipeline = harness_pipeline
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is not JobKind.FUZZ:
@@ -54,6 +61,42 @@ class FuzzJobExecutor:
         finding_id = arguments.get("finding_id")
         try:
             validate_contract("FuzzRequest", request)
+            harness_context = arguments.get("harness_context")
+            if isinstance(harness_context, dict):
+                if self._harness_pipeline is None:
+                    return _failed(job, "fuzz.harness_unconfigured", FailureKind.DEPENDENCY)
+                fixture_refs = arguments.get("harness_fixture_refs", [])
+                if not isinstance(fixture_refs, list) or not all(
+                    isinstance(item, str) for item in fixture_refs
+                ):
+                    return _failed(job, "fuzz.harness_fixtures_invalid", FailureKind.VALIDATION)
+                built = await self._harness_pipeline.build(
+                    task_id=job["task_id"],
+                    job_id=job["id"],
+                    artifact_version_id=request["artifact_version_id"],
+                    context=cast(JsonObject, harness_context),
+                    budget=cast(ResourceBudget, dict(job["resource_budget"])),
+                    fixtures=tuple(cast(list[str], fixture_refs)),
+                )
+                if not built.succeeded:
+                    return _failed(
+                        job,
+                        f"fuzz.harness_{built.status}",
+                        FailureKind.DEPENDENCY,
+                        "bounded fuzz harness generation or compilation failed",
+                    )
+                request = cast(
+                    FuzzRequest,
+                    {
+                        **request,
+                        "sandbox_request": {
+                            **request["sandbox_request"],
+                            "input_ref": built.compiled_ref,
+                            "artifact_kind": ArtifactKind.ELF,
+                        },
+                    },
+                )
+                validate_contract("FuzzRequest", request)
             outcome = await self._service.run_with_crashes(request, cancellation)
             result = outcome.result
         except (TypeError, ValueError) as error:

@@ -182,6 +182,66 @@ def _result(value: Job) -> WorkerResult:
     )
 
 
+def test_all_jobs_failed_records_the_structured_reason_on_the_task(
+    persistence_database_url: str,
+) -> None:
+    """A task failed by aggregation must carry why, not just the fact that it failed."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        project_id = f"project:{suffix}"
+        artifact_id = f"artifact:{suffix}"
+        version_id = f"artifact-version:{suffix}"
+        task_id = f"task:{suffix}"
+        failed_import = job(
+            f"job:import:{suffix}",
+            task_id=task_id,
+            idempotency_key=f"import:{suffix}",
+            kind=JobKind.IMPORT,
+        )
+        failed_import["status"] = JobStatus.FAILED
+        failed_import["failure"] = _tool_failure()
+        hook = TaskAggregateSettlementHook()
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project(project_id))
+                await repositories.artifacts.add(
+                    artifact(artifact_id, project_id=project_id, current_version_id=version_id)
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(version_id, artifact_id=artifact_id)
+                )
+                await repositories.tasks.create(
+                    task(
+                        task_id,
+                        project_id=project_id,
+                        artifact_version_ids=[version_id],
+                        idempotency_key=f"task:{suffix}",
+                    )
+                )
+                await repositories.jobs.create_without_outbox(failed_import)
+                await hook.after_terminal(
+                    repositories, failed_import, _failed_result(failed_import)
+                )
+
+            async with database.transaction() as repositories:
+                finished = await repositories.tasks.get(task_id)
+                assert finished["status"] is TaskStatus.FAILED
+                failure = finished["failure"]
+                assert failure is not None
+                assert failure["code"] == "static_analysis.tool_exit_nonzero"
+                assert failure["details"]["job_id"] == failed_import["id"]
+                events = await repositories.task_events.list_after(task_id)
+                failed_event = events[-1]
+                assert failed_event["payload"]["status"] == TaskStatus.FAILED
+                assert failed_event["payload"]["failure"] == failure
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def _failed_result(value: Job) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,

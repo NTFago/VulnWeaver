@@ -781,6 +781,9 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     )
     assert review.status_code == 201
     assert review.json()["outcome"] == "disputed"
+    history = client.get(f"/api/findings/{finding_id}/reviews")
+    assert history.status_code == 200
+    assert [item["id"] for item in history.json()] == [review.json()["id"]]
 
 
 def test_openapi_lists_control_plane_and_cookie_auth(client: TestClient) -> None:

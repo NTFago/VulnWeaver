@@ -532,6 +532,7 @@ export interface Task {
   artifact_version_ids: Array<Identifier>;
   status: TaskStatus;
   result: TaskResult | null;
+  failure: StructuredFailure | null;
   idempotency_key: IdempotencyKey;
   resource_budget: ResourceBudget;
   created_at: string;
@@ -805,6 +806,7 @@ export interface TaskStatusChangedPayload {
   previous_status: TaskStatus;
   status: TaskStatus;
   result: TaskResult | null;
+  failure: StructuredFailure | null;
 }
 
 export interface TaskRequestedPayload {
@@ -882,7 +884,7 @@ export interface CreateProjectRequest {
   input_scope: Array<string>;
   permission_mode: PermissionMode;
   exploit_validation_enabled: boolean;
-  resource_budget: ResourceBudget;
+  resource_budget?: ResourceBudget;
 }
 
 export interface CreateTaskRequest {

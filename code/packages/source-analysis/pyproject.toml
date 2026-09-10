@@ -13,6 +13,7 @@ dependencies = [
     "vulnweaver-contracts",
     "vulnweaver-pair",
     "vulnweaver-persistence",
+    "vulnweaver-tool-runtime",
     "vulnweaver-worker",
 ]
 
@@ -25,6 +26,7 @@ vulnweaver-pair = { workspace = true }
 vulnweaver-artifact-store = { workspace = true }
 vulnweaver-contracts = { workspace = true }
 vulnweaver-persistence = { workspace = true }
+vulnweaver-tool-runtime = { workspace = true }
 vulnweaver-worker = { workspace = true }
 
 [tool.uv.build-backend]

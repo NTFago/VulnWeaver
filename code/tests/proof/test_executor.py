@@ -10,6 +10,7 @@ from vulnweaver_contracts import (
     JobStatus,
     PocKind,
     ProofRequest,
+    ResourceBudget,
     SandboxResult,
     SandboxStatus,
 )
@@ -156,6 +157,55 @@ def test_proof_binds_script_and_pinned_policy_to_sandbox() -> None:
     assert poc["result"] == "exploitable"
     assert poc["status"] == "completed"
     assert poc["run_log_ref"] == "cas://stdout"
+
+
+def test_sandbox_budget_is_clamped_to_the_proof_tool_limits() -> None:
+    """Proof requests carry the project budget; the Runner refuses anything above the spec."""
+
+    limits = cast(
+        ResourceBudget,
+        {
+            "max_model_tokens": 0,
+            "cpu_millis": 1000,
+            "memory_bytes": 256 * 1024 * 1024,
+            "disk_bytes": 256 * 1024 * 1024,
+            "max_tool_concurrency": 1,
+            "max_dynamic_runs": 1,
+            "timeout_seconds": 120,
+        },
+    )
+    sandbox = _FakeSandbox(_result(SandboxStatus.SUCCEEDED))
+    service = ProofExecutionService(
+        sandbox, tool_name="proof", tool_version="1.0.0", resource_limits=limits
+    )
+    request = _request()
+    request["resource_budget"] = cast(
+        ResourceBudget,
+        {
+            **request["resource_budget"],
+            "cpu_millis": 8000,
+            "memory_bytes": 3 * 1024**3,
+            "disk_bytes": 10 * 1024**3,
+            "timeout_seconds": 3600,
+        },
+    )
+    request["timeout_seconds"] = 3600
+
+    asyncio.run(
+        service.run(
+            request,
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+        )
+    )
+
+    sandbox_request = cast(dict[str, object], sandbox.requests[0])
+    budget = cast(dict[str, int], sandbox_request["resource_budget"])
+    assert budget["cpu_millis"] == limits["cpu_millis"]
+    assert budget["memory_bytes"] == limits["memory_bytes"]
+    assert budget["disk_bytes"] == limits["disk_bytes"]
+    assert sandbox_request["timeout_seconds"] == limits["timeout_seconds"]
 
 
 def test_sandbox_timeout_and_cancel_are_not_reported_as_exploitable() -> None:

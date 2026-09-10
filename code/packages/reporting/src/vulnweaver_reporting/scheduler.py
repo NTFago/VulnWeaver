@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import cast
 
 from vulnweaver_contracts import (
+    Artifact,
+    ArtifactKind,
     FailureKind,
     Job,
     JobKind,
@@ -15,7 +17,7 @@ from vulnweaver_contracts import (
     SchemaVersion,
     ToolIdentity,
 )
-from vulnweaver_persistence import Repositories
+from vulnweaver_persistence import EntityNotFound, Repositories
 
 
 class ReportJobScheduler:
@@ -29,6 +31,41 @@ class ReportJobScheduler:
             retryable_failure_kinds=[FailureKind.TIMEOUT, FailureKind.ENVIRONMENT],
         )
 
+    async def schedule_default(
+        self,
+        repositories: Repositories,
+        task_id: str,
+        parent_version_id: str,
+        *,
+        causation_id: str | None = None,
+    ) -> Job:
+        """Register and enqueue the task's deterministic Markdown report."""
+        task = await repositories.tasks.get(task_id, for_update=True)
+        artifact_id = f"artifact:report:{task_id}:markdown"
+        version_id = f"artifact-version:report:{task_id}:markdown"
+        try:
+            await repositories.artifacts.get(artifact_id)
+        except EntityNotFound:
+            await repositories.artifacts.add(
+                Artifact(
+                    schema_version=SchemaVersion.VALUE_1_0_0,
+                    id=artifact_id,
+                    project_id=task["project_id"],
+                    kind=ArtifactKind.DERIVED,
+                    current_version_id=version_id,
+                    created_at=task["updated_at"],
+                )
+            )
+        return await self.schedule(
+            repositories,
+            task_id,
+            artifact_id=artifact_id,
+            version_id=version_id,
+            parent_version_id=parent_version_id,
+            report_format="markdown",
+            causation_id=causation_id,
+        )
+
     async def schedule(
         self,
         repositories: Repositories,
@@ -38,6 +75,7 @@ class ReportJobScheduler:
         version_id: str,
         parent_version_id: str,
         report_format: str = "markdown",
+        causation_id: str | None = None,
     ) -> Job:
         if report_format not in {"markdown", "sarif", "pdf"}:
             raise ValueError("unsupported report format")
@@ -79,7 +117,7 @@ class ReportJobScheduler:
             sequence=0,
             occurred_at=created_at,
             correlation_id=task_id,
-            causation_id=None,
+            causation_id=causation_id,
             payload={
                 "job_id": job_id,
                 "task_id": task_id,

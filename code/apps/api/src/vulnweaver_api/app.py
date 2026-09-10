@@ -53,6 +53,7 @@ from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, I
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
+from vulnweaver_tool_runtime import ToolSpecLoader
 
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
@@ -60,6 +61,7 @@ from vulnweaver_api.auth import (
     PasswordChangeRequired,
     PersonalAuthService,
 )
+from vulnweaver_api.budgets import resolve_project_budget
 from vulnweaver_api.cookies import delete_session_cookies, set_session_cookies
 from vulnweaver_api.errors import ApiInputError, install_error_handlers
 from vulnweaver_api.events import task_cancelled, task_requested
@@ -107,6 +109,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     )
     upload_slots = asyncio.Semaphore(configuration.max_upload_concurrency)
     review_gate = FindingReviewGate(database)
+    tool_registry = (
+        ToolSpecLoader.load_directory(configuration.tool_spec_directory)
+        if configuration.tool_spec_directory is not None
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -366,8 +373,15 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         idempotency_key: Annotated[str, IDEMPOTENCY_HEADER],
     ) -> Project:
         key = normalize_idempotency_key(idempotency_key)
-        payload = body.model_dump(mode="json")
+        # An omitted budget is resolved from the registered tool specs rather than sent as null,
+        # because the contract types the property as a ResourceBudget when it is present.
+        payload = body.model_dump(mode="json", exclude_none=True)
         validate_contract("CreateProjectRequest", payload)
+        payload["resource_budget"] = resolve_project_budget(
+            tool_registry,
+            payload.get("resource_budget"),
+            exploit_validation_enabled=bool(payload["exploit_validation_enabled"]),
+        )
         fingerprint = request_fingerprint(payload)
         async with database.transaction() as repositories:
             await repositories.api_requests.lock(scope="projects:create", key=key)
@@ -567,6 +581,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             artifact_version_ids=payload["artifact_version_ids"],
             status=TaskStatus.CREATED,
             result=None,
+            failure=None,
             idempotency_key=key,
             resource_budget=cast(ResourceBudget, payload["resource_budget"]),
             created_at=now,
@@ -974,6 +989,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 response_status=201,
             )
             return review
+
+    @app.get("/api/findings/{finding_id}/reviews")
+    async def finding_reviews(
+        finding_id: str, _: Annotated[str, Depends(require_account)] = ""
+    ) -> list[Review]:
+        async with database.transaction() as repositories:
+            await repositories.findings.get(finding_id)
+            return await repositories.findings.list_reviews(finding_id)
 
     @app.get("/api/tasks/{task_id}/events")
     async def task_events(
