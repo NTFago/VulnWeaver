@@ -6,6 +6,8 @@ from collections.abc import Mapping, Sequence
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
+from vulnweaver_reporting.locations import location_text
+
 
 def build_markdown(
     findings: Sequence[Finding],
@@ -22,7 +24,7 @@ def build_markdown(
     for finding in findings:
         finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
-        location_text = _location_text(location)
+        finding_location = location_text(location)
         lines.extend(
             [
                 f"## {finding['title'][:256]}",
@@ -32,7 +34,7 @@ def build_markdown(
                 f"- Severity: `{_value(finding['severity'])}`",
                 f"- Status: `{_value(finding['status'])}`",
                 f"- Confidence: `{finding['confidence']:.2f}`",
-                f"- Location: `{location_text}`",
+                f"- Location: `{finding_location}`",
                 f"- Evidence: {len(finding['evidence_ids'])} referenced artifact(s)",
                 f"- Reviews: {len(finding['review_ids'])}",
                 f"- Proof runs: {len(poc_by_finding.get(finding['id'], []))}",
@@ -100,11 +102,3 @@ def _call_path_step(step: Mapping[str, object]) -> str:
         address = step.get("address")
         where = f"0x{address:x}" if isinstance(address, int) else "unknown"
     return f"`{relation}` {name} (`{where}`)"
-
-
-def _location_text(location: Mapping[str, object]) -> str:
-    address = location.get("address")
-    if isinstance(address, int):
-        return f"0x{address:x}"
-    path = location.get("path", "unknown")
-    return f"{str(path)[:4096]}:{location.get('line', 1)}"

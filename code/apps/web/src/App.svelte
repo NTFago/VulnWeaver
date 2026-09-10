@@ -228,6 +228,27 @@
     return [tool, reason, exitCode].filter(Boolean).join(" · ");
   }
 
+  function reportJobs(): Job[] {
+    return jobs.filter((job) => job.kind === "report");
+  }
+
+  function reportStatusText(job: Job): string {
+    const format = typeof job.arguments?.format === "string" ? job.arguments.format.toUpperCase() : "报告";
+    if (job.status === "failed") {
+      const reason = job.failure?.message ?? "未返回具体原因";
+      return `${format} 报告生成失败：${reason}${job.failure?.code ? `（${job.failure.code}）` : ""}`;
+    }
+    if (job.status === "succeeded") return `${format} 报告已生成`;
+    return `${format} 报告生成中…`;
+  }
+
+  function reportFileName(versionId: string): string {
+    const format = artifactVersions.get(versionId)?.generation_config.format;
+    if (format === "pdf") return "vulnweaver-report.pdf";
+    if (format === "sarif") return "vulnweaver-report.sarif";
+    return "vulnweaver-report.md";
+  }
+
   function completedJobCount(): number {
     return jobs.filter((job) => job.status === "succeeded").length;
   }
@@ -1005,10 +1026,17 @@
               {/if}
             </article>
           {/if}
+          {#if reportJobs().length > 0}
+            <div class="report-statuses" aria-live="polite">
+              {#each reportJobs() as reportJob (reportJob.id)}
+                <small class:failed={reportJob.status === "failed"}>{reportStatusText(reportJob)}</small>
+              {/each}
+            </div>
+          {/if}
           {#if reportVersionIds.length > 0}
             <div class="report-links">
               {#each reportVersionIds as versionId (versionId)}
-                {#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}
+                {#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download={reportFileName(versionId)}>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}
               {/each}
             </div>
           {/if}

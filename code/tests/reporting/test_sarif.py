@@ -18,7 +18,14 @@ def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
             "title": "x" * 5000,
             "severity": "high",
             "confidence": 0.9,
-            "location": {"path": "src/main.py", "line": 12},
+            "location": {
+                "artifact_version_id": "artifact-version:1",
+                "path": "src/main.py",
+                "start_line": 12,
+                "start_column": 3,
+                "end_line": 13,
+                "end_column": 10,
+            },
             "dataflow": [],
             "call_path": [],
             "status": "candidate",
@@ -35,8 +42,49 @@ def test_sarif_is_bounded_and_preserves_finding_identity() -> None:
     assert result["ruleId"] == "CWE-078"
     assert result["properties"]["findingId"] == "finding:1"
     assert len(result["message"]["text"]) == 4096
-    assert result["locations"][0]["physicalLocation"]["region"]["startLine"] == 12
+    region = result["locations"][0]["physicalLocation"]["region"]
+    assert region == {
+        "startLine": 12,
+        "endLine": 13,
+        "startColumn": 3,
+        "endColumn": 10,
+    }
     validate_sarif(report)
+
+
+def test_sarif_renders_canonical_binary_location_without_source_region() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:binary",
+            "task_id": "task:1",
+            "category": "static_only",
+            "cwe_id": "CWE-22",
+            "title": "Path issue",
+            "severity": "medium",
+            "confidence": 0.4,
+            "location": {
+                "artifact_version_id": "artifact-version:1",
+                "virtual_address": 0x401000,
+                "file_offset": 0,
+            },
+            "dataflow": [],
+            "call_path": [],
+            "status": "candidate",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "Fix it",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    physical_location = build_sarif([finding])["runs"][0]["results"][0]["locations"][0][
+        "physicalLocation"
+    ]
+    assert physical_location == {"artifactLocation": {"uri": "binary://0x401000"}}
+    validate_sarif(build_sarif([finding]))
 
 
 def test_sarif_validation_rejects_incomplete_envelope() -> None:
