@@ -16,6 +16,7 @@ from vulnweaver_model_gateway import (
     ThinkingConfig,
     TransportResponse,
 )
+from vulnweaver_model_gateway.gateway import _reasoning_effort
 
 from tests.model_gateway.test_model_gateway import FakeTransport
 
@@ -142,10 +143,10 @@ def test_openai_reasoning_effort_mapping() -> None:
         base_url="https://models.example/v1",
         models={ModelTier.REVIEW: "r"},
     )
-    assert low._reasoning_effort() == "low"
-    assert medium._reasoning_effort() == "medium"
-    assert high._reasoning_effort() == "high"
-    assert off._reasoning_effort() is None
+    assert _reasoning_effort(low) == "low"
+    assert _reasoning_effort(medium) == "medium"
+    assert _reasoning_effort(high) == "high"
+    assert _reasoning_effort(off) is None
 
 
 def test_thinking_config_rejects_invalid_modes_and_budgets() -> None:

@@ -135,26 +135,6 @@ class ModelEndpoint:
             return base
         return f"{base}/messages"
 
-    def _reasoning_effort(self) -> str | None:
-        """Map a thinking config onto the OpenAI reasoning_effort vocabulary."""
-
-        if self.thinking is None or self.thinking.mode == "off":
-            return None
-        if self.thinking.mode == "default":
-            return "medium"
-        budget = self.thinking.budget_tokens or 0
-        if budget <= 4096:
-            return "low"
-        if budget <= 16384:
-            return "medium"
-        return "high"
-
-    def _anthropic_thinking(self) -> dict[str, object] | None:
-        if self.thinking is None or self.thinking.mode == "off":
-            return None
-        if self.thinking.mode == "default":
-            return {"type": "enabled"}
-        return {"type": "enabled", "budget_tokens": self.thinking.budget_tokens}
 
     def model_for(self, tier: ModelTier) -> str:
         model = self.models.get(tier) or self.models.get(tier.value)
@@ -768,6 +748,31 @@ def _response_object(value: object) -> Mapping[str, object]:
     return cast(Mapping[str, object], value)
 
 
+def _reasoning_effort(endpoint: ModelEndpoint) -> str | None:
+    """Map a thinking config onto the OpenAI reasoning_effort vocabulary."""
+
+    thinking = endpoint.thinking
+    if thinking is None or thinking.mode == "off":
+        return None
+    if thinking.mode == "default":
+        return "medium"
+    budget = thinking.budget_tokens or 0
+    if budget <= 4096:
+        return "low"
+    if budget <= 16384:
+        return "medium"
+    return "high"
+
+
+def _anthropic_thinking(endpoint: ModelEndpoint) -> dict[str, object] | None:
+    thinking = endpoint.thinking
+    if thinking is None or thinking.mode == "off":
+        return None
+    if thinking.mode == "default":
+        return {"type": "enabled"}
+    return {"type": "enabled", "budget_tokens": thinking.budget_tokens}
+
+
 _JSON_INSTRUCTION = (
     " Respond with a single JSON object and nothing else; no prose, no code fences."
 )
@@ -786,7 +791,7 @@ def _openai_request(
     }
     if max_output_tokens is not None:
         payload["max_tokens"] = max_output_tokens
-    effort = endpoint._reasoning_effort()
+    effort = _reasoning_effort(endpoint)
     if effort is not None:
         payload["reasoning_effort"] = effort
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
@@ -817,7 +822,7 @@ def _anthropic_request(
         chat_messages[-1]["content"] = str(chat_messages[-1]["content"]) + _JSON_INSTRUCTION
     else:
         system_parts.append(_JSON_INSTRUCTION.strip())
-    payload: JsonObject = {
+    payload: dict[str, object] = {
         "model": model,
         "max_tokens": max_output_tokens
         or (endpoint.context_window_tokens // 4 if endpoint.context_window_tokens else 4096),
@@ -825,7 +830,7 @@ def _anthropic_request(
     }
     if system_parts:
         payload["system"] = "\n\n".join(system_parts)
-    thinking = endpoint._anthropic_thinking()
+    thinking = _anthropic_thinking(endpoint)
     if thinking is not None:
         payload["thinking"] = thinking
     headers = {
@@ -835,7 +840,7 @@ def _anthropic_request(
     }
     if endpoint.api_key:
         headers["x-api-key"] = endpoint.api_key
-    return payload, endpoint.messages_url, headers
+    return cast(JsonObject, payload), endpoint.messages_url, headers
 
 
 def _extract_anthropic_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
