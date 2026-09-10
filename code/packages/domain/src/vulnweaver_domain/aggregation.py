@@ -30,6 +30,7 @@ _ACTIVE_JOB_PHASE = {
     JobKind.VALIDATE: TaskStatus.VALIDATING,
     JobKind.IMPORT: TaskStatus.VALIDATING,
     JobKind.SOURCE_ANALYSIS: TaskStatus.ANALYZING,
+    JobKind.SEMANTIC_AUDIT: TaskStatus.ANALYZING,
     JobKind.BINARY_ANALYSIS: TaskStatus.ANALYZING,
     JobKind.REVIEW: TaskStatus.REVIEWING,
     JobKind.PROOF: TaskStatus.VERIFYING,

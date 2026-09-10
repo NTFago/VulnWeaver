@@ -52,6 +52,7 @@ class JobKind(StrEnum):
     VALIDATE = 'validate'
     IMPORT = 'import'
     SOURCE_ANALYSIS = 'source_analysis'
+    SEMANTIC_AUDIT = 'semantic_audit'
     BINARY_ANALYSIS = 'binary_analysis'
     REVIEW = 'review'
     PROOF = 'proof'
@@ -793,6 +794,20 @@ class ActionPlanProposal(TypedDict):
     schema_version: SchemaVersion
     steps: list[ActionStep]
     rationale: str
+
+class SemanticAuditFinding(TypedDict):
+    cwe_id: str
+    title: str
+    severity: Severity
+    path: str
+    start_line: int
+    end_line: NotRequired[int]
+    rationale: str
+
+class SemanticAuditReport(TypedDict):
+    schema_version: SchemaVersion
+    summary: NotRequired[str]
+    findings: list[SemanticAuditFinding]
 
 class ToolSpec(TypedDict):
     schema_version: SchemaVersion
