@@ -23,9 +23,15 @@ from vulnweaver_tool_runtime import ToolSpecLoader
 def build_app():
     directory = os.environ.get("TOOL_SPEC_DIRECTORY", "/etc/vulnweaver/tool-specs")
     registry = ToolSpecLoader.load_directory(directory)
-    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     profiles: list[SandboxCommandProfile] = []
-    proof_digest = os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
+    fuzz_ref = os.environ.get("AFL_CASR_IMAGE_REF", "vulnweaver-afl-casr:fixed")
+    digest = os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip() or _resolve_local_image_digest(
+        fuzz_ref
+    )
+    proof_ref = os.environ.get("PROOF_IMAGE_REF", "vulnweaver-proof:fixed")
+    proof_digest = os.environ.get("PROOF_IMAGE_DIGEST", "").strip() or _resolve_local_image_digest(
+        proof_ref
+    )
     binary_ref = os.environ.get("BINARY_TOOLS_IMAGE_REF", "vulnweaver-binary-tools:fixed")
     binary_digest = os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip()
     if not binary_digest:
@@ -50,12 +56,7 @@ def build_app():
                 _resource_budget(),
             )
         )
-        profiles.append(
-            proof_command_profile(
-                os.environ.get("PROOF_IMAGE_REF", "vulnweaver-proof:fixed"),
-                proof_digest,
-            )
-        )
+        profiles.append(proof_command_profile(proof_ref, proof_digest))
     if digest:
         registry.register(
             afl_casr_tool_spec(
@@ -63,12 +64,7 @@ def build_app():
                 _fuzz_resource_budget(),
             )
         )
-        profiles.append(
-            afl_casr_command_profile(
-                os.environ.get("AFL_CASR_IMAGE_REF", "vulnweaver-afl-casr:fixed"),
-                digest,
-            )
-        )
+        profiles.append(afl_casr_command_profile(fuzz_ref, digest))
     store = LocalContentAddressedStore(
         os.environ.get("ARTIFACT_STORE_ROOT", "/var/lib/vulnweaver/artifacts")
     )
@@ -84,16 +80,7 @@ def build_app():
         root=sandbox_root,
     )
     token = os.environ.get("SANDBOX_RUNNER_TOKEN", "").strip() or None
-    registered_digests: dict[tuple[str, str], str] = {}
-    if binary_digest:
-        registered_digests[("binary-facts", "1.0.0")] = binary_digest
-    if proof_digest:
-        registered_digests[("proof-tool", "1.0.0")] = proof_digest
-    if digest:
-        registered_digests[("afl-casr", "1.0.0")] = digest
-    return create_sandbox_app(
-        runner, bearer_token=token, tool_digests=registered_digests
-    )
+    return create_sandbox_app(runner, bearer_token=token)
 
 
 def _resource_budget() -> ResourceBudget:
