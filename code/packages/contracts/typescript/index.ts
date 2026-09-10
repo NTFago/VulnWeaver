@@ -890,7 +890,7 @@ export interface CreateProjectRequest {
 export interface CreateTaskRequest {
   schema_version: SchemaVersion;
   artifact_version_ids: Array<Identifier>;
-  resource_budget: ResourceBudget;
+  resource_budget?: ResourceBudget;
 }
 
 export interface LoginRequest {
@@ -924,6 +924,7 @@ export interface ProductSettings {
   review_model_max_attempts: number;
   review_model_repair_attempts: number;
   review_model_min_interval_seconds: number;
+  review_model_context_window_tokens?: number;
   review_model_api_key?: string | null;
   clear_review_model_api_key?: boolean;
   tool_image_digests?: ToolImageDigests;
