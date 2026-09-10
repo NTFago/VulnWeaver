@@ -1,0 +1,335 @@
+<script lang="ts">
+  import type {
+    ArtifactVersion,
+    Finding,
+    FindingStatus,
+    Job,
+    PairFunction,
+    Project,
+    QueueEvent,
+    Poc,
+    Review,
+    Task,
+  } from "@vulnweaver/contracts";
+  import type { AgentRun } from "@vulnweaver/contracts";
+  import type { FindingEvidenceDetail } from "../api";
+  import { api } from "../api";
+  import { formatDate, shortId } from "../format";
+  import { taskResultLabels, taskStatusLabels } from "../i18n";
+
+  /** 任务详情页：任务状态、漏洞与报告、函数工作台、作业与事件轨迹、智能体运行。 */
+
+  type PairNodeLike = { id: string; function_id: string | null };
+  type PairEdgeLike = { source_node_id: string; target_node_id: string; type: string };
+
+  export let task: Task;
+  export let project: Project | null = null;
+  export let jobs: Job[] = [];
+  export let events: QueueEvent[] = [];
+  export let findings: Finding[] = [];
+  export let selectedFinding: Finding | null = null;
+  export let evidence: FindingEvidenceDetail[] = [];
+  export let pocs: Poc[] = [];
+  export let reviews: Review[] = [];
+  export let agentRuns: AgentRun[] = [];
+  export let pairFunctions: PairFunction[] = [];
+  export let pairNeighborhood: Record<string, unknown> | null = null;
+  export let selectedFunctionId: string | null = null;
+  export let reportVersionIds: string[] = [];
+  export let artifactVersions = new Map<string, ArtifactVersion>();
+  export let busy = false;
+
+  export let onOpenProject: () => void = () => {};
+  export let onCancelTask: () => void = () => {};
+  export let onCreateReport: (format: "markdown" | "pdf" | "sarif") => void = () => {};
+  export let onCreateProof: (kind: "proof_of_concept" | "exploit", scriptRef: string, imageDigest: string) => void = () => {};
+  export let onSelectFinding: (finding: Finding) => void = () => {};
+  export let onSubmitReview: (outcome: FindingStatus, rationale: string) => Promise<boolean> = async () => false;
+  export let onSubmitAnnotation: (note: string) => Promise<boolean> = async () => false;
+  export let onSelectFunction: (fn: PairFunction) => void = () => {};
+
+  let proofScriptRef = "";
+  let proofImageDigest = "sha256:";
+  let reviewOutcome: FindingStatus = "candidate";
+  let reviewRationale = "";
+  let annotationNote = "";
+
+  function functionLocation(fn: PairFunction): string {
+    const source = fn.source_location;
+    if (source) return `${source.path}:${source.start_line}`;
+    const binary = fn.binary_location;
+    if (binary) return `0x${binary.virtual_address.toString(16)}`;
+    return fn.language;
+  }
+
+  type CriticalLogicEntry = {
+    category: string;
+    score: number;
+    evidence: string[];
+    confirmed: boolean | null;
+    rationale: string | null;
+  };
+
+  function functionCritical(fn: PairFunction): CriticalLogicEntry[] {
+    const value = (fn.attributes as Record<string, unknown> | undefined)?.critical_logic;
+    return Array.isArray(value) ? (value as CriticalLogicEntry[]) : [];
+  }
+
+  function functionPseudocode(fn: PairFunction): string | null {
+    const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
+    if (typeof value === "string" && value.trim()) return value;
+    return null;
+  }
+
+  function relatedFunctions(direction: "callers" | "callees"): PairFunction[] {
+    if (!pairNeighborhood || !selectedFunctionId) return [];
+    const nodes = (pairNeighborhood.nodes ?? []) as PairNodeLike[];
+    const edges = (pairNeighborhood.edges ?? []) as PairEdgeLike[];
+    const nodeFunction = new Map<string, string>();
+    for (const node of nodes) if (node.function_id) nodeFunction.set(node.id, node.function_id);
+    const byId = new Map(pairFunctions.map((fn) => [fn.id, fn]));
+    const ids = new Set<string>();
+    for (const edge of edges) {
+      if (edge.type !== "call") continue;
+      const source = nodeFunction.get(edge.source_node_id);
+      const target = nodeFunction.get(edge.target_node_id);
+      if (direction === "callees" && source === selectedFunctionId && target) ids.add(target);
+      if (direction === "callers" && target === selectedFunctionId && source) ids.add(source);
+    }
+    ids.delete(selectedFunctionId);
+    return [...ids].flatMap((id) => (byId.has(id) ? [byId.get(id) as PairFunction] : []));
+  }
+
+  function displayResult(result: Task["result"]): string {
+    return result ? taskResultLabels[result] : "尚未生成";
+  }
+
+  function taskFailureContext(): string {
+    if (!task.failure) return "";
+    const reasons = task.failure.details.reason_codes;
+    return [task.failure.code, task.failure.message, Array.isArray(reasons) ? reasons.join(", ") : ""]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  function failureContext(job: Job): string {
+    if (!job.failure) return "";
+    const details = job.failure.details;
+    const tool = typeof details.tool_name === "string" ? `工具：${details.tool_name}` : "";
+    const reason = typeof details.reason === "string" ? `原因：${details.reason}` : "";
+    const exitCode = typeof details.exit_code === "number" ? `退出码：${details.exit_code}` : "";
+    return [tool, reason, exitCode].filter(Boolean).join(" · ");
+  }
+
+  function reportJobs(): Job[] {
+    return jobs.filter((job) => job.kind === "report");
+  }
+
+  function reportStatusText(job: Job): string {
+    const format = typeof job.arguments?.format === "string" ? job.arguments.format.toUpperCase() : "报告";
+    if (job.status === "failed") {
+      const reason = job.failure?.message ?? "未返回具体原因";
+      return `${format} 报告生成失败：${reason}${job.failure?.code ? `（${job.failure.code}）` : ""}`;
+    }
+    if (job.status === "succeeded") return `${format} 报告已生成`;
+    return `${format} 报告生成中…`;
+  }
+
+  function reportFileName(versionId: string): string {
+    const format = artifactVersions.get(versionId)?.generation_config.format;
+    if (format === "pdf") return "vulnweaver-report.pdf";
+    if (format === "sarif") return "vulnweaver-report.sarif";
+    return "vulnweaver-report.md";
+  }
+
+  function completedJobCount(): number {
+    return jobs.filter((job) => job.status === "succeeded").length;
+  }
+
+  async function submitReview(): Promise<void> {
+    if (!reviewRationale.trim()) return;
+    const saved = await onSubmitReview(reviewOutcome, reviewRationale.trim());
+    if (saved) reviewRationale = "";
+  }
+
+  async function submitAnnotation(): Promise<void> {
+    if (!annotationNote.trim()) return;
+    const saved = await onSubmitAnnotation(annotationNote.trim());
+    if (saved) annotationNote = "";
+  }
+
+  function createProof(kind: "proof_of_concept" | "exploit"): void {
+    onCreateProof(kind, proofScriptRef, proofImageDigest);
+  }
+</script>
+
+<section class="page-heading task-heading">
+  <div>
+    <button class="breadcrumb" on:click={onOpenProject}>{project?.name ?? "项目"}</button>
+    <h1>{taskStatusLabels[task.status]}</h1>
+    {#if task.failure}<p class="task-failure">失败原因：{taskFailureContext()}</p>{/if}
+    <p>结果：{displayResult(task.result)} · 更新于 {formatDate(task.updated_at)}</p>
+  </div>
+  <div class="task-actions">
+    <span class={`status-badge large ${task.status}`}><i></i>{taskStatusLabels[task.status]}</span>
+    {#if !["completed", "failed", "cancelled"].includes(task.status)}<button class="danger" on:click={onCancelTask} disabled={busy}>取消任务</button>{/if}
+  </div>
+</section>
+<section class="metric-strip task-metrics" aria-label="任务统计">
+  <div><strong>{completedJobCount()}<em>/ {jobs.length}</em></strong><span>已完成的执行单元</span></div>
+  <div><strong>{events.length}</strong><span>事件</span></div>
+  <div><strong>{findings.length}</strong><span>候选问题</span></div>
+  <div><strong>{task.resource_budget.max_dynamic_runs}</strong><span>动态运行额度</span></div>
+</section>
+<section class="panel table-panel">
+  <header class="panel-head">
+    <div><h2>问题与报告</h2><p>候选问题、人工复核与报告导出。</p></div>
+    <div class="task-actions">
+      <button class="secondary" on:click={() => onCreateReport("markdown")} disabled={busy}>Markdown</button>
+      <button class="secondary" on:click={() => onCreateReport("sarif")} disabled={busy}>SARIF</button>
+      <button class="secondary" on:click={() => onCreateReport("pdf")} disabled={busy}>PDF</button>
+    </div>
+  </header>
+  {#if findings.length === 0}
+    <div class="compact-empty">当前任务尚未产生候选问题。</div>
+  {:else}
+    <div class="finding-list">
+      {#each findings as finding (finding.id)}
+        <button class="finding-row" on:click={() => onSelectFinding(finding)}>
+          <span class={`status-dot ${finding.status}`}></span>
+          <span class="task-cell"><b>{finding.title}</b><small>{finding.severity.toUpperCase()} · {finding.category} · {finding.cwe_id}</small></span>
+          <span class="confidence">{Math.round(finding.confidence * 100)}%</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+  {#if selectedFinding}
+    <article class="finding-detail">
+      <header><b>{selectedFinding.title}</b><span class={`status-dot ${selectedFinding.status}`}></span></header>
+      <p>{selectedFinding.fix_suggestion}</p>
+      <small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · POC：{selectedFinding.poc_ids.length} 个</small>
+      <div class="proof-actions">
+        <label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS/object reference" /></label>
+        <label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label>
+        <button class="secondary" on:click={() => createProof("proof_of_concept")} disabled={busy}>发起 Proof</button>
+        {#if selectedFinding.status === "confirmed" && project?.exploit_validation_enabled}<button class="danger" on:click={() => createProof("exploit")} disabled={busy}>发起 Exploit</button>{/if}
+      </div>
+      <div class="proof-actions review-actions">
+        <label>复核结论<select bind:value={reviewOutcome}><option value="candidate">候选</option><option value="confirmed">确认</option><option value="false_positive">误报</option><option value="disputed">有争议</option><option value="unverifiable">无法验证</option></select></label>
+        <label>人工复核意见<textarea bind:value={reviewRationale} rows="2" placeholder="记录复核结论与依据"></textarea></label>
+        <button class="secondary" on:click={submitReview} disabled={busy || !reviewRationale.trim()}>保存复核</button>
+      </div>
+      <div class="proof-actions annotation-actions">
+        <label>标注<textarea bind:value={annotationNote} rows="2" placeholder="记录问题标签或修正说明"></textarea></label>
+        <button class="secondary" on:click={submitAnnotation} disabled={busy || !annotationNote.trim()}>保存标注</button>
+      </div>
+      {#if reviews.length > 0}
+        <div class="detail-evidence"><b>复核历史</b>{#each reviews as review, i (i)}<small>{review.outcome} · {review.model} · {review.rationale}</small>{/each}</div>
+      {/if}
+      {#if evidence.length > 0}
+        <div class="detail-evidence"><b>证据链</b>{#each evidence as item, i (i)}<small>{item.evidence.type} · {item.evidence.strength} · {item.evidence.tool?.name ?? "人工"} · {item.evidence.digest.slice(0, 16)}…</small>{/each}</div>
+      {/if}
+      {#if pocs.length > 0}
+        <div class="detail-evidence"><b>复现记录</b>{#each pocs as poc (poc.id)}<small>{poc.kind} · {poc.status} · {poc.result?.toUpperCase() ?? "未执行"}</small>{/each}</div>
+      {/if}
+    </article>
+  {/if}
+  {#if reportJobs().length > 0}
+    <div class="report-statuses" aria-live="polite">
+      {#each reportJobs() as reportJob (reportJob.id)}
+        <small class:failed={reportJob.status === "failed"}>{reportStatusText(reportJob)}</small>
+      {/each}
+    </div>
+  {/if}
+  {#if reportVersionIds.length > 0}
+    <div class="report-links">
+      {#each reportVersionIds as versionId (versionId)}
+        {#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download={reportFileName(versionId)}>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}
+      {/each}
+    </div>
+  {/if}
+</section>
+<section class="panel table-panel">
+  <header class="panel-head"><div><h2>函数与调用链</h2><p>点击函数联动调用关系与伪代码。</p></div></header>
+  {#if pairFunctions.length === 0}
+    <div class="compact-empty">样本索引完成后，此处将列出函数、伪代码与调用链。</div>
+  {:else}
+    <div class="workbench">
+      <div class="function-list" role="listbox" aria-label="函数列表">
+        {#each pairFunctions as fn (fn.id)}
+          <button class:selected={selectedFunctionId === fn.id} on:click={() => onSelectFunction(fn)}>
+            <b>{fn.name}</b>
+            {#if functionCritical(fn).length > 0}<em class="key-badge">{functionCritical(fn).map((entry) => entry.category).join(" / ")}</em>{/if}
+            <small>{functionLocation(fn)}</small>
+          </button>
+        {/each}
+      </div>
+      <div class="function-detail">
+        {#if !selectedFunctionId}
+          <div class="compact-empty">选择一个函数，查看其调用方、被调用方与伪代码。</div>
+        {:else}
+          {@const selected = pairFunctions.find((fn) => fn.id === selectedFunctionId)}
+          {#if selected}
+            <div class="function-title-block"><b class="function-title">{selected.name}</b><small>{selected.signature ?? functionLocation(selected)}</small></div>
+            {#if functionPseudocode(selected)}<pre class="code-view">{functionPseudocode(selected)}</pre>{:else}<small class="muted">该函数没有已导出的伪代码。</small>{/if}
+            {#if pairNeighborhood}
+              <div class="call-columns">
+                <div><b>调用方</b>{#each relatedFunctions("callers") as caller (caller.id)}<button on:click={() => onSelectFunction(caller)}>{caller.name}</button>{:else}<small class="muted">无</small>{/each}</div>
+                <div><b>被调用</b>{#each relatedFunctions("callees") as callee (callee.id)}<button on:click={() => onSelectFunction(callee)}>{callee.name}</button>{:else}<small class="muted">无</small>{/each}</div>
+              </div>
+            {:else}<small class="muted">调用关系加载中…</small>{/if}
+          {/if}
+        {/if}
+      </div>
+    </div>
+  {/if}
+</section>
+<section class="task-grid">
+  <section class="panel table-panel">
+    <header class="panel-head"><div><h2>执行单元</h2><p>由编排层创建的 Job。</p></div></header>
+    {#if jobs.length === 0}
+      <div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>
+    {:else}
+      <div class="job-list">
+        {#each jobs as job (job.id)}
+          <article>
+            <span class={`status-dot ${job.status}`}></span>
+            <div><b>{job.kind.replaceAll("_", " ")}</b><small>{job.status} · attempt {job.attempt}/{job.retry_policy.max_attempts}</small></div>
+            {#if job.failure}<p>{job.failure.message}</p><small>{job.failure.code}{failureContext(job) ? ` · ${failureContext(job)}` : ""}</small>{/if}
+          </article>
+        {/each}
+      </div>
+    {/if}
+  </section>
+  <section class="panel table-panel">
+    <header class="panel-head"><div><h2>决策与状态轨迹</h2><p>任务事件实时流。</p></div><small class="live"><i></i>LIVE</small></header>
+    {#if events.length === 0}
+      <div class="compact-empty">尚未接收事件。</div>
+    {:else}
+      <ol class="timeline">
+        {#each [...events].reverse() as event (event.event_id)}
+          <li><span>{String(event.sequence).padStart(2, "0")}</span><div><b>{event.event_type}</b><small>{formatDate(event.occurred_at)} · {shortId(event.event_id)}</small><details><summary>载荷</summary><code>{JSON.stringify(event.payload)}</code></details></div></li>
+        {/each}
+      </ol>
+    {/if}
+  </section>
+</section>
+<section class="panel table-panel">
+  <header class="panel-head"><div><h2>智能体运行轨迹</h2><p>各智能体的模型调用与决策记录。</p></div><span class="badge muted">{agentRuns.length} 条</span></header>
+  {#if agentRuns.length === 0}
+    <div class="compact-empty">模型分析运行后，此处将展示各智能体的决策轨迹。</div>
+  {:else}
+    <div class="agent-run-list">
+      {#each agentRuns as run (run.id)}
+        <article>
+          <span class={`status-dot ${run.status}`}></span>
+          <div>
+            <b>{run.model}</b>
+            <small>{run.status} · 决策 {run.decisions.length} 条 · token {run.token_usage.input_tokens}/{run.token_usage.output_tokens} · {typeof run.duration_ms === "number" ? `${run.duration_ms}ms` : "运行中"}</small>
+            {#if run.failure}<p>{run.failure.code}</p>{/if}
+          </div>
+        </article>
+      {/each}
+    </div>
+  {/if}
+</section>
