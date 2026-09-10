@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import cast
+from typing import Protocol, cast
 
 from vulnweaver_contracts import (
     ArtifactKind,
+    CrashRecord,
     FailureKind,
     FuzzRequest,
     FuzzStatus,
@@ -23,17 +24,28 @@ from vulnweaver_contracts import (
 from vulnweaver_fuzzing.executor import FuzzExecutionService
 
 
+class CrashEvidenceSink(Protocol):
+    async def persist(
+        self, *, finding_id: str, crashes: tuple[CrashRecord, ...], created_by: str
+    ) -> tuple[str, ...]: ...
+
+
 class FuzzJobExecutor:
     """Execute only an explicitly structured FuzzRequest attached to a fuzz Job."""
 
-    def __init__(self, service: FuzzExecutionService) -> None:
+    def __init__(
+        self, service: FuzzExecutionService, *, crash_sink: CrashEvidenceSink | None = None
+    ) -> None:
         self._service = service
+        self._crash_sink = crash_sink
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] is not JobKind.FUZZ:
             return _failed(job, "fuzz.invalid_job_kind", FailureKind.VALIDATION)
         arguments = job.get("arguments")
-        raw = arguments.get("fuzz_request") if isinstance(arguments, dict) else None
+        if not isinstance(arguments, dict):
+            return _failed(job, "fuzz.request_required", FailureKind.VALIDATION)
+        raw = arguments.get("fuzz_request")
         if not isinstance(raw, dict):
             return _failed(job, "fuzz.request_required", FailureKind.VALIDATION)
         request = cast(FuzzRequest, raw)
@@ -41,7 +53,16 @@ class FuzzJobExecutor:
             return _failed(job, "fuzz.job_id_mismatch", FailureKind.VALIDATION)
         try:
             validate_contract("FuzzRequest", request)
-            result = await self._service.run(request, cancellation)
+            outcome = await self._service.run_with_crashes(request, cancellation)
+            result = outcome.result
+            finding_id = arguments.get("finding_id")
+            evidence_ids: list[str] = []
+            if outcome.crashes and self._crash_sink is not None and isinstance(finding_id, str):
+                evidence_ids = list(
+                    await self._crash_sink.persist(
+                        finding_id=finding_id, crashes=outcome.crashes, created_by=job["id"]
+                    )
+                )
         except (TypeError, ValueError) as error:
             return _failed(job, "fuzz.invalid_request", FailureKind.VALIDATION, str(error))
         if result["status"] is FuzzStatus.SUCCEEDED:
@@ -55,7 +76,7 @@ class FuzzJobExecutor:
             job_id=job["id"],
             status=status,
             produced_artifact_version_ids=[],
-            evidence_ids=[],
+            evidence_ids=evidence_ids,
             failure=failure,
         )
 

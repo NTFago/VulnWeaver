@@ -12,7 +12,7 @@ from typing import Any
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
-from vulnweaver_contracts import ToolIdentity
+from vulnweaver_contracts import CrashRecord, ToolIdentity
 from vulnweaver_fuzzing import (
     AFL_CASR_TOOL_NAME,
     AFL_CASR_TOOL_VERSION,
@@ -39,6 +39,7 @@ from vulnweaver_orchestrator import (
     SemanticAuditor,
     SemanticAuditScheduler,
     TaskAggregateSettlementHook,
+    persist_crash_evidence,
 )
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings
@@ -107,7 +108,7 @@ async def _run() -> None:
         ),
     )
     proof_executor = _proof_executor(database, store, model_gateway)
-    fuzz_executor = _fuzz_executor(store, tool_registry)
+    fuzz_executor = _fuzz_executor(database, store, tool_registry)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -342,7 +343,7 @@ def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
 
 
 def _fuzz_executor(
-    store: LocalContentAddressedStore, tool_registry: ToolRegistry
+    database: Database, store: LocalContentAddressedStore, tool_registry: ToolRegistry
 ) -> FuzzJobExecutor | None:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
@@ -366,8 +367,22 @@ def _fuzz_executor(
             crash_tool=ToolIdentity(
                 name=CASR_TOOL_NAME, version=CASR_TOOL_VERSION, image_digest=spec["image_digest"]
             ),
-        )
+        ),
+        crash_sink=_CrashEvidenceSink(database),
     )
+
+
+class _CrashEvidenceSink:
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def persist(
+        self, *, finding_id: str, crashes: tuple[CrashRecord, ...], created_by: str
+    ) -> tuple[str, ...]:
+        async with self._database.transaction() as repositories:
+            return await persist_crash_evidence(
+                repositories, finding_id=finding_id, crashes=crashes, created_by=created_by
+            )
 
 
 async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
