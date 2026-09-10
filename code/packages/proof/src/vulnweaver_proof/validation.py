@@ -50,7 +50,7 @@ def validate_generated_script(
     """Check generated PoC text against the exploit safety red lines."""
     if max_bytes < 1:
         raise ValueError("script size limit must be positive")
-    if not isinstance(script, str) or not script.strip():
+    if not script.strip():
         return GeneratedScriptPolicyResult(False, ("empty_script",))
     if len(script.encode("utf-8")) > max_bytes:
         return GeneratedScriptPolicyResult(False, ("script_too_large",))

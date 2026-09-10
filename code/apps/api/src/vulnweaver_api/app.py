@@ -658,7 +658,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         function_id: str,
         depth: int = 1,
         _: Annotated[str, Depends(require_account)] = "",
-    ) -> dict[str, list[Any]]:
+    ) -> dict[str, Any]:
         """Return bounded caller/callee edges for a function in the task."""
         if depth < 1 or depth > 3:
             raise ApiInputError(

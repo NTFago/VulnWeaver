@@ -39,8 +39,13 @@ def assess_control_flow_flattening(
         blocks_by_function[block["function_name"]].append(block)
     jumps_by_function: Counter[str] = Counter()
     for xref in xrefs:
-        if xref["type"] == "jump" and xref.get("target_symbol") is None:
-            jumps_by_function[xref["source_function"]] += 1
+        source_function = xref.get("source_function")
+        if (
+            xref["type"] == "jump"
+            and xref.get("target_symbol") is None
+            and source_function is not None
+        ):
+            jumps_by_function[source_function] += 1
     results: list[ObfuscationAssessment] = []
     for function_name in sorted(blocks_by_function):
         blocks = blocks_by_function[function_name]
