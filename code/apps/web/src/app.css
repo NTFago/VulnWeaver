@@ -670,6 +670,9 @@ textarea { resize: vertical; min-height: 44px; }
 }
 .report-links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
 .report-links .secondary { margin: 0; text-decoration: none; display: inline-flex; align-items: center; }
+.report-statuses { display: grid; gap: 7px; margin-top: 16px; }
+.report-statuses small { color: var(--muted); line-height: 1.5; }
+.report-statuses small.failed { color: #ff9d8e; }
 
 /* ---------- 任务页：函数工作台 ---------- */
 

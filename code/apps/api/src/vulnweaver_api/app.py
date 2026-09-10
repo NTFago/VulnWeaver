@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import (
@@ -548,10 +549,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 while chunk := stream.read(1024 * 1024):
                     yield chunk
 
+        media_type, filename = _artifact_download_metadata(version)
         return StreamingResponse(
             chunks(),
-            media_type="application/octet-stream",
-            headers={"ETag": f'"{version["digest"]}"'},
+            media_type=media_type,
+            headers={
+                "ETag": f'"{version["digest"]}"',
+                "Content-Disposition": _content_disposition(filename),
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, no-store",
+            },
         )
 
     @app.get("/api/projects/{project_id}/tasks")
@@ -1065,6 +1072,41 @@ async def _artifact_detail(repositories: Any, project_id: str, artifact_id: str)
         artifact=cast(Artifact, dict(artifact)),
         versions=[cast(ArtifactVersion, dict(version)) for version in versions],
     )
+
+
+_REPORT_DOWNLOADS = {
+    "markdown": ("text/markdown; charset=utf-8", "vulnweaver-report.md"),
+    "pdf": ("application/pdf", "vulnweaver-report.pdf"),
+    "sarif": ("application/sarif+json", "vulnweaver-report.sarif"),
+}
+
+
+def _artifact_download_metadata(version: ArtifactVersion) -> tuple[str, str]:
+    """Choose a safe media type and filename from immutable generation metadata."""
+    generation_config = version["generation_config"]
+    format_value = generation_config.get("format")
+    if isinstance(format_value, str) and format_value in _REPORT_DOWNLOADS:
+        return _REPORT_DOWNLOADS[format_value]
+
+    filename = generation_config.get("filename")
+    if isinstance(filename, str):
+        safe_name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        safe_name = "".join(
+            character
+            if ord(character) >= 32 and ord(character) != 127 and character not in {'"', ";"}
+            else "_"
+            for character in safe_name
+        )[:128]
+        if safe_name not in {"", ".", ".."}:
+            return "application/octet-stream", safe_name
+    return "application/octet-stream", "vulnweaver-artifact"
+
+
+def _content_disposition(filename: str) -> str:
+    """Emit an ASCII fallback plus an RFC 5987 UTF-8 filename."""
+    ascii_fallback = filename.encode("ascii", "ignore").decode() or "download"
+    encoded = quote(filename, safe="!#$&+-.^_`|~")
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
 
 
 def _validate_upload_kind(kind: ArtifactKind) -> None:

@@ -7,6 +7,8 @@ from html import escape
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
+from vulnweaver_reporting.locations import location_text
+
 
 def _poc_counts(findings: Sequence[Finding], pocs: Sequence[Poc]) -> dict[str, int]:
     counts: dict[str, int] = {finding["id"]: 0 for finding in findings}
@@ -51,10 +53,7 @@ def build_html(
     for finding in findings:
         finding_evidence = (evidence or {}).get(finding["id"], [])
         location = finding["location"]
-        address = location.get("address")
-        location_text = f"0x{address:x}" if isinstance(address, int) else (
-            f"{location.get('path', 'unknown')}:{location.get('line', 1)}"
-        )
+        finding_location = location_text(location)
         severity = escape(str(getattr(finding["severity"], "value", finding["severity"])))
         status = escape(str(getattr(finding["status"], "value", finding["status"])))
         items.append(
@@ -62,7 +61,7 @@ def build_html(
             f"<h2>{escape(finding['title'][:256])}</h2>"
             f"<p><b>ID:</b> <code>{escape(finding['id'])}</code> "
             f"<b>CWE:</b> <code>{escape(finding['cwe_id'])}</code></p>"
-            f"<p><b>Location:</b> <code>{escape(str(location_text))}</code></p>"
+            f"<p><b>Location:</b> <code>{escape(finding_location)}</code></p>"
             f"<p><b>Severity:</b> <code>{severity}</code> "
             f"<b>Status:</b> <code>{status}</code></p>"
             f"<p><b>Evidence references:</b> "

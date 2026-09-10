@@ -10,9 +10,9 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成并经浏览器视觉验收；大源码归档摘录读取已修复并完成定向验证，等待真实模型任务回放确认语义审计结论。
+- **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成；T38 报告下载文件名/类型、报告位置格式和失败状态提示已修复，待部署镜像更新后做一次浏览器回归。
 - **当前分支**：`fix/large-archive-excerpts`（隔离 worktree `.worktree/fix-large-archive-excerpts`，基于 `origin/main@c3f571d`）。
-- **当前负责人**：Codex（大归档源码摘录修复待真实任务验证）；T26-T37 各行见进度表。
+- **当前负责人**：Codex（T38 已完成）；T26-T38 各行见进度表。
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
@@ -62,6 +62,8 @@
 | P2 大归档源码摘录修复 | 待验证 | Codex（`fix/large-archive-excerpts`） | 真实模型任务确认配置和调用正常，但 95 MiB `BettaFish.zip` 被摘录器的 16 MiB 完整归档读取上限拒绝，模型仅得到函数元数据而无法审计源码；现改为校验归档元数据后只解压请求的源码文件，并缓存同一 Reader 内的 CAS 完整性校验。Linux 运行镜像定向测试 21 passed、Ruff 通过；已用真实 BettaFish 工件成功读取 `BettaFish/ReportEngine/llms/base.py`（426 bytes，未截断），Worker 已重建并运行 | 在 Web 重新投递 BettaFish，确认模型输入含源码摘录、任务不再出现 `excerpt_archive_too_large`，并检查审计和报告结果 | 2026-09-11 |
 | T37 Markdown 快速路径 CI 修复 | 已完成 | Codex（`ci/markdown-gate-move-gate`，PR #53 已合并） | Q-017 登记；Markdown gate 移入具备全量克隆的 `change-scope` job（浅克隆无 base 对象、`persist-credentials: false` 不可 fetch）；修复 PR #53 全量门禁通过；本收尾 PR（markdown-only）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 | 2026-09-11 |
 | T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`，PR #49 已合并） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
+
+| T38 报告下载与导出可读性修复 | 已完成 | Codex（`fix/report-download`） | 下载响应按报告格式返回安全文件名和媒体类型；Markdown/HTML/SARIF 读取规范源码范围，二进制位置读取 `virtual_address`；前端显示报告生成失败原因并为下载链接提供扩展名 | 部署更新后的 API/Web 镜像后做浏览器点击回归 | 2026-09-11 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
@@ -138,6 +140,8 @@
 | Q-016 | 工件卷在全新部署时存在属主竞争：sandbox-runner 以 root 运行，若它先于非 root 的 api/analysis-worker 写入共享卷，`.staging`/`objects` 会被建成 root 属主，非 root 消费者随即因 `PermissionError` 崩溃重启 | **每次全新部署（空卷）都会命中**，表现为 analysis-worker 崩溃循环；手工 `chown` 可解但删卷重建即复现 | 已修复：`compose.yaml` 新增一次性 `artifact-init` 服务，以 root 创建 `.staging`/`objects` 并把工件卷 chown 给 10001，api/analysis-worker/sandbox-runner 均改为依赖其成功完成（orchestrator 不挂载该卷，不依赖）。实测：`down -v` 后全新启动，`artifact-init` exit 0、`analysis-worker` 稳定 Up、卷内三个目录属主均为 10001，无需任何手工操作 | 已处理 | 本次修复分支 |
 | Q-017 | Markdown 快速路径 CI 报错退出：`python-quality` job 为浅克隆（depth 1）且 `persist-credentials: false`，先报 `fatal: bad object`（base 对象缺失），补浅取后又因无凭据报 `could not read Username`（PR #50 首次实跑暴露；该检查非必需，红 X 未阻断合并） | 文档类 PR 的门禁信号失真：失败会被常态忽略；若日后把该检查设为必需，所有 docs PR 都会被阻断 | 已修复：把 `Markdown documentation gate` 步骤移入 `change-scope` job——该 job 本就是全量克隆（`fetch-depth: 0`）且分类步骤已在用同样的 BASE/HEAD SHA 执行 `git diff`，零网络零凭据；`python-quality` 在文档类 PR 下仅剩 checkout，按既有设计以成功状态跳过完整门禁。修复 PR 走全量门禁验证，快速路径经修复后的 markdown-only PR 实跑验证（见 T37） | 已处理 | Codex |
 
+| Q-018 | 报告下载接口未返回报告文件名/媒体类型，报告渲染器读取不存在的 `location.line`，二进制位置字段 `virtual_address` 也未被消费 | 浏览器下载得到无扩展名的 `content`；源码位置错误显示为第 1 行，二进制位置显示为 `unknown` | T38 已修复下载响应元数据、Markdown/HTML/PDF/SARIF 的源码范围与二进制地址读取，并补充报告失败状态提示 | 已处理 | Codex |
+
 ## 5. 当前阻碍点
 
 当前无阻碍。T16/T18/T19/T20/T21/T22/T32/T34 的未完成项属于待验证工作或待确认设计（D-002），不应标记为阻碍：
@@ -172,6 +176,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-11 | T38 报告下载与导出可读性修复（`fix/report-download`） | Docker Linux 临时测试容器内 `uv sync --all-packages --no-editable` 后，Ruff 通过；报告/API 定向测试 **36 passed**（含 PostgreSQL/Redis 集成，1 个 Starlette 弃用警告）；本次 Python 修改文件 Pyright 0 错误；Web `svelte-check` 0 错误 0 警告，Vite build 成功 | 标准 Dev Container 因 Docker Hub 鉴权网络超时未启动；仓库级 Windows Pyright 仅因未安装 `weasyprint` 报既有 `pdf.py` 缺失依赖；更新 API/Web 镜像后需补浏览器下载回归 |
 | 2026-09-11 | T37 Markdown 快速路径 CI 修复（`ci/markdown-gate-move-gate`，PR #53 已合并入 `main`） | 首次实跑暴露（PR #50：`bad object`）与二次实跑暴露（PR #52：无凭据 fetch 失败）均登记于 Q-017；最终修复把 Markdown gate 移入全量克隆的 `change-scope` job，修复 PR 全量门禁通过；收尾 markdown-only PR（本条所属分支）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 |
 | 2026-09-10 | T36 Web 设置默认页与界面现代化改版（`feat/web-settings-first-modernization`，PR #49 已合并入 `main` `50fcbca`） | Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 0 错误 0 警告、`vite build` 成功；以临时 Mock API（契约同形数据，存系统临时目录不入库）+ 浏览器采集 17 张页面截图（桌面设置/项目/任务/认证三变体 + 移动端两张）经 judge 视觉验收全部通过；CI Python quality gate 通过 | 部署环境重建 Web 镜像后的真实浏览器回归待执行；远程分支 `origin/feat/web-settings-first-modernization` 保留未删（删远程分支需用户确认） |
 | 2026-09-10 | Q-015/Q-016 修复（`fix/fresh-deploy-defaults`）：沙箱客户端超时默认值回归、工件卷属主竞争 | `docker compose config --quiet` 通过，依赖关系核对无误（api/analysis-worker/sandbox-runner → artifact-init，orchestrator 不受影响）；**删卷重建实测**：`down -v` 后 `up -d`，`artifact-init` exit 0、11 个容器全部 Up、`analysis-worker` 稳定（此前必崩溃循环）、工件卷 `.staging`/`.objects`/`.uploads` 属主均为 10001；Web `200`、`/health/ready` ready、`/api/auth/installation` `registration_open: true`（空库） | 无 |
@@ -242,5 +247,6 @@
 6. 里程碑全量回归：T20/T21/T22/T33 由「待验证」转「已完成」需在部署环境完成一次覆盖 Proof→报告→浏览器下载的全链路回归。
 7. 仓库清理（可选，需确认）：移除 `vulnweaver-t30` worktree 与本地 `feat/t32-fuzz-auto` 分支；清理其它已合并本地分支（`docs/t30-merge-status` 等）与远程 `chore/skip-wip-ci`。
 8. Q-010~Q-013（`bf956b6`/`291774d`）与 PR #45（设置页）、PR #46（模型网关）均已合并入 `main` 并推送；Q-015/Q-016 在 `fix/fresh-deploy-defaults` 上修复并验证。工作区已收敛为主仓库 `课设 - codex` 单一 `main` 检出，其余 worktree 与本地/远程分支已清理。部署已完成删卷重建，当前为**空数据库**：需在页面上重新注册管理员，并在设置页配置复核模型（否则 `semantic_audit` 仍会以 `model_budget_exhausted` 失败、任务只能到 `partial`）。
+9. T38 部署回归：更新 API/Web 镜像后确认 Markdown/PDF/SARIF 下载文件名分别带 `.md`、`.pdf`、`.sarif`，并确认失败报告在任务页显示结构化原因。
 
-更新时间：2026-09-10（Asia/Shanghai）
+更新时间：2026-09-11（Asia/Shanghai）

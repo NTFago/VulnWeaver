@@ -7,6 +7,8 @@ from typing import Any, cast
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
+from vulnweaver_reporting.locations import binary_address, source_region
+
 
 def build_sarif(
     findings: Sequence[Finding],
@@ -114,14 +116,7 @@ def _result(
         "ruleId": finding["cwe_id"],
         "level": level,
         "message": {"text": finding["title"][:4096]},
-        "locations": [
-            {
-                "physicalLocation": {
-                    "artifactLocation": {"uri": _location_uri(finding)},
-                    "region": _region(finding),
-                }
-            }
-        ],
+        "locations": [{"physicalLocation": _physical_location(finding)}],
         "codeFlows": _code_flows(finding),
         "properties": {
             "findingId": finding["id"],
@@ -173,7 +168,7 @@ def _step_physical_location(step: Mapping[str, object]) -> dict[str, Any]:
 
 def _location_uri(finding: Finding) -> str:
     location = finding["location"]
-    address = location.get("address")
+    address = binary_address(location)
     if isinstance(address, int):
         return f"binary://0x{address:x}"
     value = location.get("path")
@@ -181,9 +176,17 @@ def _location_uri(finding: Finding) -> str:
 
 
 def _region(finding: Finding) -> dict[str, int]:
-    location = finding["location"]
-    line = location.get("line")
-    return {"startLine": line if isinstance(line, int) and line > 0 else 1}
+    return source_region(finding["location"])
+
+
+def _physical_location(finding: Finding) -> dict[str, Any]:
+    physical_location: dict[str, Any] = {
+        "artifactLocation": {"uri": _location_uri(finding)},
+    }
+    region = _region(finding)
+    if region:
+        physical_location["region"] = region
+    return physical_location
 
 
 def _enum_value(value: object) -> str:

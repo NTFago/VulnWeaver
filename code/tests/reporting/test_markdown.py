@@ -10,6 +10,37 @@ def test_markdown_report_is_clear_for_no_findings() -> None:
     assert "No findings" in build_markdown([])
 
 
+def test_markdown_renders_canonical_binary_location() -> None:
+    finding = cast(
+        Finding,
+        {
+            "schema_version": "1.0.0",
+            "id": "finding:binary",
+            "task_id": "task:1",
+            "category": "static_only",
+            "cwe_id": "CWE-22",
+            "title": "Path issue",
+            "severity": "medium",
+            "confidence": 0.4,
+            "location": {
+                "artifact_version_id": "artifact-version:1",
+                "virtual_address": 0x401000,
+                "file_offset": 0,
+            },
+            "dataflow": [],
+            "call_path": [],
+            "status": "candidate",
+            "evidence_ids": [],
+            "review_ids": [],
+            "poc_ids": [],
+            "fix_suggestion": "Fix it",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+    )
+
+    assert "0x401000" in build_markdown([finding])
+
+
 def test_markdown_report_references_evidence_without_embedding_logs() -> None:
     finding = cast(
         Finding,
@@ -22,7 +53,14 @@ def test_markdown_report_references_evidence_without_embedding_logs() -> None:
             "title": "Injection",
             "severity": "high",
             "confidence": 0.9,
-            "location": {"path": "main.py", "line": 3},
+            "location": {
+                "artifact_version_id": "artifact-version:1",
+                "path": "main.py",
+                "start_line": 3,
+                "start_column": 1,
+                "end_line": 4,
+                "end_column": 4,
+            },
             "dataflow": [],
             "call_path": [],
             "status": "confirmed",
@@ -35,6 +73,7 @@ def test_markdown_report_references_evidence_without_embedding_logs() -> None:
     )
     report = build_markdown([finding])
     assert "finding:1" in report
+    assert "main.py:3-4" in report
     assert "evidence:1" in report
     assert "Raw tool output" in report
     assert "1 referenced artifact" in report

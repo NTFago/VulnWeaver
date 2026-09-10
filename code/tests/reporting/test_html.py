@@ -104,6 +104,7 @@ def test_build_html_counts_proof_runs_per_finding() -> None:
 
     html = build_html([finding], [poc])
     assert "<b>Proof runs:</b> 1" in html
+    assert "src/app.py:2" in html
     assert build_html([finding]) .count("Proof runs:</b> 0") == 1
 
 

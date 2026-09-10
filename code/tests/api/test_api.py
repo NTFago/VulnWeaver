@@ -10,9 +10,14 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from vulnweaver_api import ApiSettings, create_app
-from vulnweaver_api.app import _wait_for_websocket_disconnect
+from vulnweaver_api.app import (
+    _artifact_download_metadata,
+    _content_disposition,
+    _wait_for_websocket_disconnect,
+)
 from vulnweaver_api.auth import SESSION_COOKIE, token_digest
 from vulnweaver_contracts import (
+    ArtifactVersion,
     Evidence,
     EvidenceRelation,
     EvidenceStrength,
@@ -86,6 +91,26 @@ def _budget() -> dict[str, int]:
         "max_dynamic_runs": 0,
         "timeout_seconds": 60,
     }
+
+
+@pytest.mark.parametrize(
+    ("report_format", "media_type", "filename"),
+    [
+        ("markdown", "text/markdown; charset=utf-8", "vulnweaver-report.md"),
+        ("pdf", "application/pdf", "vulnweaver-report.pdf"),
+        ("sarif", "application/sarif+json", "vulnweaver-report.sarif"),
+    ],
+)
+def test_report_download_metadata_is_typed_and_named(
+    report_format: str, media_type: str, filename: str
+) -> None:
+    version = cast(
+        ArtifactVersion,
+        {"generation_config": {"format": report_format}},
+    )
+
+    assert _artifact_download_metadata(version) == (media_type, filename)
+    assert _content_disposition(filename).endswith(f"filename*=UTF-8''{filename}")
 
 
 def test_first_registration_is_single_use_and_establishes_session(client: TestClient) -> None:
@@ -455,6 +480,9 @@ def test_upload_task_event_and_content_flow(client: TestClient) -> None:
     assert content.status_code == 200
     assert content.content == b"PK\x03\x04harmless"
     assert content.headers["etag"] == f'"{version["digest"]}"'
+    assert content.headers["content-disposition"] == (
+        'attachment; filename="sample.zip"; filename*=UTF-8\'\'sample.zip'
+    )
 
     task = client.post(
         f"/api/projects/{project['id']}/tasks",
