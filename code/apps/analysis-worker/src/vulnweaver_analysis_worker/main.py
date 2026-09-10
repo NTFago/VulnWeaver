@@ -13,6 +13,14 @@ from typing import Any
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryImportExecutor
 from vulnweaver_contracts import ToolIdentity
+from vulnweaver_fuzzing import (
+    AFL_CASR_TOOL_NAME,
+    AFL_CASR_TOOL_VERSION,
+    CASR_TOOL_NAME,
+    CASR_TOOL_VERSION,
+    FuzzExecutionService,
+    FuzzJobExecutor,
+)
 from vulnweaver_model_gateway import (
     ModelEndpoint,
     ModelGateway,
@@ -49,7 +57,7 @@ from vulnweaver_source_analysis import (
     StaticAnalysisExecutor,
     StaticAnalysisScheduler,
 )
-from vulnweaver_tool_runtime import ToolSpecLoader
+from vulnweaver_tool_runtime import ToolRegistry, ToolSpecLoader
 from vulnweaver_worker import ReliableWorker, WorkerSettings
 
 from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
@@ -99,6 +107,7 @@ async def _run() -> None:
         ),
     )
     proof_executor = _proof_executor(database, store, model_gateway)
+    fuzz_executor = _fuzz_executor(store, tool_registry)
     pair_importer = SourcePairImporter(database)
     source_executor = SourceImportExecutor(
         database,
@@ -157,6 +166,7 @@ async def _run() -> None:
         proof=proof_executor,
         report=report_executor,
         semantic_audit=audit_executor,
+        fuzz=fuzz_executor,
     )
     worker = ReliableWorker(
         database,
@@ -329,6 +339,35 @@ def _auto_exploit_scheduler(database: Database) -> AutoExploitScheduler | None:
         # Without a pinned proof image the automatic exploit pipeline stays off.
         return None
     return AutoExploitScheduler(database, image_digest=image_digest)
+
+
+def _fuzz_executor(
+    store: LocalContentAddressedStore, tool_registry: ToolRegistry
+) -> FuzzJobExecutor | None:
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    try:
+        spec = tool_registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+    except KeyError:
+        return None
+    client = SandboxRunnerClient(
+        runner_url,
+        timeout_seconds=float(os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "600")),
+    )
+    return FuzzJobExecutor(
+        FuzzExecutionService(
+            store,
+            tool_registry,
+            client,
+            fuzz_tool=ToolIdentity(
+                name=spec["name"], version=spec["version"], image_digest=spec["image_digest"]
+            ),
+            crash_tool=ToolIdentity(
+                name=CASR_TOOL_NAME, version=CASR_TOOL_VERSION, image_digest=spec["image_digest"]
+            ),
+        )
+    )
 
 
 async def _binary_sandbox() -> tuple[SandboxRunnerClient | None, str | None]:
