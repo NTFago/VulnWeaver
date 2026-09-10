@@ -486,7 +486,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def artifact_content(
         artifact_id: str,
         version_id: str | None = Query(default=None),
-        _: Annotated[str, Depends(require_account)],
+        _: Annotated[str, Depends(require_account)] = "",
     ) -> StreamingResponse:
         async with database.transaction() as repositories:
             artifact = await repositories.artifacts.get(artifact_id)
