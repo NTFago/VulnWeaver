@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-10（Asia/Shanghai）
-- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已在 `feat/t25-agent-loop` 完成实现与定向验收（待验证）；T26-T34 由并行会话推进中。
+- **当前阶段**：对照《2026 网络空间安全课程设计》要求完成差距分析（Q-009）：T01-T24 按此前裁剪范围全部完成，课设核心要求缺口由补齐任务包 T25-T34 承接（定义见第 3.1 节）。T25 智能体规划执行框架已合并入 `main`（PR #31，待真实任务轨迹验收）；T29 语义审计智能体源码侧已在 `feat/t29-semantic-audit` 完成实现与定向验收（待验证）；其余任务包由并行会话推进中。
 - **当前分支**：`main`（T25 位于 `feat/t25-agent-loop` 独立 worktree，已 rebase 至最新 `origin/main`）。
 - **当前负责人**：Codex（T01-T24）；T25 Codex（`feat/t25-agent-loop`）；T26-T34 各行见进度表。P2 四语言端到端使用 `.env` 中的 GLM（bigmodel.cn）端点经 T23 产品设置落库后执行；注意 GLM 限制单请求 `max_tokens ≤ 131072`，任务预算 `max_model_tokens` 需 ≤ 该值。
 - **最近一次全量门禁**：Dev Container 内 `pnpm run check` 通过；322 个测试通过、1 个跳过（Docker runtime 集成为 opt-in），分支覆盖率 81.22%；PostgreSQL/Redis 集成测试通过 `VULNWEAVER_TEST_ADMIN_DATABASE_URL` 和 `VULNWEAVER_TEST_REDIS_URL` 指向 compose 服务名后完整执行。Ruff、Pyright、TypeScript 和 Svelte 检查通过。
@@ -51,7 +51,7 @@
 | T26 二进制主管线收口（Ghidra 默认可用） | 进行中 | Codex | 选择 Sandbox Runner binary-tools 路径；Compose 默认构建并启动 `vulnweaver-binary-tools:fixed` 持有服务，Runner 显式依赖该服务；镜像摘要仍需部署配置提供 | 配置摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查 | 2026-09-10 |
 | T27 逆向分析智能体与混淆特征识别 | 进行中 | Codex | 已新增控制流扁平化启发式识别器，按函数输出 dispatcher、间接跳转、分数和可解释理由；尚未接入 T25 规划循环 | 接入分析结果、模型规划与固定管线降级 | 2026-09-10 |
 | T28 解混淆与可读伪代码生成 | 进行中 | Codex | 修复 angr helper 参数数量校验与 usage 文案；尚未完成真实 angr/解混淆链路 | 控制流平坦化恢复、可读伪代码派生工件和真实环境验收 | 2026-09-10 |
-| T29 语义审计智能体（源码+二进制） | 进行中 | Codex | 新增 ADR-021 AuditPlan 必跑基线与覆盖度门禁纯领域模块，阻止不完整计划声明 NO_FINDINGS；尚未接入编排持久化和模型审计 | 接入持久化计划、源码/伪代码邻域模型审计、候选 Finding 与独立复核链路 | 2026-09-10 |
+| T29 语义审计智能体（源码+二进制） | 待验证 | Codex（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job 类型、`SemanticAuditReport` 公共契约与迁移 0017；`SemanticAuditScheduler` 在静态基线结算后每任务幂等调度一个审计 Job（ADR-021 顺序：static → semantic → review，复核钩子同步适配）；`SemanticAuditor` 按函数邻域（PAIR 函数 + 有界源码摘录）调用 AUDIT 档模型，模型 finding 必须锚定到不可变 PAIR 索引（幻觉位置丢弃不落库），以 MODEL_EXPLANATION/CONTEXTUAL 证据投影候选 Finding（与静态投影同 ID 方案，重复候选幂等合并）并进入既有复核与确认门禁；AgentRun 落库可经 agent-runs API 查询。全量门禁 363 passed | 二进制伪代码侧在 T26 Ghidra 主管线接通后复用同一审计链路；AuditPlan 覆盖度对 NO_FINDINGS 的聚合约束待接入；真实模型端到端验收 | 2026-09-10 |
 | T30 关键逻辑标定 | 进行中 | Codex | 新增基于函数名、导入表和字符串的认证/加密/注册候选发现器，返回分数与证据关键词；已在 Dev Container 通过定向测试 | 接入 PAIR 持久化、LLM 确认、API 与前端展示 | 2026-09-10 |
 | T31 漏洞自动利用智能体 | 进行中 | Codex | 新增自动生成脚本内容安全校验器，拒绝持久化、横向移动和外部网络行为并限制大小；Dev Container 定向测试通过 | 接入模型生成、脚本工件登记、Proof Scheduler 自动投递及结果证据链 | 2026-09-10 |
 | T32 模糊测试接入自动链路与 harness 生成 | 进行中 | Codex | 新增不执行命令的有界 harness 编译—诊断—修正循环抽象，支持结构化诊断与预算耗尽结果；Dev Container 定向测试待提交前复核 | 接入 LLM harness 生成、Sandbox 编译执行、fuzz Job 自动调度和 Finding 证据挂接 | 2026-09-10 |
@@ -152,6 +152,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-10 | T29 语义审计智能体源码侧（`feat/t29-semantic-audit`） | 新增 `semantic_audit` Job/契约/迁移 0017；静态基线结算后自动调度审计 Job，审计完成才调度独立复核（含模型发现候选）；模型 finding 强制锚定 PAIR 索引防幻觉；新增测试 4 项，Dev Container 全量 363 passed（ruff/pyright 0 错误、契约生成 --check 无漂移，PostgreSQL/Redis 集成环境实跑） | 二进制伪代码审计复用链路待 T26；真实模型 E2E 与 AuditPlan-NO_FINDINGS 聚合门禁待接入 |
 | 2026-09-10 | T25 智能体规划执行框架（`feat/t25-agent-loop`） | 新增 `orchestrator/agent_loop.py` 通用规划—执行—观察循环与 `ActionPlanProposal` 公共契约（`06fdebb`、`9558375`，已 rebase 至最新 main）；15 个循环测试 + 2 个契约测试通过，覆盖循环推进、模型身份覆盖、策略拒绝回填与降级、轮次/token/deadline/步数预算终止、未配置立即降级、许可等待、失败步骤观察与观察截断；Ruff、Pyright 0 错误、契约生成 `--check` 无漂移、contracts tsc 通过 | 接入首个消费智能体（T27/T29/T31）后经真实任务验证 AgentRun 轨迹查询；合并前跑全量门禁 |
 | 2026-09-10 | T24 Web 工作台布局与可读性优化 | 主内容限制在 1600px 可读轨道，项目与任务双栏按职责分配宽度；任务指标、Finding 操作区、事件载荷及窄屏断点完成；将原 9–12px 辅助文字提升至 11–14px；修复设置页复选框受整宽输入规则覆盖的错位；Web 镜像重建后首页 HTTP 200 | 可补一次真实浏览器多视口截图回归 |
 | 2026-09-10 | P2 四语言真实模型端到端验收 | `.env` 中的 GLM 端点经 `/api/settings` 落库（api_key_configured=true，密钥不回显）；上传 C/C++/Python/Java 四个样本，四任务全部 completed：import 4 succeeded、source_analysis 6 succeeded、review 3 succeeded（模型 `review-model/glm-5.3-flash`），finding 按模型独立意见更新为 `unverifiable`（模型单独不能 confirm 的门禁生效）；Java 按设计无规则无候选。排查中修复：模型传输错误现在记录响应体（GLM 1210 max_tokens 限制可诊断） | 无剩余功能项 |
@@ -162,13 +163,12 @@
 | 2026-09-10 | T23 Web 首次注册与产品设置 | 独立网络与 tmpfs PostgreSQL 中 API/迁移/契约 34 passed；Ruff、Pyright、Svelte、Vite build、Compose config 通过；未触碰既有 VulnWeaver 容器/网络/卷 | 合并后在独立 TLS 部署完成浏览器首次启动 E2E |
 | 2026-09-10 | ADR-021 评审结论登记 | PR #17 合并入 `main`（`b704814`）；项目负责人批准 D-001，ADR-021 状态改为已接受，勾选评审结论并同步 `DEVELOPMENT_STATUS.md`；纯文档变更 | 按ADR-021实施顺序启动 AuditPlan/覆盖度/结算门禁设计任务 |
 | 2026-09-10 | T20 HTTP Runner CAS 回放验收（`feat/sprint-final-closeout`） | 修复 runner 镜像缺 docker-cli（Debian 13 拆包）与 runtime 重复传递镜像 ENTRYPOINT 两个缺陷后，经 `http://sandbox-runner:8080` 完成：CAS 脚本 Proof 回放成功、scheduler 幂等重放同 Job、exploit 未开启项目策略拒绝、失败脚本结构化部分失败且 Poc 留痕；`tests/proof/test_http_replay.py` 4 用例通过，全量门禁 328 passed / 81.38% | 完整 API→Worker 队列链路重跑归 T22 收口 |
-| 2026-09-09 | Q-006/Q-007 安全与事务修复（`feat/sprint-final-closeout`） | Proof/Exploit 的 `script_ref` 现按项目范围解析归属（同 digest 可跨项目登记，全局解析不安全）；ProofJobExecutor 拆分事务，沙箱 HTTP 调用不再占用 DB 连接。Dev Container 全量门禁通过：328 passed、覆盖率 81.40%，Ruff/Pyright/Svelte 0 错误 | 继续推进 T16/T18/T19/T20/T21/T22 真实环境验收 |
-| 2026-09-09 | T20 无害 Proof/Exploit 容器回放（`d0bcac0`） | 固定 `vulnweaver-proof:fixed` 镜像在禁网、只读根、非 root、capabilities drop 和 no-new-privileges 下分别回放两个入口，均 exit 0 | 补齐带 CAS 工件的 HTTP Runner 回放；不执行真实利用 |
 
 ## 9. 验证记录
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-10 | T29 定向门禁（worktree `feat/t29-semantic-audit`） | Dev Container：`ruff check .` 通过、`pyright` 0 错误、`generate_contracts.py --check` 无漂移；`pytest -q` 全量 363 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），PostgreSQL/Redis 集成环境实跑 | 真实 AUDIT 模型端到端（需在产品设置配置模型后跑源码样本链路）；二进制伪代码审计依赖 T26 |
 | 2026-09-10 | T25 定向门禁（worktree `feat/t25-agent-loop`，rebase 至 origin/main 后复跑） | Dev Container 内：`ruff check .` 通过；`pyright` 0 错误 0 警告；`pytest tests/orchestrator tests/tool_runtime tests/model_gateway tests/contracts`：56 passed（含 T25 循环测试 15 项与 ActionPlanProposal 契约测试 2 项）、29 skipped（一次性容器未启用 PostgreSQL 集成环境）；`generate_contracts.py --check` 无漂移；contracts `tsc --noEmit` 通过 | 全量套件与覆盖率门禁未在分支执行（合并前由全量门禁/CI 覆盖）；PostgreSQL/Redis 集成测试未跑 |
 | 2026-09-10 | T24 Web 定向门禁 | 复选框修复后 Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 通过（0 错误、0 警告）；`pnpm --filter @vulnweaver/web build` 成功（111 modules transformed）；Web 镜像重建并替换运行容器，新 CSS 资源 `index-e2kade8Q.css`、首页 HTTP 200 | 未执行真实浏览器多视口截图回归 |
 | 2026-09-10 | P2 四语言端到端 | 真实数据库+真实模型：C/C++（CWE-120 strcpy）、Python（CWE-95 eval）候选 finding 均经独立复核（outcome=unverifiable，model=review-model/glm-5.3-flash），Java import/索引验证通过；全部门禁 333 passed / 81.26% | 利用链利用验证未执行（项目未开启 exploit_validation） |
@@ -191,7 +191,8 @@
 
 1. 评审并合并 `feat/t25-agent-loop`（T25 智能体规划执行框架，已 rebase 至最新 main，定向门禁全绿）；合并时执行全量门禁确认覆盖率与集成测试。
 2. T27/T29/T31 在各自接入点消费 `AgentLoop`（`orchestrator/agent_loop.py`）：注入 PLANNING 档位 PlannerGateway、ToolRegistry/PolicyEngine 与领域 StepExecutor，经 Sink 持久化聚合 AgentRun，供 `GET /api/tasks/{id}/agent-runs` 查询。
-3. T26 继续：配置 BINARY_TOOLS_IMAGE_DIGEST 摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查。
+3. 评审并合并 `feat/t29-semantic-audit`；合并后在产品设置配置 AUDIT 模型并跑一次真实源码样本，验证语义审计候选 Finding → 独立复核 → 报告链路。
+4. T26 继续：配置 BINARY_TOOLS_IMAGE_DIGEST 摘要后注册 ToolSpec，接通 binary Job 调度并验证伪代码/函数/调用关系经 API 可查；随后将伪代码审计接入 T29 语义审计链路。
 4. 其余任务包按进度表“剩余工作”推进；每个任务包完成前逐项核对 3.1 验收标准与对应模块验收标准。
 
 更新时间：2026-09-10（Asia/Shanghai）
