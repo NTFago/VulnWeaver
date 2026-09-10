@@ -33,6 +33,8 @@ from vulnweaver_orchestrator.flow import (
 )
 from vulnweaver_orchestrator.fuzz_jobs import (
     FuzzJobScheduler,
+    FuzzTarget,
+    FuzzTargetResolver,
     link_fuzz_evidence,
     persist_crash_evidence,
 )
@@ -100,6 +102,8 @@ __all__ = [
     "complete_baselines",
     "CriticalLogicConfirmer",
     "FuzzJobScheduler",
+    "FuzzTarget",
+    "FuzzTargetResolver",
     "link_fuzz_evidence",
     "persist_crash_evidence",
 ]

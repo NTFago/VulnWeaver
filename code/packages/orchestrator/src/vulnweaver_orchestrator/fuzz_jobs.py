@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
 from vulnweaver_contracts import (
     CrashRecord,
@@ -14,6 +14,7 @@ from vulnweaver_contracts import (
     EvidenceStrength,
     EvidenceType,
     FailureKind,
+    Finding,
     FindingEvidence,
     Job,
     JobKind,
@@ -23,6 +24,7 @@ from vulnweaver_contracts import (
     ResourceBudget,
     RetryPolicy,
     SchemaVersion,
+    Task,
 )
 from vulnweaver_fuzzing import build_fuzz_request
 from vulnweaver_persistence import Database, Repositories
@@ -42,9 +44,28 @@ class FuzzTarget:
     collect_coverage: bool = True
 
 
+class FuzzTargetResolver(Protocol):
+    """Resolve the bounded fuzz target for one Finding, or decline with ``None``.
+
+    Injection keeps this layer free of artifact knowledge while the deployment
+    decides which artifact and seed corpus are legitimate to fuzz.
+    """
+
+    async def __call__(
+        self, repositories: Repositories, finding: Finding, task: Task
+    ) -> FuzzTarget | None: ...
+
+
 class FuzzJobScheduler:
-    def __init__(self, database: Database, *, retry_policy: RetryPolicy | None = None) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        target_resolver: FuzzTargetResolver | None = None,
+        retry_policy: RetryPolicy | None = None,
+    ) -> None:
         self._database = database
+        self._resolver = target_resolver
         self._retry_policy = retry_policy or RetryPolicy(
             max_attempts=2,
             backoff_seconds=5.0,
@@ -60,75 +81,119 @@ class FuzzJobScheduler:
     ) -> tuple[str, ...]:
         """Enqueue one idempotent fuzz Job per Finding, with its fixed request bound."""
         async with self._database.transaction() as repositories:
-            task = await repositories.tasks.get(source_job["task_id"], for_update=True)
-            created: list[str] = []
-            for finding_id in sorted(set(targets)):
-                finding = await repositories.findings.get(finding_id)
-                if finding["task_id"] != task["id"]:
-                    raise ValueError("fuzz finding does not belong to source task")
-                job_id = _id("job", "fuzz", finding_id)
-                target = targets[finding_id]
-                job = Job(
-                    schema_version=SchemaVersion.VALUE_1_0_0,
-                    id=job_id,
-                    task_id=task["id"],
-                    kind=JobKind.FUZZ,
-                    # Bound below, once the fixed request exists for this Job id.
-                    arguments=cast(JsonObject, {"finding_id": finding_id}),
-                    input_refs=source_job["input_refs"],
-                    status=JobStatus.QUEUED,
-                    idempotency_key=_id("fuzz", task["id"], finding_id),
-                    resource_budget=cast(ResourceBudget, dict(task["resource_budget"])),
-                    retry_policy=self._retry_policy,
-                    attempt=0,
-                    lease=None,
-                    failure=None,
-                    created_at=task["created_at"],
-                    updated_at=task["updated_at"],
-                )
-                # The executor only accepts a request already bound to this Job id,
-                # so it is constructed from the identical Job identity.
-                request = build_fuzz_request(
-                    job,
-                    artifact_version_id=target.artifact_version_id,
-                    target_ref=target.target_ref,
-                    seed_refs=list(target.seed_refs),
-                    image_digest=target.image_digest,
-                    max_executions=target.max_executions,
-                    max_duration_seconds=target.max_duration_seconds,
-                    max_crashes=target.max_crashes,
-                    collect_coverage=target.collect_coverage,
-                )
-                job = cast(
-                    Job,
-                    {
-                        **job,
-                        "arguments": {
-                            "finding_id": finding_id,
-                            "fuzz_request": dict(request),
-                        },
+            task = await repositories.tasks.get(source_job["task_id"])
+            return await self.schedule_in_transaction(
+                repositories,
+                task_id=source_job["task_id"],
+                causation_id=source_job["id"],
+                artifact_version_ids=task["artifact_version_ids"],
+                targets=targets,
+            )
+
+    async def schedule_finding_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None:
+        """Resolve a bounded target for one Finding and enqueue its fuzz Job.
+
+        Runs inside the settlement hook's transaction. Returns ``None`` when the
+        resolver declines, so dynamic execution is skipped rather than run
+        against an artifact the deployment has not sanctioned.
+        """
+        if self._resolver is None:
+            return None
+        finding = await repositories.findings.get(finding_id)
+        task = await repositories.tasks.get(finding["task_id"], for_update=True)
+        target = await self._resolver(repositories, finding, task)
+        if target is None:
+            return None
+        created = await self.schedule_in_transaction(
+            repositories,
+            task_id=task["id"],
+            causation_id=finding_id,
+            artifact_version_ids=task["artifact_version_ids"],
+            targets={finding_id: target},
+        )
+        return created[0] if created else None
+
+    async def schedule_in_transaction(
+        self,
+        repositories: Repositories,
+        *,
+        task_id: str,
+        causation_id: str,
+        artifact_version_ids: Sequence[str],
+        targets: dict[str, FuzzTarget],
+    ) -> tuple[str, ...]:
+        """Enqueue fuzz Jobs inside an existing transaction."""
+        task = await repositories.tasks.get(task_id, for_update=True)
+        created: list[str] = []
+        for finding_id in sorted(set(targets)):
+            finding = await repositories.findings.get(finding_id)
+            if finding["task_id"] != task["id"]:
+                raise ValueError("fuzz finding does not belong to source task")
+            job_id = _id("job", "fuzz", finding_id)
+            target = targets[finding_id]
+            job = Job(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                id=job_id,
+                task_id=task["id"],
+                kind=JobKind.FUZZ,
+                # Bound below, once the fixed request exists for this Job id.
+                arguments=cast(JsonObject, {"finding_id": finding_id}),
+                input_refs=list(artifact_version_ids),
+                status=JobStatus.QUEUED,
+                idempotency_key=_id("fuzz", task["id"], finding_id),
+                resource_budget=cast(ResourceBudget, dict(task["resource_budget"])),
+                retry_policy=self._retry_policy,
+                attempt=0,
+                lease=None,
+                failure=None,
+                created_at=task["created_at"],
+                updated_at=task["updated_at"],
+            )
+            # The executor only accepts a request already bound to this Job id,
+            # so it is constructed from the identical Job identity.
+            request = build_fuzz_request(
+                job,
+                artifact_version_id=target.artifact_version_id,
+                target_ref=target.target_ref,
+                seed_refs=list(target.seed_refs),
+                image_digest=target.image_digest,
+                max_executions=target.max_executions,
+                max_duration_seconds=target.max_duration_seconds,
+                max_crashes=target.max_crashes,
+                collect_coverage=target.collect_coverage,
+            )
+            job = cast(
+                Job,
+                {
+                    **job,
+                    "arguments": {
+                        "finding_id": finding_id,
+                        "fuzz_request": dict(request),
                     },
-                )
-                event = JobRequestedEvent(
-                    schema_version=SchemaVersion.VALUE_1_0_0,
-                    event_id=_id("event", job_id),
-                    event_type="job.requested",
-                    aggregate_id=job_id,
-                    sequence=0,
-                    occurred_at=task["updated_at"],
-                    correlation_id=task["id"],
-                    causation_id=source_job["id"],
-                    payload={
-                        "job_id": job_id,
-                        "task_id": task["id"],
-                        "job_kind": JobKind.FUZZ,
-                        "attempt": 0,
-                    },
-                )
-                result = await repositories.jobs.enqueue_with_outbox(job, event)
-                if result.created:
-                    created.append(job_id)
-            return tuple(created)
+                },
+            )
+            event = JobRequestedEvent(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                event_id=_id("event", job_id),
+                event_type="job.requested",
+                aggregate_id=job_id,
+                sequence=0,
+                occurred_at=task["updated_at"],
+                correlation_id=task["id"],
+                causation_id=causation_id,
+                payload={
+                    "job_id": job_id,
+                    "task_id": task["id"],
+                    "job_kind": JobKind.FUZZ,
+                    "attempt": 0,
+                },
+            )
+            result = await repositories.jobs.enqueue_with_outbox(job, event)
+            if result.created:
+                created.append(job_id)
+        return tuple(created)
 
 
 async def link_fuzz_evidence(

@@ -13,6 +13,7 @@ _TASK = {
     "schema_version": "1.0.0",
     "id": "task:fuzz",
     "project_id": "project:fuzz",
+    "artifact_version_ids": ["artifact-version:target"],
     "status": "analyzing",
     "pipeline": "binary_analysis",
     "input_refs": ["cas://sha256/" + "d" * 64],
