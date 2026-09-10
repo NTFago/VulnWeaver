@@ -7,7 +7,9 @@ from collections.abc import Sequence
 from typing import Protocol, cast
 
 from vulnweaver_contracts import (
+    EvidenceRelation,
     FailureKind,
+    FindingEvidence,
     Job,
     JobKind,
     JobRequestedEvent,
@@ -84,6 +86,34 @@ class FuzzJobScheduler:
                 if result.created:
                     created.append(job_id)
             return tuple(created)
+
+
+async def link_fuzz_evidence(
+    repositories: FuzzRepositories,
+    *,
+    finding_id: str,
+    evidence_ids: Sequence[str],
+    created_by: str,
+    created_at: str,
+    weight: float = 1.0,
+) -> tuple[str, ...]:
+    """Attach crash-cluster evidence to a Finding without overwriting history."""
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError("evidence weight must be between 0 and 1")
+    linked: list[str] = []
+    for evidence_id in sorted(set(evidence_ids)):
+        relation = FindingEvidence(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            finding_id=finding_id,
+            evidence_id=evidence_id,
+            relation=EvidenceRelation.SUPPORTS,
+            weight=weight,
+            created_by=created_by,
+            created_at=created_at,
+        )
+        await repositories.findings.link_evidence(relation)
+        linked.append(evidence_id)
+    return tuple(linked)
 
 
 def _id(*parts: str) -> str:
