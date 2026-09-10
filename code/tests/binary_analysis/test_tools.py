@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Coroutine, Sequence
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import pytest
@@ -392,3 +392,38 @@ def test_bounded_command_runner_terminates_process_on_parent_cancellation() -> N
             await task
 
     _run_subprocess_scenario(scenario())
+
+
+def test_command_profile_omits_empty_target_addresses() -> None:
+    from vulnweaver_binary_analysis.profiles import binary_command_profile
+
+    profile = binary_command_profile(
+        "vulnweaver-binary-tools:fixed", "sha256:" + "a" * 64
+    )
+    argv = profile.build_argv(
+        {
+            "max_functions": 100,
+            "max_instructions": 1000,
+            "max_pseudocode_functions": 50,
+            "target_addresses": [],
+            "angr_enabled": False,
+        },
+        PurePath("/input/sample"),
+        PurePath("/output"),
+    )
+    assert "" not in argv
+    assert "--target-addresses" not in argv
+
+    argv_with_targets = profile.build_argv(
+        {
+            "max_functions": 100,
+            "max_instructions": 1000,
+            "max_pseudocode_functions": 50,
+            "target_addresses": [4144],
+            "angr_enabled": True,
+        },
+        PurePath("/input/sample"),
+        PurePath("/output"),
+    )
+    assert argv_with_targets[argv_with_targets.index("--target-addresses") + 1] == "4144"
+    assert "--angr-enabled" in argv_with_targets

@@ -9,8 +9,10 @@ from typing import cast
 from vulnweaver_contracts import BinaryPseudocode, Job, JsonObject
 from vulnweaver_model_gateway import ModelGateway, ModelTier
 
-_MAX_MODEL_FUNCTIONS = 16
-_MAX_INPUT_CHARS = 64 * 1024
+# The readable view is advisory: keep the request small enough that the
+# model can return the full json document within the bounded output budget.
+_MAX_MODEL_FUNCTIONS = 4
+_MAX_INPUT_CHARS = 16 * 1024
 
 
 class ModelReadablePseudocodeHook:
@@ -40,7 +42,8 @@ class ModelReadablePseudocodeHook:
                     "content": (
                         "You produce a review-only readable view of decompiled binary code. "
                         "Preserve behavior, do not invent functions or addresses, and do not "
-                        "write exploit instructions. Keep uncertainty explicit in comments."
+                        "write exploit instructions. Keep uncertainty explicit in comments. "
+                        "Reply with json only."  # lowercase for DeepSeek json_object mode
                     ),
                 },
                 {
@@ -48,7 +51,28 @@ class ModelReadablePseudocodeHook:
                     "content": json.dumps(
                         {
                             "task": "Improve control-flow structure, variable names, and comments "
-                            "for these bounded pseudocode excerpts. Return only the required JSON.",
+                            "for these bounded pseudocode excerpts.",
+                            "required_json_schema": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["schema_version", "pseudocode"],
+                                "properties": {
+                                    "schema_version": {"const": "1.0.0"},
+                                    "pseudocode": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "additionalProperties": False,
+                                            "required": ["function_name", "address", "text"],
+                                            "properties": {
+                                                "function_name": {"type": "string"},
+                                                "address": {"type": "integer"},
+                                                "text": {"type": "string"},
+                                            },
+                                        },
+                                    },
+                                },
+                            },
                             "pseudocode": selected,
                             "obfuscation": obfuscation,
                         },
@@ -61,8 +85,12 @@ class ModelReadablePseudocodeHook:
             input_refs=tuple(job["input_refs"]),
             max_output_tokens=min(8192, job["resource_budget"]["max_model_tokens"]),
         )
-        if response.failure is not None or response.output is None:
-            raise RuntimeError("readable_pseudocode.model_unavailable")
+        failure_code = response.failure["code"] if response.failure is not None else None
+        if failure_code is not None or response.output is None:
+            details = response.failure.get("details") if response.failure is not None else None
+            raise RuntimeError(
+                f"readable_pseudocode.model_unavailable:{failure_code}:{details}"
+            )
         values = response.output.get("pseudocode")
         return cast(Sequence[Mapping[str, object]], values if isinstance(values, list) else [])
 
@@ -73,7 +101,7 @@ def _bounded_pseudocode(pseudocode: Sequence[BinaryPseudocode]) -> list[dict[str
     for item in pseudocode[:_MAX_MODEL_FUNCTIONS]:
         if remaining <= 0:
             break
-        text = item["text"][: min(8192, remaining)]
+        text = item["text"][: min(3072, remaining)]
         selected.append(
             {
                 "function_name": item["function_name"],

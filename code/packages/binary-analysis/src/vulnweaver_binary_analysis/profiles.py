@@ -113,10 +113,12 @@ def binary_command_profile(
             raise ValueError("binary target_addresses are invalid")
         if not isinstance(angr_enabled, bool):
             raise ValueError("binary angr_enabled is invalid")
-        symbolic_arguments = (
-            "--target-addresses",
-            ",".join(str(cast(int, item)) for item in target_addresses),
-        )
+        symbolic_arguments: tuple[str, ...] = ()
+        if target_addresses:
+            symbolic_arguments += (
+                "--target-addresses",
+                ",".join(str(cast(int, item)) for item in target_addresses),
+            )
         if angr_enabled:
             symbolic_arguments += ("--angr-enabled",)
         return (
