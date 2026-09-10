@@ -119,7 +119,7 @@ class BinaryFactsAdapter:
             },
             output_file_names=["binary-facts.json"],
             resource_budget=_sandbox_budget(limits),
-            timeout_seconds=min(600, int(limits.command_timeout_seconds)),
+            timeout_seconds=min(600, max(1, int(limits.command_timeout_seconds))),
         )
         result = await self._sandbox.run(request, cancellation)
         if result["status"].value != "succeeded":
@@ -160,7 +160,7 @@ def _sandbox_budget(limits: BinaryAnalysisLimits) -> dict[str, object]:
         "max_model_tokens": 0,
         "cpu_millis": 4000,
         "memory_bytes": 3 * 1024 * 1024 * 1024,
-        "disk_bytes": limits.max_tool_output_bytes,
+        "disk_bytes": 1024 * 1024 * 1024,
         "max_tool_concurrency": 1,
         "max_dynamic_runs": 0,
         "timeout_seconds": min(600, int(limits.command_timeout_seconds)),
