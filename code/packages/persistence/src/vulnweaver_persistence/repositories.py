@@ -2548,7 +2548,7 @@ def _event_from_row(row: RowMapping) -> QueueEvent:
             "occurred_at": _format_datetime(row["occurred_at"]),
             "correlation_id": row["correlation_id"],
             "causation_id": row["causation_id"],
-            "payload": row["payload"],
+            "payload": _compat_event_payload(row["event_type"], row["payload"]),
         },
     )
 
@@ -2565,9 +2565,25 @@ def _task_event_from_row(row: RowMapping) -> QueueEvent:
             "occurred_at": _format_datetime(row["occurred_at"]),
             "correlation_id": row["correlation_id"],
             "causation_id": row["causation_id"],
-            "payload": row["payload"],
+            "payload": _compat_event_payload(row["event_type"], row["payload"]),
         },
     )
+
+
+def _compat_event_payload(event_type: object, payload: object) -> object:
+    """Project pre-ADR-023 task events into the current read contract.
+
+    The JSONB event history is append-only, so an older event missing the newly required
+    nullable ``failure`` field must not be rewritten in place.  Adding the field only to the
+    read projection keeps historical facts intact while allowing current API and dispatcher
+    consumers to validate the event.
+    """
+
+    if event_type != "task.status_changed" or not isinstance(payload, dict):
+        return payload
+    if "failure" in payload:
+        return payload
+    return {**payload, "failure": None}
 
 
 def _parse_datetime(value: str) -> datetime:

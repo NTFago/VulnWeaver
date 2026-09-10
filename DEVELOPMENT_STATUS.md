@@ -10,9 +10,9 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成；T38 报告下载文件名/类型、报告位置格式和失败状态提示已修复，待部署镜像更新后做一次浏览器回归。
-- **当前分支**：`fix/large-archive-excerpts`（隔离 worktree `.worktree/fix-large-archive-excerpts`，基于 `origin/main@c3f571d`）。
-- **当前负责人**：Codex（T38 已完成）；T26-T38 各行见进度表。
+- **当前阶段**：T36 Web 设置默认页与界面现代化改版已完成；T38 报告下载文件名/类型、报告位置格式和失败状态提示已修复；T39 任务事件契约兼容与部署镜像一致性修复已完成。
+- **当前分支**：`fix/task-event-stream`（基于 `fix/report-download@b0f9ad7`，独立修复分支）。
+- **当前负责人**：Codex（T39）；T26-T39 各行见进度表。
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
@@ -64,6 +64,7 @@
 | T36 Web 设置默认页与界面现代化改版 | 已完成 | Codex（`feat/web-settings-first-modernization`，PR #49 已合并） | 设置改为登录后默认页并置于导航第一位（注册、登录、首次改密完成后均落在设置页）；修复设置页复核模型字段重复渲染缺陷；任务页指标卡以「已完成执行单元 x/y」替代原始 JSON 串；`app.css` 重写为令牌化设计系统（控件 8px / 面板 12px 半径锁、单一青柠强调色、语义状态色、焦点环、reduced-motion 降级）；设置页新增锚点分区导航；复核/标注操作区拆分为两组修复按钮换行；移动端导航胶囊拉伸修复 | 部署环境（重建 Web 镜像）后的真实浏览器回归归里程碑验证 | 2026-09-10 |
 
 | T38 报告下载与导出可读性修复 | 已完成 | Codex（`fix/report-download`） | 下载响应按报告格式返回安全文件名和媒体类型；Markdown/HTML/SARIF 读取规范源码范围，二进制位置读取 `virtual_address`；前端显示报告生成失败原因并为下载链接提供扩展名 | 部署更新后的 API/Web 镜像后做浏览器点击回归 | 2026-09-11 |
+| T39 任务事件契约兼容与部署镜像一致性修复 | 已完成 | Codex（`fix/task-event-stream`） | 读取历史 `task.status_changed` 事件时对缺失的可空 `failure` 做内存兼容补全；统一重建 API、Dispatcher、Orchestrator、Worker、Sandbox Runner、Web 镜像；清理开发 Redis DB 0 残留队列；保留 PostgreSQL 任务和工件数据 | 无；用户刷新当前任务页即可确认页面恢复最终状态 | 2026-09-11 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
@@ -141,6 +142,7 @@
 | Q-017 | Markdown 快速路径 CI 报错退出：`python-quality` job 为浅克隆（depth 1）且 `persist-credentials: false`，先报 `fatal: bad object`（base 对象缺失），补浅取后又因无凭据报 `could not read Username`（PR #50 首次实跑暴露；该检查非必需，红 X 未阻断合并） | 文档类 PR 的门禁信号失真：失败会被常态忽略；若日后把该检查设为必需，所有 docs PR 都会被阻断 | 已修复：把 `Markdown documentation gate` 步骤移入 `change-scope` job——该 job 本就是全量克隆（`fetch-depth: 0`）且分类步骤已在用同样的 BASE/HEAD SHA 执行 `git diff`，零网络零凭据；`python-quality` 在文档类 PR 下仅剩 checkout，按既有设计以成功状态跳过完整门禁。修复 PR 走全量门禁验证，快速路径经修复后的 markdown-only PR 实跑验证（见 T37） | 已处理 | Codex |
 
 | Q-018 | 报告下载接口未返回报告文件名/媒体类型，报告渲染器读取不存在的 `location.line`，二进制位置字段 `virtual_address` 也未被消费 | 浏览器下载得到无扩展名的 `content`；源码位置错误显示为第 1 行，二进制位置显示为 `unknown` | T38 已修复下载响应元数据、Markdown/HTML/PDF/SARIF 的源码范围与二进制地址读取，并补充报告失败状态提示 | 已处理 | Codex |
+| Q-019 | 部署栈的 Orchestrator 镜像未随事件契约更新，且 Redis 保留了不含 `failure` 字段的旧任务状态事件；API 事件流对历史事件响应校验失败 | 任务事实已进入 `completed`，但 `/api/tasks/{id}/events` 返回 500，前端无法收到最终状态；Orchestrator 反复因 `MalformedQueueMessage` 退出 | 已处理：历史事件读取兼容补全，所有应用镜像按当前代码重建，并清理开发 Redis DB 0；数据库任务与工件数据未删除 | 已处理 | Codex |
 
 ## 5. 当前阻碍点
 
@@ -204,6 +206,7 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-11 | T39 任务事件契约兼容与部署镜像一致性修复（`fix/task-event-stream`） | Linux 容器定向回归 **50 passed**（PostgreSQL/Redis 集成实际执行），Ruff 通过；Compose `migrate` exit 0、alembic head 为 `0019_task_failure`、任务记录仍为 1；API `/health/live` 与 `/health/ready` 均 200；Orchestrator/Dispatcher/API/Analysis Worker/Sandbox Runner/Web 均稳定运行；Redis DB 0 已清理旧任务队列；运行中 Orchestrator 已确认包含 `failure` 字段的新版事件生成代码 | 当前 CLI 无可附着的用户浏览器会话，需用户刷新已打开的任务页确认视觉状态；未重新提交耗时分析任务 |
 | 2026-09-10 | T36 前端门禁与视觉验收 | Dev Container（`vulnweaver-dev-1`）`pnpm --filter @vulnweaver/web typecheck`：0 错误 0 警告；`pnpm --filter @vulnweaver/web build` 成功（111 modules，CSS 29.06KB / JS 97.35KB gzip 后 6.56/34.81KB）。浏览器验证使用系统临时目录下的契约同形 Mock API（不进仓库）：17 张截图覆盖设置（含档位展开态）、项目（含新建表单）、项目详情、任务（指标/问题详情/工作台/Agent 轨迹）、认证三变体、移动端 390px 两页；judge 视觉验收 16/17 通过，唯一缺陷（移动端导航胶囊随项目数拉伸）修复后复核通过 | 真实部署栈（nginx 镜像 + api）下的浏览器回归未执行；Firefox/Safari 实机未验证；设置保存、Proof/Exploit 提交等写路径仅经 Mock 验证了前端交互形态 |
 | 2026-09-10 | Q-010~Q-013 修复全量门禁与实时栈端到端（`fix/budget-and-orchestration-resilience`） | Dev Container（PostgreSQL/Redis 集成环境）`pnpm run check`：**451 passed、5 skipped、覆盖率 82.32%**，Ruff/Pyright 0 错误 0 警告、svelte-check 0 错误 0 警告、contracts tsc 通过、`generate_contracts.py --check` 无漂移；5 个跳过均为需 live Runner/Docker 的显式 opt-in。新增/扩展测试：`tests/api/test_budgets.py`（8 项：加载真实 `deploy/tool-specs` 断言默认预算覆盖全部规格、低于下界被拒并点名资源项、开启利用验证但无动态运行额度被拒、无规格目录时必填；并含 2 项真实 HTTP 端到端——未提供预算建项目 201 且预算覆盖全部规格、低于规格 422 `resource_budget_below_tool_requirements`）、`test_transient_queue_failure_keeps_the_orchestrator_polling`、`test_transient_queue_failure_keeps_the_worker_consuming`（两侧故障注入：`read_group` 前 2 次抛 `QueueUnavailable`，断言主循环退避后继续、进程不退出、读取次数 ≥3）、`test_policy_denial_fails_task_without_creating_job` 扩展（断言 `tasks.failure == result.failure` 且状态事件 payload 携带同一 failure）、`test_task_status_event_carries_a_structured_failure`（带 failure 通过、缺 failure 被契约拒绝）、`test_sandbox_request_budget_is_clamped_to_the_tool_spec`、`test_sandbox_budget_is_clamped_to_the_proof_tool_limits`。实时栈端到端：重建 api/web/dispatcher/orchestrator/analysis-worker 镜像并 `up -d`，`migrate` exit 0、alembic head `0019_task_failure`、`tasks.failure` jsonb 可空列就位；对实时库复跑诊断脚本，`_validate_inputs` / `_select_pipeline` / `_authorize_initial_job` 三节点全部通过（修复前在第三节点因 `resource_limit_exceeded` 被拒）；按 API 相同代码路径投递真实 PE 任务后，orchestrator 日志 `status=approved` 且创建 `job:2dd8262714…`（`kind=import`、`tool=binary-import`、`running`），任务进入 `validating`，日志新字段 `failure_code`/`failure_details` 生效 | 浏览器端到端（登录→新建项目→上传→任务→任务页展示失败原因）未执行，需用户会话；真实 Proof/Exploit 与 fuzz 的沙箱执行（需 confirmed Finding、固定镜像摘要与模型配置）未执行，其预算收敛由单元测试覆盖；`task.status_changed` 的 failure 渲染仅在 svelte-check 层面验证，无前端测试框架 |
 | 2026-09-10 | T35 完整门禁与部署可达性 | Dev Container（PostgreSQL/Redis 集成环境）`pnpm run check`：**437 passed、5 skipped、覆盖率 82.11%**，Ruff/Pyright/TypeScript/Svelte 全绿；`docker compose -f compose.yaml config --quiet`、相关镜像重建通过；宿主访问 Web 200、经 Nginx 访问 `/api/auth/installation` 200、复核历史路由未登录返回预期 401 | 4 个 Proof HTTP 回放和 1 个 Docker runtime 测试为显式 opt-in；真实模型 Harness 与 AFL/Proof 动态执行仍需配置镜像摘要 |
@@ -246,7 +249,8 @@
 5. 配置 AUDIT/PLANNING 等档位模型后，跑一次真实源码样本验证 T29 语义审计候选 Finding → 独立复核 → 报告链路；随后按真实模型验收 T27 规划差异化（加壳 vs 未加壳样本）与 T31 自动利用教学样本链路。
 6. 里程碑全量回归：T20/T21/T22/T33 由「待验证」转「已完成」需在部署环境完成一次覆盖 Proof→报告→浏览器下载的全链路回归。
 7. 仓库清理（可选，需确认）：移除 `vulnweaver-t30` worktree 与本地 `feat/t32-fuzz-auto` 分支；清理其它已合并本地分支（`docs/t30-merge-status` 等）与远程 `chore/skip-wip-ci`。
-8. Q-010~Q-013（`bf956b6`/`291774d`）与 PR #45（设置页）、PR #46（模型网关）均已合并入 `main` 并推送；Q-015/Q-016 在 `fix/fresh-deploy-defaults` 上修复并验证。工作区已收敛为主仓库 `课设 - codex` 单一 `main` 检出，其余 worktree 与本地/远程分支已清理。部署已完成删卷重建，当前为**空数据库**：需在页面上重新注册管理员，并在设置页配置复核模型（否则 `semantic_audit` 仍会以 `model_budget_exhausted` 失败、任务只能到 `partial`）。
+8. Q-010~Q-013（`bf956b6`/`291774d`）与 PR #45（设置页）、PR #46（模型网关）均已合并入 `main` 并推送；Q-015/Q-016 在 `fix/fresh-deploy-defaults` 上修复并验证。当前部署保留 PostgreSQL 中的 1 个任务及其工件；本次仅清理开发 Redis DB 0 的旧队列，不再执行数据库重置。若继续新建任务，仍需按页面提示配置复核模型（否则 `semantic_audit` 可能以 `model_budget_exhausted` 失败、任务只能到 `partial`）。
 9. T38 部署回归：更新 API/Web 镜像后确认 Markdown/PDF/SARIF 下载文件名分别带 `.md`、`.pdf`、`.sarif`，并确认失败报告在任务页显示结构化原因。
+10. T39 修复后：刷新已打开的任务页；若浏览器仍保留旧错误横幅，关闭后重新打开该任务页即可重新建立事件流。
 
 更新时间：2026-09-11（Asia/Shanghai）
