@@ -43,6 +43,8 @@ from vulnweaver_binary_analysis.headers import (
 )
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
+    BinaryFactsAdapter,
+    BinaryFactsSandbox,
     BinaryToolAdapter,
     DetectItEasyAdapter,
     GhidraHeadlessAdapter,
@@ -88,6 +90,8 @@ class BinaryImportExecutor:
         upx: UpxUnpacker | None = None,
         pair_importer: BinaryPairImporter | None = None,
         scratch_root: str | Path | None = None,
+        sandbox: BinaryFactsSandbox | None = None,
+        sandbox_image_digest: str | None = None,
     ) -> None:
         self._database = database
         self._store = store
@@ -96,6 +100,8 @@ class BinaryImportExecutor:
         self._upx = upx or UpxAdapter()
         self._pair_importer = pair_importer
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
+        self._sandbox = sandbox
+        self._sandbox_image_digest = sandbox_image_digest
 
     @classmethod
     def configured(
@@ -111,6 +117,8 @@ class BinaryImportExecutor:
         angr_enabled: bool = False,
         upx_executable: str = "upx",
         pair_importer: BinaryPairImporter | None = None,
+        sandbox: BinaryFactsSandbox | None = None,
+        sandbox_image_digest: str | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
@@ -124,6 +132,8 @@ class BinaryImportExecutor:
             upx=UpxAdapter(upx_executable),
             pair_importer=pair_importer,
             scratch_root=scratch_root,
+            sandbox=sandbox,
+            sandbox_image_digest=sandbox_image_digest,
         )
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
@@ -270,7 +280,17 @@ class BinaryImportExecutor:
             aggregate.strings = list(
                 await asyncio.to_thread(extract_strings, analyzed_path, metadata, self._limits)
             )
-            for adapter in self._adapters:
+            adapters: Sequence[BinaryToolAdapter] = self._adapters
+            if self._sandbox is not None and self._sandbox_image_digest:
+                adapters = (
+                    BinaryFactsAdapter(
+                        self._sandbox,
+                        self._store,
+                        image_digest=self._sandbox_image_digest,
+                        input_ref=object_ref,
+                    ),
+                )
+            for adapter in adapters:
                 if cancellation.is_set():
                     return _cancelled_result(job["id"], produced)
                 if isinstance(adapter, AngrAdapter):

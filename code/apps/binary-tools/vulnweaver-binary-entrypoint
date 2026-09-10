@@ -25,8 +25,10 @@ from vulnweaver_binary_analysis import (
     GhidraHeadlessAdapter,
     ObjdumpAdapter,
     UpxAdapter,
+    extract_strings,
     inspect_binary,
 )
+
 GHIDRA_EXECUTABLE = "/opt/ghidra/support/analyzeHeadless"
 GHIDRA_SCRIPTS = "/opt/vulnweaver/ghidra-scripts"
 SCHEMA_VERSION = "1.0.0"
@@ -40,7 +42,15 @@ def _run_dict(contribution) -> dict[str, object]:
         "xrefs": len(contribution.xrefs),
         "pseudocode": len(contribution.pseudocode),
     }
-    return {**dict(contribution.run), "counts": counts}
+    return {
+        **dict(contribution.run),
+        "counts": counts,
+        "functions": list(contribution.functions),
+        "instructions": list(contribution.instructions),
+        "basic_blocks": list(contribution.basic_blocks),
+        "xrefs": list(contribution.xrefs),
+        "pseudocode": list(contribution.pseudocode),
+    }
 
 
 def _sampled(items: tuple, limit: int = 5) -> list[object]:
@@ -103,9 +113,19 @@ async def main() -> int:
                     "packed": upx.packed,
                     "unpacked": upx.unpacked_path is not None,
                 },
-                "objdump": _run_dict(objdump),
+            "objdump": _run_dict(objdump),
                 "ghidra": _run_dict(ghidra),
             },
+            # These normalized collections are consumed by the worker-side
+            # PAIR importer; tool-specific runs above remain available for
+            # provenance and diagnostics.
+            "functions": list(objdump.functions),
+            "instructions": list(objdump.instructions),
+            "basic_blocks": list(objdump.basic_blocks),
+            "xrefs": list(objdump.xrefs),
+            "pseudocode": list(ghidra.pseudocode),
+            "imports": list(objdump.imports),
+            "strings": list(extract_strings(target, metadata, limits)),
             "samples": {
                 "objdump_functions": _sampled(objdump.functions),
                 "ghidra_pseudocode": _sampled(ghidra.pseudocode),

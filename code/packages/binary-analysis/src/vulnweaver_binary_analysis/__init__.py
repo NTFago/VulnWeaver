@@ -23,6 +23,8 @@ from vulnweaver_binary_analysis.profiles import (
 )
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
+    BinaryFactsAdapter,
+    BinaryFactsSandbox,
     BoundedCommandRunner,
     DetectItEasyAdapter,
     GhidraHeadlessAdapter,
@@ -58,6 +60,8 @@ __all__ = [
     "ObfuscationAssessment",
     "CriticalLogicCandidate",
     "BoundedCommandRunner",
+    "BinaryFactsAdapter",
+    "BinaryFactsSandbox",
     "DetectItEasyAdapter",
     "GhidraHeadlessAdapter",
     "ObjdumpAdapter",
