@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Protocol, cast
 
 from vulnweaver_contracts import AgentRun, ArtifactKind, JsonObject, PermissionMode, ResourceBudget
@@ -135,9 +135,7 @@ class ReversePlanningAgent:
         self._budget = budget or AgentLoopBudget(
             max_planning_rounds=2, max_plan_rejections=1
         )
-        self._clock: Callable[[], datetime] = clock or (
-            lambda: datetime.now().replace(tzinfo=None)
-        )
+        self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic: Callable[[], float] | None = monotonic
 
     async def plan(

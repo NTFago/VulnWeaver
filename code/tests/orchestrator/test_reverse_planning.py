@@ -12,7 +12,7 @@ from vulnweaver_orchestrator import (
 )
 from vulnweaver_persistence import Database, DatabaseSettings
 
-from tests.persistence.factories import task
+from tests.persistence.factories import artifact, artifact_version, project, task
 
 TIMESTAMP = "2026-09-10T08:00:00Z"
 
@@ -165,8 +165,26 @@ def test_database_sink_persists_agent_run(persistence_database_url: str) -> None
         suffix = uuid4().hex[:12]
         database = Database(DatabaseSettings(persistence_database_url))
         async with database.transaction() as repositories:
+            await repositories.projects.add(project(f"project:{suffix}"))
+            await repositories.artifacts.add(
+                artifact(
+                    f"artifact:{suffix}",
+                    project_id=f"project:{suffix}",
+                    current_version_id=f"artifact-version:{suffix}",
+                )
+            )
+            await repositories.artifacts.add_version(
+                artifact_version(
+                    f"artifact-version:{suffix}", artifact_id=f"artifact:{suffix}"
+                )
+            )
             await repositories.tasks.create(
-                task(f"task:{suffix}", idempotency_key=f"task-key:{suffix}")
+                task(
+                    f"task:{suffix}",
+                    project_id=f"project:{suffix}",
+                    artifact_version_ids=[f"artifact-version:{suffix}"],
+                    idempotency_key=f"task-key:{suffix}",
+                )
             )
         sink = DatabaseAgentRunSink(database)
         run = cast(
