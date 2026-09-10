@@ -7,6 +7,7 @@ from pathlib import Path
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
+from vulnweaver_reporting.context import ReportContext
 from vulnweaver_reporting.html import build_html
 
 
@@ -16,6 +17,7 @@ def render_pdf(
     *,
     pocs: Sequence[Poc] = (),
     evidence: dict[str, list[Evidence]] | None = None,
+    context: ReportContext | None = None,
 ) -> Path:
     """Render a bounded report to a caller-owned output path."""
     try:
@@ -26,7 +28,8 @@ def render_pdf(
         ) from error
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    HTML(string=build_html(findings, pocs, evidence), base_url=str(destination.parent)).write_pdf(  # pyright: ignore[reportUnknownMemberType]
-        destination
-    )
+    HTML(  # pyright: ignore[reportUnknownMemberType]
+        string=build_html(findings, pocs, evidence, context),
+        base_url=str(destination.parent),
+    ).write_pdf(destination)
     return destination
