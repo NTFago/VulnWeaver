@@ -83,7 +83,7 @@ class ModelReadablePseudocodeHook:
             ],
             output_contract="ReadablePseudocodeReport",
             input_refs=tuple(job["input_refs"]),
-            max_output_tokens=min(8192, job["resource_budget"]["max_model_tokens"]),
+            max_output_tokens=job["resource_budget"]["max_model_tokens"] or None,
         )
         failure_code = response.failure["code"] if response.failure is not None else None
         if failure_code is not None or response.output is None:
