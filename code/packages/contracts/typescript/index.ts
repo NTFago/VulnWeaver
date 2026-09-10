@@ -644,6 +644,11 @@ export interface ExploitScript {
   rationale: string;
 }
 
+export interface CriticalLogicAssessment {
+  schema_version: SchemaVersion;
+  assessments: Array<Record<string, JsonValue>>;
+}
+
 export interface ProofRequest {
   schema_version: SchemaVersion;
   id: Identifier;

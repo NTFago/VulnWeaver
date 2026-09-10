@@ -21,6 +21,7 @@ from vulnweaver_model_gateway import (
     ModelTier,
 )
 from vulnweaver_orchestrator import (
+    CriticalLogicConfirmer,
     DatabaseAgentRunSink,
     IndependentModelReviewer,
     ReversePlanningAgent,
@@ -114,6 +115,13 @@ async def _run() -> None:
         if model_gateway is not None
         else None
     )
+    critical_logic_hook = (
+        CriticalLogicConfirmer(
+            model_gateway, sink=DatabaseAgentRunSink(database)
+        )
+        if model_gateway is not None
+        else None
+    )
     binary_executor = BinaryImportExecutor.configured(
         database,
         store,
@@ -132,6 +140,7 @@ async def _run() -> None:
         sandbox=binary_sandbox,
         sandbox_image_digest=binary_digest,
         planning_hook=binary_planning_hook,
+        critical_logic_hook=critical_logic_hook,
         readable_pseudocode_hook=(
             ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
         ),

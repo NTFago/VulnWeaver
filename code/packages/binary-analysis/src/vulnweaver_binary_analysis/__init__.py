@@ -12,6 +12,7 @@ from vulnweaver_binary_analysis.executor import (
     BinaryAnalysisExecutionError,
     BinaryImportExecutor,
     BinaryPlanningHook,
+    CriticalLogicHook,
     ReadablePseudocodeHook,
 )
 from vulnweaver_binary_analysis.headers import (
@@ -62,6 +63,7 @@ __all__ = [
     "BinaryAnalysisLimits",
     "BinaryImportExecutor",
     "BinaryPlanningHook",
+    "CriticalLogicHook",
     "ReadablePseudocodeHook",
     "BinaryInspectionError",
     "BinaryMetadata",
