@@ -1807,6 +1807,7 @@ source = { editable = "apps/analysis-worker" }
 dependencies = [
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-binary-analysis" },
+    { name = "vulnweaver-fuzzing" },
     { name = "vulnweaver-model-gateway" },
     { name = "vulnweaver-orchestrator" },
     { name = "vulnweaver-persistence" },
@@ -1822,6 +1823,7 @@ dependencies = [
 requires-dist = [
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-binary-analysis", editable = "packages/binary-analysis" },
+    { name = "vulnweaver-fuzzing", editable = "packages/fuzzing" },
     { name = "vulnweaver-model-gateway", editable = "packages/model-gateway" },
     { name = "vulnweaver-orchestrator", editable = "packages/orchestrator" },
     { name = "vulnweaver-persistence", editable = "packages/persistence" },
