@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import Protocol
 
 from vulnweaver_contracts import JsonObject
 from vulnweaver_model_gateway import ModelCallResult, ModelTier
@@ -47,7 +47,7 @@ class HarnessGenerator:
         )
         if response.failure is not None or response.output is None:
             return None
-        source = cast(JsonObject, response.output).get("source")
+        source = response.output.get("source")
         if isinstance(source, str) and source.strip() and len(source) <= 65536:
             return source
         return None

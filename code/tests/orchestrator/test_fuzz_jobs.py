@@ -1,5 +1,4 @@
 import pytest
-
 from vulnweaver_orchestrator.fuzz_jobs import link_fuzz_evidence
 
 

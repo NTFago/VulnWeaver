@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Sequence
-from typing import Protocol, cast
+from typing import cast
 
 from vulnweaver_contracts import (
     EvidenceRelation,
@@ -19,16 +19,11 @@ from vulnweaver_contracts import (
     RetryPolicy,
     SchemaVersion,
 )
-
-
-class FuzzRepositories(Protocol):
-    tasks: object
-    findings: object
-    jobs: object
+from vulnweaver_persistence import Database, Repositories
 
 
 class FuzzJobScheduler:
-    def __init__(self, database: object, *, retry_policy: RetryPolicy | None = None) -> None:
+    def __init__(self, database: Database, *, retry_policy: RetryPolicy | None = None) -> None:
         self._database = database
         self._retry_policy = retry_policy or RetryPolicy(
             max_attempts=2,
@@ -89,7 +84,7 @@ class FuzzJobScheduler:
 
 
 async def link_fuzz_evidence(
-    repositories: FuzzRepositories,
+    repositories: Repositories,
     *,
     finding_id: str,
     evidence_ids: Sequence[str],
