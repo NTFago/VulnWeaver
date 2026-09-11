@@ -513,7 +513,9 @@ textarea { resize: vertical; min-height: 44px; }
 
 .project-form .field-grid { margin-top: 4px; }
 .project-list { display: grid; }
-.project-row {
+.project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.project-row + .project-row { border-top: 1px solid var(--line); }
+.project-open {
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) auto auto 168px 22px;
@@ -527,14 +529,27 @@ textarea { resize: vertical; min-height: 44px; }
   color: var(--text);
   transition: background 0.16s var(--ease);
 }
-.project-row:hover { background: var(--panel-2); }
-.project-row + .project-row { border-top: 1px solid var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.project-open:hover { background: var(--panel-2); }
 .project-main { display: grid; gap: 4px; min-width: 0; }
 .project-main b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-main small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-row time { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; }
 .arrow { color: var(--muted); font-size: 16px; transition: color 0.16s var(--ease), transform 0.16s var(--ease); }
-.project-row:hover .arrow, .task-list button:hover .arrow { color: var(--accent); transform: translateX(2px); }
+.project-open:hover .arrow, .task-list .task-open:hover .arrow { color: var(--accent); transform: translateX(2px); }
+.row-delete {
+  margin-left: 8px;
+  width: 30px; height: 30px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.16s var(--ease), border-color 0.16s var(--ease), background 0.16s var(--ease);
+}
+.row-delete:hover { color: #ff6b6b; border-color: #ff6b6b; background: rgba(255, 107, 107, 0.08); }
+.row-delete:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ---------- 空状态 ---------- */
 
@@ -626,7 +641,9 @@ textarea { resize: vertical; min-height: 44px; }
 .sample-list-toggle[aria-expanded="true"] .arrow { transform: rotate(180deg); }
 
 .task-list { display: grid; }
-.task-list button {
+.task-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.task-row + .task-row { border-top: 1px solid var(--line); }
+.task-list .task-open {
   width: 100%;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 168px 22px;
@@ -640,8 +657,7 @@ textarea { resize: vertical; min-height: 44px; }
   color: var(--text);
   transition: background 0.16s var(--ease);
 }
-.task-list button:hover { background: var(--panel-2); }
-.task-list button + button { border-top: 1px solid var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.task-list .task-open:hover { background: var(--panel-2); }
 .task-cell { display: grid; gap: 4px; min-width: 0; }
 .task-cell b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-cell small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -955,9 +971,9 @@ code { color: var(--accent); font-family: var(--font-mono); }
   .metric-strip > div { padding: 16px 18px; }
   .task-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .timeline, .job-list, .agent-run-list { max-height: none; }
-  .project-row { grid-template-columns: minmax(0, 1fr) 22px; }
+  .project-open { grid-template-columns: minmax(0, 1fr) 22px; }
   .project-row .badge, .project-row time { display: none; }
-  .task-list button { grid-template-columns: 18px minmax(0, 1fr) 22px; }
+  .task-list .task-open { grid-template-columns: 18px minmax(0, 1fr) 22px; }
   .task-list time { display: none; }
   .task-heading .task-actions { justify-content: flex-start; }
   .panel { padding: 20px; }

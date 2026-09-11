@@ -415,6 +415,95 @@ def _create_project(
     return response.json()
 
 
+def _upload_source_sample(client: TestClient, csrf: str, project_id: str, key: str) -> str:
+    upload = client.post(
+        f"/api/projects/{project_id}/artifacts?kind=source_archive",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": key,
+        },
+        content=b"PK\x03\x04harmless",
+    )
+    assert upload.status_code == 201
+    return upload.json()["versions"][0]["id"]
+
+
+def _create_task(
+    client: TestClient, csrf: str, project_id: str, version_id: str, key: str
+) -> str:
+    response = client.post(
+        f"/api/projects/{project_id}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": key},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version_id],
+            "resource_budget": _budget(),
+        },
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+def test_delete_running_task_is_rejected_until_terminal(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf)
+    version_id = _upload_source_sample(client, csrf, project["id"], "artifact:delete-running")
+    task_id = _create_task(client, csrf, project["id"], version_id, "task:delete-running")
+
+    rejected = client.delete(f"/api/tasks/{task_id}", headers={"X-CSRF-Token": csrf})
+    assert rejected.status_code == 409
+    assert rejected.json()["error_code"] == "entity_conflict"
+
+    cancelled = client.post(
+        f"/api/tasks/{task_id}/cancel",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "cancel:delete-running"},
+    )
+    assert cancelled.status_code == 200
+
+    deleted = client.delete(f"/api/tasks/{task_id}", headers={"X-CSRF-Token": csrf})
+    assert deleted.status_code == 204
+    assert client.get(f"/api/tasks/{task_id}").status_code == 404
+    assert client.get(f"/api/tasks/{task_id}/events").status_code == 404
+    assert client.get(f"/api/projects/{project['id']}/tasks").json() == []
+
+    missing = client.delete(f"/api/tasks/{task_id}", headers={"X-CSRF-Token": csrf})
+    assert missing.status_code == 404
+
+
+def test_delete_project_cascades_tasks_and_artifacts(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf, key="project:delete-cascade")
+    version_id = _upload_source_sample(client, csrf, project["id"], "artifact:delete-cascade")
+    task_id = _create_task(client, csrf, project["id"], version_id, "task:delete-cascade")
+    cancelled = client.post(
+        f"/api/tasks/{task_id}/cancel",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "cancel:delete-cascade"},
+    )
+    assert cancelled.status_code == 200
+
+    active_project = _create_project(
+        client, csrf, key="project:delete-active", name="Still running"
+    )
+    active_version = _upload_source_sample(
+        client, csrf, active_project["id"], "artifact:delete-active"
+    )
+    _create_task(client, csrf, active_project["id"], active_version, "task:delete-active")
+
+    rejected = client.delete(
+        f"/api/projects/{active_project['id']}", headers={"X-CSRF-Token": csrf}
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["error_code"] == "entity_conflict"
+
+    deleted = client.delete(f"/api/projects/{project['id']}", headers={"X-CSRF-Token": csrf})
+    assert deleted.status_code == 204
+    assert client.get(f"/api/projects/{project['id']}").status_code == 404
+    assert client.get(f"/api/tasks/{task_id}").status_code == 404
+    assert client.get(f"/api/projects/{project['id']}/artifacts").status_code == 404
+    assert all(item["id"] != project["id"] for item in client.get("/api/projects").json())
+
+
 def test_personal_login_csrf_and_project_idempotency(client: TestClient) -> None:
     assert client.get("/health/live").json() == {"status": "ok"}
     csrf = _login_and_change_password(client)

@@ -13,13 +13,21 @@
   export let onGoOverview: () => void = () => {};
   export let onOpenTask: (task: Task) => void = () => {};
   export let onUpload: (kind: ArtifactKind, file: File) => Promise<boolean> = async () => false;
-  export let onCreateTask: (versionIds: string[]) => Promise<boolean> = async () => false;
+  export let onCreateTask: (versionIds: string[], tokenBudget: number) => Promise<boolean> = async () => false;
+  export let onDeleteTask: (task: Task) => Promise<void> = async () => {};
   export let onShowError: (message: string) => void = () => {};
 
   let uploadKind: ArtifactKind = "source_archive";
   let uploadFile: File | null = null;
   let selectedVersionIds: string[] = [];
   let sampleListExpanded = false;
+  let tokenBudget = 200_000;
+
+  function confirmDeleteTask(task: Task): void {
+    if (window.confirm(`确定删除该任务（${shortId(task.id)}）？其作业、Finding 与证据记录将被一并删除，且不可恢复。`)) {
+      void onDeleteTask(task);
+    }
+  }
   const uploadAccept: Partial<Record<ArtifactKind, string>> = { source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz", pe: ".exe,.dll,.sys" };
 
   function versionFileName(versionId: string, versions: Map<string, ArtifactVersion>): string {
@@ -49,7 +57,12 @@
       onShowError("请至少选择一个样本");
       return;
     }
-    await onCreateTask([...selectedVersionIds]);
+    const budget = Number.parseInt(String(tokenBudget), 10);
+    if (!Number.isFinite(budget) || budget < 0) {
+      onShowError("模型 Token 预算必须是不小于 0 的整数（0 表示不限制）");
+      return;
+    }
+    await onCreateTask([...selectedVersionIds], budget);
   }
 </script>
 
@@ -92,6 +105,10 @@
           <span>{sampleListExpanded ? "收起样本" : `展开全部 ${artifacts.length} 个样本`}</span><small>已选 {selectedVersionIds.length} 个</small><span class="arrow" aria-hidden="true">⌄</span>
         </button>
       {/if}
+      <label>模型 Token 预算
+        <input type="number" min="0" step="1000" bind:value={tokenBudget} disabled={busy} />
+        <small>智能体分析循环的模型 token 上限，填 0 表示不限制。</small>
+      </label>
       <button class="primary block" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务{selectedVersionIds.length > 0 ? `（${selectedVersionIds.length}）` : ""}</button>
     {/if}
   </section>
@@ -103,12 +120,15 @@
   {:else}
     <div class="task-list">
       {#each tasks as task (task.id)}
-        <button disabled={busy} on:click={() => onOpenTask(task)}>
-          <span class={`status-dot ${task.status}`}></span>
-          <span class="task-cell"><b>{task.result ? taskResultLabels[task.result] : taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
-          <time>{formatDate(task.updated_at)}</time>
-          <span class="arrow" aria-hidden="true">→</span>
-        </button>
+        <div class="task-row">
+          <button class="task-open" disabled={busy} on:click={() => onOpenTask(task)}>
+            <span class={`status-dot ${task.status}`}></span>
+            <span class="task-cell"><b>{task.result ? taskResultLabels[task.result] : taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
+            <time>{formatDate(task.updated_at)}</time>
+            <span class="arrow" aria-hidden="true">→</span>
+          </button>
+          <button class="row-delete" title="删除任务" aria-label={`删除任务 ${shortId(task.id)}`} disabled={busy} on:click={() => confirmDeleteTask(task)}>✕</button>
+        </div>
       {/each}
     </div>
   {/if}

@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -197,7 +197,11 @@ class CodeAuditAgent:
         attempt: int,
         run_id: str,
         input_refs: tuple[str, ...] = (),
+        # Per-execution override of the loop's model token budget; None means
+        # uncapped, mirroring the resource_budget convention where 0 = no limit.
+        max_model_tokens: int | None = 200_000,
     ) -> CodeAuditOutcome:
+        budget = replace(self._budget, max_model_tokens=max_model_tokens)
         workspace = AuditWorkspace(self._database, self._store, task_id, limits=self._limits)
         await workspace.load()
         executor = AuditStepExecutor(
@@ -215,7 +219,7 @@ class CodeAuditAgent:
             _WorkspaceStepExecutor(executor),
             sink=self._sink,
             tier=ModelTier.AUDIT,
-            budget=self._budget,
+            budget=budget,
             clock=self._clock,
             monotonic=self._monotonic,
         )

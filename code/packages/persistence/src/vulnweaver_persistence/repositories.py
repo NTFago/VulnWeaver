@@ -8,7 +8,8 @@ from enum import StrEnum
 from typing import cast
 from uuid import uuid4
 
-from sqlalchemy import RowMapping, Table, func, select, text, update
+from sqlalchemy import RowMapping, Table, delete, func, select, text, update
+from sqlalchemy import exists as exists_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -2052,6 +2053,225 @@ class PairRepository:
                 )
 
 
+class DeletionRepository:
+    """Hard-delete tasks and projects with their dependent rows.
+
+    All FKs in the control-plane schema are RESTRICT by design, so deletion walks
+    the dependency graph explicitly inside one transaction. Only terminal tasks
+    may be deleted: live workers would otherwise keep writing into removed rows.
+    """
+
+    _TERMINAL_STATUSES = {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    }
+
+    def __init__(self, connection: AsyncConnection) -> None:
+        self._connection = connection
+
+    async def delete_task(self, task_id: str) -> Task:
+        task = await self._load_task_for_delete(task_id)
+        await self._delete_task_rows(task_id)
+        return task
+
+    async def delete_project(self, project_id: str) -> Project:
+        row = (
+            (
+                await self._connection.execute(
+                    select(projects).where(projects.c.id == project_id).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("project not found", details={"project_id": project_id})
+        task_rows = (
+            (
+                await self._connection.execute(
+                    select(tasks.c.id, tasks.c.status).where(tasks.c.project_id == project_id)
+                )
+            )
+            .mappings()
+            .all()
+        )
+        active = [
+            row_["id"]
+            for row_ in task_rows
+            if TaskStatus(row_["status"]) not in self._TERMINAL_STATUSES
+        ]
+        if active:
+            raise EntityConflict(
+                "project has tasks that are still running; cancel or delete them first",
+                details={"task_ids": active},
+            )
+        for task_row in task_rows:
+            await self._delete_task_rows(task_row["id"])
+
+        artifact_ids = (
+            await self._connection.execute(
+                select(artifacts.c.id).where(artifacts.c.project_id == project_id)
+            )
+        ).scalars().all()
+        if not artifact_ids:
+            version_rows = []
+        else:
+            version_rows = (
+                await self._connection.execute(
+                    select(artifact_versions.c.id)
+                    .where(artifact_versions.c.artifact_id.in_(artifact_ids))
+                    # Children reference parents via parent_version_id with an
+                    # immediate RESTRICT check, so delete newest-first.
+                    .order_by(artifact_versions.c.created_at.desc())
+                )
+            ).scalars().all()
+        if version_rows:
+            await self._connection.execute(
+                delete(pair_raw).where(pair_raw.c.artifact_version_id.in_(version_rows))
+            )
+            await self._connection.execute(
+                delete(pair_edges).where(pair_edges.c.artifact_version_id.in_(version_rows))
+            )
+            await self._connection.execute(
+                delete(pair_nodes).where(pair_nodes.c.artifact_version_id.in_(version_rows))
+            )
+            await self._connection.execute(
+                delete(pair_functions).where(pair_functions.c.artifact_version_id.in_(version_rows))
+            )
+        if artifact_ids:
+            await self._connection.execute(
+                update(artifacts)
+                .where(artifacts.c.id.in_(artifact_ids))
+                .values(current_version_id=None)
+            )
+        for version_id in version_rows:
+            await self._connection.execute(
+                delete(artifact_versions).where(artifact_versions.c.id == version_id)
+            )
+        if artifact_ids:
+            await self._connection.execute(
+                delete(artifacts).where(artifacts.c.id.in_(artifact_ids))
+            )
+        await self._connection.execute(delete(projects).where(projects.c.id == project_id))
+        return _project_from_row(row)
+
+    async def _load_task_for_delete(self, task_id: str) -> Task:
+        row = (
+            (
+                await self._connection.execute(
+                    select(tasks).where(tasks.c.id == task_id).with_for_update()
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if row is None:
+            raise EntityNotFound("task not found", details={"task_id": task_id})
+        task = _task_from_row(row)
+        if task["status"] not in self._TERMINAL_STATUSES:
+            raise EntityConflict(
+                "task is still running; cancel it before deleting",
+                details={"task_id": task_id, "status": str(task["status"])},
+            )
+        return task
+
+    async def _delete_task_rows(self, task_id: str) -> None:
+        job_ids = (
+            await self._connection.execute(select(jobs.c.id).where(jobs.c.task_id == task_id))
+        ).scalars().all()
+        if job_ids:
+            await self._connection.execute(
+                delete(job_results).where(job_results.c.job_id.in_(job_ids))
+            )
+            await self._connection.execute(
+                delete(job_attempt_failures).where(job_attempt_failures.c.job_id.in_(job_ids))
+            )
+            await self._connection.execute(delete(jobs).where(jobs.c.id.in_(job_ids)))
+
+        finding_ids = (
+            await self._connection.execute(
+                select(findings.c.id).where(findings.c.task_id == task_id)
+            )
+        ).scalars().all()
+        evidence_ids: list[str] = []
+        if finding_ids:
+            evidence_ids = (
+                await self._connection.execute(
+                    select(finding_evidence.c.evidence_id).where(
+                        finding_evidence.c.finding_id.in_(finding_ids)
+                    )
+                )
+            ).scalars().all()
+            await self._connection.execute(
+                delete(finding_evidence).where(finding_evidence.c.finding_id.in_(finding_ids))
+            )
+            # supersedes_review_id is a self-referencing RESTRICT FK: newest first.
+            review_ids = (
+                await self._connection.execute(
+                    select(reviews.c.id)
+                    .where(reviews.c.finding_id.in_(finding_ids))
+                    .order_by(reviews.c.created_at.desc())
+                )
+            ).scalars().all()
+            for review_id in review_ids:
+                await self._connection.execute(delete(reviews).where(reviews.c.id == review_id))
+            await self._connection.execute(
+                delete(pocs).where(pocs.c.finding_id.in_(finding_ids))
+            )
+            await self._connection.execute(
+                delete(findings).where(findings.c.id.in_(finding_ids))
+            )
+        if evidence_ids:
+            # Evidence is task-independent; only remove rows no surviving finding references.
+            await self._connection.execute(
+                delete(evidence).where(
+                    evidence.c.id.in_(evidence_ids),
+                    ~exists_(
+                        select(finding_evidence.c.evidence_id).where(
+                            finding_evidence.c.evidence_id == evidence.c.id
+                        )
+                    ),
+                )
+            )
+
+        annotation_ids = (
+            await self._connection.execute(
+                select(annotations.c.id)
+                .where(annotations.c.task_id == task_id)
+                .order_by(annotations.c.created_at.desc())
+            )
+        ).scalars().all()
+        for annotation_id in annotation_ids:
+            await self._connection.execute(
+                delete(annotations).where(annotations.c.id == annotation_id)
+            )
+
+        await self._connection.execute(
+            delete(agent_runs).where(agent_runs.c.task_id == task_id)
+        )
+        await self._connection.execute(
+            delete(task_events).where(task_events.c.task_id == task_id)
+        )
+        await self._connection.execute(
+            delete(orchestration_checkpoints).where(orchestration_checkpoints.c.task_id == task_id)
+        )
+        await self._connection.execute(
+            delete(outbox_events).where(
+                outbox_events.c.aggregate_type == "task",
+                outbox_events.c.aggregate_id == task_id,
+            )
+        )
+        if job_ids:
+            await self._connection.execute(
+                delete(outbox_events).where(
+                    (outbox_events.c.aggregate_type == "job")
+                    & (outbox_events.c.aggregate_id.in_(job_ids))
+                )
+            )
+        await self._connection.execute(delete(tasks).where(tasks.c.id == task_id))
+
+
 class Repositories:
     projects: ProjectRepository
     artifacts: ArtifactRepository
@@ -2069,6 +2289,7 @@ class Repositories:
     findings: FindingRepository
     annotations: AnnotationRepository
     pocs: PocRepository
+    deletion: DeletionRepository
 
     def __init__(self, connection: AsyncConnection) -> None:
         object.__setattr__(self, "projects", ProjectRepository(connection))
@@ -2087,6 +2308,7 @@ class Repositories:
         object.__setattr__(self, "findings", FindingRepository(connection))
         object.__setattr__(self, "annotations", AnnotationRepository(connection))
         object.__setattr__(self, "pocs", PocRepository(connection))
+        object.__setattr__(self, "deletion", DeletionRepository(connection))
 
 
 def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:

@@ -20,6 +20,13 @@
   export let onOpenProject: (project: Project) => void = () => {};
   export let onCreateProject: (payload: NewProjectPayload) => Promise<boolean> = async () => false;
   export let onShowError: (message: string) => void = () => {};
+  export let onDeleteProject: (project: Project) => Promise<void> = async () => {};
+
+  function confirmDeleteProject(project: Project): void {
+    if (window.confirm(`确定删除项目「${project.name}」？其样本、任务与执行记录将被一并删除，且不可恢复。`)) {
+      void onDeleteProject(project);
+    }
+  }
 
   let showProjectForm = false;
   let projectName = "";
@@ -75,13 +82,22 @@
   <section class="panel table-panel" aria-label="项目列表">
     <div class="project-list">
       {#each projects as project (project.id)}
-        <button class="project-row" on:click={() => onOpenProject(project)}>
-          <span class="project-main"><b>{project.name}</b><small>{project.input_scope.join(" / ")}</small></span>
-          <span class={`badge ${project.permission_mode === "request_permission" ? "muted" : "ok"}`}>{project.permission_mode === "request_permission" ? "请求许可" : "完全访问"}</span>
-          <span class={`badge ${project.exploit_validation_enabled ? "accent" : "muted"}`}>{project.exploit_validation_enabled ? "利用验证开启" : "利用验证关闭"}</span>
-          <time>{formatDate(project.created_at)}</time>
-          <span class="arrow" aria-hidden="true">→</span>
-        </button>
+        <div class="project-row">
+          <button class="project-open" on:click={() => onOpenProject(project)}>
+            <span class="project-main"><b>{project.name}</b><small>{project.input_scope.join(" / ")}</small></span>
+            <span class={`badge ${project.permission_mode === "request_permission" ? "muted" : "ok"}`}>{project.permission_mode === "request_permission" ? "请求许可" : "完全访问"}</span>
+            <span class={`badge ${project.exploit_validation_enabled ? "accent" : "muted"}`}>{project.exploit_validation_enabled ? "利用验证开启" : "利用验证关闭"}</span>
+            <time>{formatDate(project.created_at)}</time>
+            <span class="arrow" aria-hidden="true">→</span>
+          </button>
+          <button
+            class="row-delete"
+            title="删除项目"
+            aria-label={`删除项目 ${project.name}`}
+            disabled={busy}
+            on:click={() => confirmDeleteProject(project)}
+          >✕</button>
+        </div>
       {/each}
     </div>
   </section>
