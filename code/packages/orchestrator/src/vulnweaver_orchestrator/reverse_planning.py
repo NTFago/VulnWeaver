@@ -132,7 +132,14 @@ class ReversePlanningAgent:
         self._gateway = gateway
         self._database = database
         self._sink = sink
-        self._budget = budget or AgentLoopBudget(max_planning_rounds=2, max_plan_rejections=1)
+        # No planning-round cap, matching the audit agent (ADR-027): a fixed
+        # round budget cut the planner off mid-investigation at two rounds and
+        # it then had to fall back to the fixed pipeline.  The wall-clock
+        # deadline is the backstop instead -- the same "no quotas, a timeout
+        # still bounds it" arrangement ADR-025 uses for the sandbox.
+        self._budget = budget or AgentLoopBudget(
+            max_plan_rejections=1, deadline_seconds=900.0
+        )
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic: Callable[[], float] | None = monotonic
 

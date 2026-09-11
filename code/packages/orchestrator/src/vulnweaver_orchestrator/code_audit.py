@@ -178,12 +178,15 @@ class CodeAuditAgent:
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
         # No planning-round cap: the investigation ends when the model reports
-        # and stops asking for steps, or when the model degrades.
+        # and stops asking for steps, or when the model degrades.  With the token
+        # budget gone that left nothing bounding a run that keeps planning
+        # successfully, so a wall-clock deadline is the backstop.
         self._budget = budget or AgentLoopBudget(
             max_plan_rejections=4,
             max_steps_per_plan=8,
             max_observation_chars=8_192,
             soft_round_limit=6,
+            deadline_seconds=1_800.0,
         )
         self._limits = limits or AuditWorkspaceLimits()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
