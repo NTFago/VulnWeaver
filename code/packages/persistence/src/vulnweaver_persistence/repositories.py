@@ -44,6 +44,7 @@ from vulnweaver_contracts import (
     QueueEvent,
     Review,
     RunStatus,
+    SchemaVersion,
     Severity,
     StructuredFailure,
     Task,
@@ -623,6 +624,61 @@ class JobRepository:
         if row is None:
             raise EntityNotFound("job not found", details={"job_id": job_id})
         return _job_from_row(row)
+
+    async def retry_failed(self, job_id: str) -> Job:
+        """Requeue one failed Job for an operator-requested execution.
+
+        Resets the execution counter (the worker's exhaustion gate compares
+        ``attempt`` against the retry policy, so a manual retry grants exactly
+        one more full retry cycle), clears the stale lease and structured
+        failure, and publishes a fresh ``job.requested`` Outbox event. The new
+        event needs a new id and sequence because both are unique per aggregate
+        and the original requested event is immutable history.
+        """
+
+        row, now = await self._job_with_database_time(job_id, lock=True)
+        current = _job_from_row(row)
+        if current["status"] is not JobStatus.FAILED:
+            raise EntityConflict(
+                "only failed jobs can be retried",
+                details={"job_id": job_id, "status": str(current["status"])},
+            )
+        await self._connection.execute(
+            update(jobs)
+            .where(jobs.c.id == job_id)
+            .values(
+                status=JobStatus.QUEUED,
+                failure=None,
+                lease=None,
+                attempt=0,
+                updated_at=now,
+            )
+        )
+        sequence = await self._connection.scalar(
+            select(func.max(outbox_events.c.sequence)).where(
+                outbox_events.c.aggregate_type == "job",
+                outbox_events.c.aggregate_id == job_id,
+            )
+        )
+        event = JobRequestedEvent(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            event_id=f"event:{job_id}:retry:{uuid4().hex}",
+            event_type="job.requested",
+            aggregate_id=job_id,
+            sequence=int(sequence or 0) + 1,
+            occurred_at=now.isoformat(),
+            correlation_id=current["task_id"],
+            causation_id=None,
+            payload={
+                "job_id": job_id,
+                "task_id": current["task_id"],
+                "job_kind": current["kind"],
+                "attempt": 0,
+            },
+        )
+        validate_contract("JobRequestedEvent", event)
+        await self._connection.execute(insert(outbox_events).values(_outbox_values(event)))
+        return await self.get(job_id)
 
     async def list_for_task(self, task_id: str) -> list[Job]:
         rows = (

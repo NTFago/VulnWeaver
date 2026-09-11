@@ -886,6 +886,7 @@ def test_openapi_lists_control_plane_and_cookie_auth(client: TestClient) -> None
     assert "/api/projects/{project_id}/artifacts" in paths
     assert "/api/projects/{project_id}/tasks" in paths
     assert "/api/tasks/{task_id}/events" in paths
+    assert "/api/jobs/{job_id}/retry" in paths
     login_schema = document.json()["components"]["schemas"]["LoginRequest"]
     assert login_schema["additionalProperties"] is False
     assert login_schema["properties"]["schema_version"]["const"] == "1.0.0"
@@ -1142,3 +1143,94 @@ def test_restart_uses_persisted_registered_account(client: TestClient) -> None:
             },
         )
         assert login.status_code == 200
+
+
+def test_failed_job_retry_requeues_publishes_event_and_conflicts(
+    client: TestClient, persistence_database_url: str
+) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf)
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Artifact-Filename": "sample.zip",
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "artifact:retry",
+        },
+        content=b"PKharmless",
+    )
+    assert upload.status_code == 201
+    artifact = upload.json()["artifact"]
+    version = upload.json()["versions"][0]
+    task = client.post(
+        f"/api/projects/{project['id']}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:retry"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version["id"]],
+            "resource_budget": _budget(),
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+    report = client.post(
+        f"/api/tasks/{task_id}/reports",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "report:retry"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_id": artifact["id"],
+            "version_id": version["id"],
+            "format": "markdown",
+        },
+    )
+    assert report.status_code == 202
+    job_id = report.json()["id"]
+
+    failure = (
+        '{"code": "model.timeout", "kind": "timeout", '
+        '"message": "upstream timed out", "retryable": false}'
+    )
+    engine = create_engine(persistence_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "UPDATE jobs SET status = 'failed', failure = "
+                f"'{failure}'::jsonb, updated_at = now() WHERE id = '{job_id}'"
+            )
+    finally:
+        engine.dispose()
+
+    unauthenticated = client.post(f"/api/jobs/{job_id}/retry")
+    assert unauthenticated.status_code == 401
+
+    retried = client.post(f"/api/jobs/{job_id}/retry", headers={"X-CSRF-Token": csrf})
+    assert retried.status_code == 200, retried.text
+    body = retried.json()
+    assert body["id"] == job_id
+    assert body["status"] == "queued"
+    assert body["attempt"] == 0
+    assert body["failure"] is None
+    assert body["lease"] is None
+
+    engine = create_engine(persistence_database_url)
+    try:
+        with engine.begin() as connection:
+            row = connection.exec_driver_sql(
+                "SELECT event_type, sequence, published_at FROM outbox_events "
+                f"WHERE aggregate_type = 'job' AND aggregate_id = '{job_id}' "
+                "ORDER BY sequence DESC LIMIT 1"
+            ).one()
+            assert row[0] == "job.requested"
+            assert row[1] >= 1
+            assert row[2] is None
+    finally:
+        engine.dispose()
+
+    conflict = client.post(f"/api/jobs/{job_id}/retry", headers={"X-CSRF-Token": csrf})
+    assert conflict.status_code == 409
+    assert conflict.json()["error_code"] == "entity_conflict"
+
+    missing = client.post("/api/jobs/job:does-not-exist/retry", headers={"X-CSRF-Token": csrf})
+    assert missing.status_code == 404
+    assert missing.json()["error_code"] == "entity_not_found"

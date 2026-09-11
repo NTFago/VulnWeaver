@@ -672,6 +672,24 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 return {"job_id": job["id"], "status": job["status"], "result": None}
             return result
 
+    @app.post("/api/jobs/{job_id}/retry")
+    async def retry_job(job_id: str, _: Annotated[str, Depends(require_write)]) -> Job:
+        """Requeue one failed Job; non-failed jobs are rejected with a conflict."""
+
+        async with database.transaction() as repositories:
+            job = await repositories.jobs.retry_failed(job_id)
+        LOGGER.info(
+            "job_retry_requested",
+            extra={
+                "job_id": job["id"],
+                "task_id": job["task_id"],
+                "job_kind": str(job["kind"]),
+                "previous_status": "failed",
+                "status": str(job["status"]),
+            },
+        )
+        return job
+
     @app.get("/api/artifact-versions/{version_id}")
     async def artifact_version(
         version_id: str, _: Annotated[str, Depends(require_account)]
