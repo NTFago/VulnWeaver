@@ -27,14 +27,17 @@
  */
 #include <stdint.h>
 
-/* State tags.  Large, irregular constants are what OLLVM's `fla` pass emits;
- * they also stop the dispatcher collapsing into a dense jump table. */
+/* State tags.  OLLVM's `fla` pass numbers its states sequentially, and a dense
+ * switch is what the compiler turns into a jump table -- the dispatcher shape
+ * the flattening heuristic looks for.  Irregular constants here would compile
+ * to a comparison chain instead and the sample would stop representing real
+ * `fla` output. */
 enum {
-    S_ENTRY = 0x1F3A2B4Cu,
-    S_LOAD = 0x1F3A2B4Du,
-    S_MIX = 0x1F3A2B4Eu,
-    S_STEP = 0x1F3A2B4Fu,
-    S_EXIT = 0x1F3A2B50u
+    S_ENTRY = 0u,
+    S_LOAD = 1u,
+    S_MIX = 2u,
+    S_STEP = 3u,
+    S_EXIT = 4u
 };
 
 /* "VulnWeaver-T28" plus a NUL and a high byte, so the payload is not a
