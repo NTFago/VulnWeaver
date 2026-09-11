@@ -7,7 +7,7 @@
 ## 当前状态
 
 - 项目：VulnWeaver（漏洞织鉴）。
-- 集成基线：`main`（`4d5acbf`），工作树干净；T43/T45 及后续修复（含 #70-#72）均已合并、重建镜像并重启部署栈。
+- 集成基线：`main`（`37aab18`），工作树干净；T43/T45 及后续修复（含 #70-#72）均已合并、重建镜像并重启部署栈。
 - 并行 worktree：`课设-worktree-fe-opts` 使用 `feat/frontend-delete-and-token-budget`，对应 T43。
 - 部署栈：全部容器 Up，`api`/`analysis-worker`/`orchestrator`/`web`/`binary-tools` 均为合并后重建的镜像。
 
@@ -38,7 +38,7 @@
 | Q-005 | 待处理 | 复核源码事实仍主要是有界片段和 PAIR 快照，复杂跨函数问题的召回率可能受影响。 |
 | Q-009 | 待处理 | 课设差距已拆为 T25-T34；代码大多已实现，真实模型/工具/部署 E2E 仍需补齐。 |
 | Q-021 | 待处理 | **部署顺序陷阱**：worker 启动时缓存工具镜像摘要，镜像重建后必须**先重启 sandbox-runner、再重启 worker**；顺序反了不会当场报错，只在下次任务变成无消息的 `worker.execution_error`。 |
-| Q-022 | 待处理 | worker 把执行器异常压成 `{"exception_type": …}`，**丢弃消息与 traceback**，只能靠容器内复现定位。 |
+| Q-022 | 已处理 | worker 把执行器异常压成 `{"exception_type": …}`，**丢弃消息与 traceback**。PR #70 增加 `exception_message`（截断 500 字符），下一次失败即给出原因，T45-D 由此定位。 |
 | Q-023 | 待处理 | Windows 工作区新建的脚本为 CRLF；`.gitattributes` 只在 commit/checkout 归一化工作树，容器内 `sh` 读 CRLF 直接报 `Illegal option -`。 |
 | Q-024 | 待处理 | `pair_raw.artifact_version_id` 仍指向上传工件。它无 `location` 可推导，但 `object_ref` 能对上 `binary-analysis-result` 版本，取其 `parent_version_id` 即目标（4 行）。不影响工作台显示，但数据仍不一致。 |
 
@@ -61,6 +61,8 @@
 | 日期 | 验证 | 结果 |
 |---|---|---|
 | 2026-09-11 | T45 部署栈端到端（真实投递 UPX 加壳样本） | `binary-import`/`semantic_audit`/`review`/`report` 全部 succeeded；`functions` 0→17、`basic_blocks` 37、`xrefs` 55、`status` partial→complete；`upx-unpacked-binary` 派生物摘要与加壳前逐字节一致（`da691578…`）；反混淆仅标记 `FUN_00101138`（`flattened_checksum`，0.700）。 |
+| 2026-09-11 | T45-D/E/F 全量门禁与回填 | Linux Dev Container：`pytest` **556 passed / 5 skipped**；`ruff check .` 通过；`pyright` **0 errors**。T45-D 的回归测试已验证**无修复时失败、有修复时通过**。一次性回填实测 `pair_functions` 68 / `pair_nodes` 816 / `pair_edges` 364 行，**与 dry-run 预测逐表吻合**；回填后加壳样本的每个分析版本各 17 行（原累积 68 行），残留同名行经核实为**不同地址/不同文件**的同名实体，非重复。 |
+| 2026-09-11 | T45-D 线上验证 | 部署后真实投递：`semantic_audit` 由 `worker.execution_error` 转为 **succeeded**；同一部署下源码任务也 succeeded。 |
 | 2026-09-11 | T45-A/B/C 全量门禁 | Linux Dev Container：554 passed / 5 skipped；`ruff check .` 通过；`pyright` 0 errors；契约 `--check` 无漂移；前端 13 passed、`svelte-check` 0 错误、Vite 构建成功。 |
 | 2026-09-11 | 删除接口修复实测 | 重建 `api` 镜像后 `DELETE /api/projects|tasks/{id}` 由 405 变为 401（路由存在、仅缺认证）。 |
 | 2026-09-11 | 前端定向门禁 | 13 passed；Svelte/TypeScript 通过；Vite 构建成功；1600×1000 与 900×900 模拟浏览器回归通过。 |
@@ -69,11 +71,11 @@
 
 ## 下一步
 
-1. **回填 `pair_raw`**：SQL 已 dry-run 验证（4 行受影响，物料为 `object_ref` → `binary-analysis-result` 版本的 parent）。需用户点名该表后再执行。
+1. **回填 `pair_raw`**：SQL 已 dry-run 验证（4 行受影响，物料为 `object_ref` → `binary-analysis-result` 版本的 parent）。需用户点名该表后再执行；不执行不影响工作台显示，仅数据内部不一致（Q-024）。
 2. **自定义壳脱壳**：目标明确要求，目前完全未实现，是链路唯一缺口。建议顺序——先做脱壳器（高熵可执行区的 XOR 密钥恢复 + `objcopy` 包装为 ELF），它可独立验证；样本侧再处理入口 ABI（`_start` 需要初始栈与 `%rdx`，stub 必须尾跳而非 `call`）。
-2. 校准 T45-B 的 deadline 取值（900s/1800s 按观测耗时 16×/20× 取，未在真实负载下验证）。
-3. 实现 Q-021/Q-022 的修复：摘要按需解析 + 异常消息落库。
-4. T43 worktree 完成真实浏览器回归。
-5. 配置真实模型及固定工具镜像，补 T27-T32 的教学样本 E2E。
-6. 在独立部署环境完成 T20/T21/T22/T33 的 Proof→报告→浏览器下载回归。
-7. 远程分支 `origin/feat/t45-binary-unpacking-chain` 已被 rebase 后的后续合并取代，属陈旧分支；删除远程分支改变共享状态，需用户确认。
+3. **Q-021 部署顺序陷阱**：worker 缓存的工具摘要改为按需解析，消除「先重启 runner 后重启 worker」的隐含要求。
+4. 校准 T45-B 的 deadline 取值（900s/1800s 按观测耗时 16×/20× 取，未在真实负载下验证）。
+5. T43 worktree 完成真实浏览器回归。
+6. 配置真实模型及固定工具镜像，补 T27-T32 的教学样本 E2E。
+7. 在独立部署环境完成 T20/T21/T22/T33 的 Proof→报告→浏览器下载回归。
+8. 远程分支 `origin/feat/t45-binary-unpacking-chain` 已被 rebase 后的后续合并取代，属陈旧分支；删除远程分支改变共享状态，需用户确认。
