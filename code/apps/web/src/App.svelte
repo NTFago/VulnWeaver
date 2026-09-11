@@ -167,6 +167,7 @@
   let uploadKind: ArtifactKind = "source_archive";
   let uploadFile: File | null = null;
   let selectedVersionIds: string[] = [];
+  let sampleListExpanded = false;
 
   onMount(() => {
     void (async () => {
@@ -466,6 +467,10 @@
   function toggleVersion(versionId: string): void {
     selectedVersionIds = selectedVersionIds.includes(versionId)
       ? selectedVersionIds.filter((id) => id !== versionId) : [...selectedVersionIds, versionId];
+  }
+
+  function toggleSampleList(): void {
+    sampleListExpanded = !sampleListExpanded;
   }
 
   async function createTask(): Promise<void> {
@@ -923,14 +928,21 @@
             {#if artifacts.length === 0}
               <div class="compact-empty">导入样本后，可在此创建分析任务。</div>
             {:else}
-              <div class="sample-options">
-                {#each artifacts as artifact (artifact.id)}
+              <div class="sample-options" class:expanded={sampleListExpanded}>
+                {#each (sampleListExpanded ? artifacts : artifacts.slice(0, 3)) as artifact (artifact.id)}
                   <label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option">
                     <input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} />
                     <span><b>{fileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
                   </label>
                 {/each}
               </div>
+              {#if artifacts.length > 3}
+                <button class="sample-list-toggle" type="button" aria-expanded={sampleListExpanded} on:click={toggleSampleList}>
+                  <span>{sampleListExpanded ? "收起样本" : `展开全部 ${artifacts.length} 个样本`}</span>
+                  {#if !sampleListExpanded && selectedVersionIds.length > 0}<small>已选 {selectedVersionIds.length} 个</small>{/if}
+                  <span class="arrow" aria-hidden="true">⌄</span>
+                </button>
+              {/if}
               <button class="primary block" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务{selectedVersionIds.length > 0 ? `（${selectedVersionIds.length}）` : ""}</button>
             {/if}
           </section>
