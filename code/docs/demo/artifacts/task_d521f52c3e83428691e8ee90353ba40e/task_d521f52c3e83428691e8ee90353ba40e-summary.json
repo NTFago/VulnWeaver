@@ -1,0 +1,271 @@
+{
+  "project": {
+    "schema_version": "1.0.0",
+    "id": "project:6b2be5aa09e74c19aa6420479ec702c8",
+    "name": "演示-加壳注入",
+    "input_scope": [
+      "本地自编教学样本（静态审计与容器内动态验证）"
+    ],
+    "permission_mode": "full_access",
+    "exploit_validation_enabled": true,
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:43:30.972951Z"
+  },
+  "task": {
+    "schema_version": "1.0.0",
+    "id": "task:d521f52c3e83428691e8ee90353ba40e",
+    "project_id": "project:6b2be5aa09e74c19aa6420479ec702c8",
+    "artifact_version_ids": [
+      "artifact-version:c691aaae17ed4df99f335d28130c2696"
+    ],
+    "status": "completed",
+    "result": "partial",
+    "failure": null,
+    "idempotency_key": "0141d98975a74e2aa48264d7c1299190",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:43:31.042656Z",
+    "updated_at": "2026-09-11T03:45:24.099548Z"
+  },
+  "jobs": [
+    {
+      "schema_version": "1.0.0",
+      "id": "job:7081345c3a401a26e790b77c35fc559f",
+      "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+      "kind": "semantic_audit",
+      "arguments": {
+        "baseline": "semantic_function_audit"
+      },
+      "input_refs": [
+        "cas://sha256/1958f5dcc65c4337f35b2a846f39f8a9e679e63476b105c973d1921ec5cf1a2b"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "semantic-audit:d25cf267130450e35aac02b967cd600a",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:43:31.042656Z",
+      "updated_at": "2026-09-11T03:45:16.018782Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:25c66f140092d3465a4545c876fa8a7c",
+      "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+      "kind": "import",
+      "tool": {
+        "name": "binary-import",
+        "version": "1.0.0",
+        "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+      },
+      "arguments": {
+        "artifact_version_id": "artifact-version:c691aaae17ed4df99f335d28130c2696"
+      },
+      "input_refs": [
+        "cas://sha256/1958f5dcc65c4337f35b2a846f39f8a9e679e63476b105c973d1921ec5cf1a2b"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "initial:d25cf267130450e35aac02b967cd600a",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:43:31.315466Z",
+      "updated_at": "2026-09-11T03:45:03.438048Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:cba1cedcf4ff3ebc77112f9e0159079e",
+      "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:732d51e0c1071ee577d54ea05a1931c2"
+      },
+      "input_refs": [
+        "cas://sha256/1958f5dcc65c4337f35b2a846f39f8a9e679e63476b105c973d1921ec5cf1a2b"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "review:bb0f6c60d6c5060bc1e52c35f8b04206",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:45:03.902235Z",
+      "updated_at": "2026-09-11T03:45:23.729475Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:report:task:d521f52c3e83428691e8ee90353ba40e:markdown",
+      "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+      "kind": "report",
+      "tool": {
+        "name": "vulnweaver-report",
+        "version": "1.0.0",
+        "image_digest": null
+      },
+      "arguments": {
+        "format": "markdown",
+        "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+        "version_id": "artifact-version:report:task:d521f52c3e83428691e8ee90353ba40e:markdown",
+        "artifact_id": "artifact:report:task:d521f52c3e83428691e8ee90353ba40e:markdown",
+        "parent_version_id": "artifact-version:c691aaae17ed4df99f335d28130c2696"
+      },
+      "input_refs": [],
+      "status": "succeeded",
+      "idempotency_key": "report:task:d521f52c3e83428691e8ee90353ba40e:markdown",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:45:16.018782Z",
+      "updated_at": "2026-09-11T03:45:24.099548Z"
+    }
+  ],
+  "findings": [
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:732d51e0c1071ee577d54ea05a1931c2",
+      "task_id": "task:d521f52c3e83428691e8ee90353ba40e",
+      "category": "injection",
+      "cwe_id": "CWE-78",
+      "title": "OS Command Injection in run_report via system()",
+      "severity": "high",
+      "confidence": 0.4,
+      "location": {
+        "artifact_version_id": "artifact-version:d2b8c73072c971114d5b295011c5d1e9",
+        "image_base": 4194304,
+        "virtual_address": 4198759,
+        "file_offset": 4455,
+        "instruction_end": 4198850
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "run_report",
+          "path": null,
+          "line": null,
+          "address": 4198759
+        },
+        {
+          "relation": "caller",
+          "function_name": "main",
+          "path": null,
+          "line": null,
+          "address": 4198850
+        },
+        {
+          "relation": "callee",
+          "function_name": "snprintf@plt",
+          "path": null,
+          "line": null,
+          "address": 4198496
+        },
+        {
+          "relation": "callee",
+          "function_name": "system@plt",
+          "path": null,
+          "line": null,
+          "address": 4198464
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:e287b592c0cda143d30bb4de07b20743",
+        "evidence:review:d86ff334fcce33409d692d8ac5a040b1ae51614520724c9a0cdd64c1b4dd4573"
+      ],
+      "review_ids": [
+        "review:d86ff334fcce33409d692d8ac5a040b1ae51614520724c9a0cdd64c1b4dd4573"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Address the audited pattern associated with CWE-78.",
+      "created_at": "2026-09-11T03:45:03.902235Z"
+    }
+  ],
+  "reports": {
+    "markdown": "demo-bonus-out\\task_d521f52c3e83428691e8ee90353ba40e-report.md"
+  },
+  "elapsed_seconds": 115
+}

@@ -1,6 +1,7 @@
-# E2E 端到端连通验证证据（任务 D）
+# E2E 端到端连通验证证据（任务 D 撰写，任务 G 定稿）
 
 - 执行人：E2E 连通验证子智能体（分支 `feat/demo-final`）
+- 定稿：E2E 证据收尾子智能体（任务 G，同一分支，2026-09-11）补齐 §2.5 加分样本、§6 retry 正向探针时间线与根因诊断、§7 结论表更新、§8 遗留问题增补，并归档加分样本报告工件；原 §2.5 移交说明与 §3/§5 中相应猜测归因已随证据更正
 - 验证时间：2026-09-11（时间均为 UTC，取自数据库/API 响应）
 - 栈拓扑：`code/compose.yaml`（项目名 `vulnweaver`），9 服务 + binary-tools，全部使用本 worktree 代码重建的 `:dev` 镜像（api/analysis-worker/dispatcher/web/orchestrator 均含本次全部修复后重建）
 - 检测模型：**deepseek-flash**（`https://api.deepseek.com`，全程唯一模型，无切换）
@@ -89,9 +90,18 @@
 - 对照结论：无害样本未触发任何高危/内存破坏类误报；但低危健壮性候选未被复核降为 false_positive（复核模型保守），导致 result=partial 而非 no_findings。作为误报度量如实记录：**误报过滤对 low 级健壮性提示的压制是已知短板**（不阻塞演示主线）
 - 证据：`artifacts/task_fc06d409…/`
 
-### 2.5 加分样本（packed-command-injection / obfuscated-format-string）
+### 2.5 加分样本（隔离栈 vw-e2e-bonus，与主栈并行）
 
-按分工调整移交 E2 子任务（隔离 worktree，`.worktree/task-e2e-bonus`），本任务不再执行。
+执行说明：由 E2 子任务在其隔离栈执行（compose 项目 `vw-e2e-bonus`，web 暴露 127.0.0.1:8081，独立 postgres/redis/工件存储，镜像同为 `:dev`，模型同为 deepseek-flash，账号 `bonusadmin`）；主栈全程只读不受影响。本节由任务 G 从该栈数据库、worker 日志与工件提取定稿。样本预期均取自 `code/tests/fixtures/README.md` 登记。
+
+| # | 样本 | 项目 / 任务 ID | 结果 | 命中 |
+|---|---|---|---|---|
+| 5 | packed-command-injection（UPX 4.2.4 加壳 ELF，预期 CWE-78：`run_report` 用 system 拼接输入） | 演示-加壳注入 `project:6b2be5aa09e74c19aa6420479ec702c8` / `task:d521f52c3e83428691e8ee90353ba40e` | completed / partial，113s（03:43:31→03:45:24 UTC） | **CWE-78，high，"OS Command Injection in run_report via system()"** ✓——函数、CWE、机制与 fixtures 登记完全一致 |
+| 6 | obfuscated-format-string（控制流平坦化 ELF，预期 CWE-134：`audit_log` printf 用户输入） | 演示-混淆格式串 `project:217626b0d33249b28585ab5cc927bca7` / `task:0845c78b24354884bad3100734e430d2` | completed / partial，158s（03:49:22→03:52:00 UTC） | **CWE-134，high，"User-controlled format string in audit_log"** ✓；另多报 1 个 **CWE-287** high 候选（"License validation accepts any non-empty key not beginning with '-'"，认证类超额候选）——如实记录 |
+
+- Job 链：两任务 import / semantic_audit / review（样本 6 为 review×2）/ report(markdown) **全部 succeeded，无一失败**；全部发现 status=unverifiable、confidence=0.4，与主栈复核降级口径一致。
+- 第 3 个任务 `task:955ffd42f568443e84efcca36ba2ddcb`（项目同样本 5，30s 收敛 completed/partial）：E2 用样本 5 工件发起的 retry 验证任务，同样命中 CWE-78 run_report 发现；其 import Job 首跑 failed（`worker.execution_error`/ToolExecutionError），E2 于 04:00:34 UTC POST retry 后触发与主栈 §6 完全相同的再执行落账死循环（该栈 worker 日志累计 **204 次** `IdempotencyConflict: job already has a different terminal result`，import Job 卡 running/attempt=2）——构成 retry 缺陷在隔离栈的独立复现（§6.4）。
+- 证据工件：`artifacts/task_d521f52c…/`（report.md + summary.json，E2 从该栈 API 下载后归档）、`artifacts/task_0845c78b…/`（同前）、`artifacts/task_955ffd42…/`（report.md，任务 G 从该栈 CAS 按 object_ref 提取）。
 
 ## 3. retry 端点验证（`4326d52`；正式 E2E 验收归 E2 子任务，此为我侧活栈首轮验证）
 
@@ -106,6 +116,7 @@
 | worker 认领 | queued→running、attempt 0→1 递增，事件成功送达 worker（Redis 去重未拦截） |
 
 **未竟观察（如实记录）**：重执行的 review Job 停在 running（attempt=2，lease 已过期未被收回）。该任务在 6ccaf36 缺陷存续期间曾在流里积累过反复重放的旧消息，与 retry 新事件在同一 concurrency=1 worker 上相互交织，是疑似成因（旧 pending 消息重认领与新事件竞争）。端点本身的契约行为（复位/事件/派发）已全部验证；干净 failed Job 的完整"retry→再执行→succeeded"闭环验收归 E2，建议其用全新任务构造失败后验证，并检查 `XPENDING` 清理旧消息。
+**（任务 G 更正**：上段"消息交织"为当时猜测；确定性根因是 retry 与不可变终态行冲突，本 review Job 同样具备 jobs running/attempt=2 + `job_results` FAILED 行的同签名，与消息交织无关，详见 §6.3/§6.4。**)**
 
 ## 4. 链路连通结论表
 
@@ -128,4 +139,66 @@
 3. 二进制样本自动 fuzz 被锚定授权规则拒绝、exploit 仅限 confirmed：均为设计门禁（红线 §10 与 FindingPolicy），如需在演示中呈现加壳样本动态验证，属产品决策，记录待确认。
 4. CWE 粒度偏差（样本2 报 CWE-120 而非 CWE-122）：模型输出按父类归类；`_category_from_cwe` 映射保持宽松。如需精确归类可在复核提示词/映射表中强化（记录，不擅改）。
 5. `orchestrator` 服务镜像未随 634b9ab 重建（其运行时路径未使用 SemanticAuditor，无行为影响）；终版门禁如需可统一重建。
-6. 样本2 任务的 retry 再执行未观察到完成（见 §3 未竟观察）：疑似 6ccaf36 缺陷存续期间在 Redis 流中残留的 pending 消息与 retry 新事件交织；建议 E2 在干净环境做 retry 正式闭环时一并验证 pending 消息清理。对该 finding 的复核结论本身已在早前成功的 review 执行中产出（finding.review_ids 已有 succeeded review），不影响证据完整性。
+6. 样本2 任务的 retry 再执行未观察到完成（见 §3 未竟观察）：疑似 6ccaf36 缺陷存续期间在 Redis 流中残留的 pending 消息与 retry 新事件交织；建议 E2 在干净环境做 retry 正式闭环时一并验证 pending 消息清理。对该 finding 的复核结论本身已在早前成功的 review 执行中产出（finding.review_ids 已有 succeeded review），不影响证据完整性。（任务 G 更正：根因已定位为 retry×不可变终态行冲突，见 §6.3；与 pending 消息交织无关。）
+
+## 6. retry 正向探针验证时间线与根因诊断（任务 G）
+
+目标：在真实 failed Job 上完成「retry → 再执行 → 新终态」闭环验收。对象（主栈）：项目 `project:841e8ea673bb4427a7dfaadba275be50`，任务 `task:65ab86a7786b4b26a8c124cf85a77b04` 的 import Job `job:ee5ebb1fb484eed4cd368f5764816341`（binary-import）。前置探针（§3 已录）：随机 id → 404 `entity_not_found` ✓；succeeded 作业 → 409 `entity_conflict` "only failed jobs can be retried" ✓。
+
+### 6.1 时间线（UTC，取自数据库 `jobs`/`job_results`/`outbox_events` 与 `vulnweaver-analysis-worker-1` 日志）
+
+| 时刻 | 事件 |
+|---|---|
+| 08:15:29.765 | 任务创建，import / semantic_audit / report 三 Job 派发 |
+| 08:15:38.661 | import 首跑终态 **failed**（`worker.execution_error`，kind=internal，ToolExecutionError——当时 sandbox-runner 停机）；不可变终态行写入 `job_results`（fingerprint `11cc879a…`）。任务按 §4.3 容忍该失败，08:15:39.7 以 **completed/partial** 收敛（semantic_audit、report 均 succeeded），其后聚合状态不再变化 |
+| 08:16:11.226 | sandbox-runner 恢复后总控 `POST /api/jobs/{job_id}/retry` → **HTTP 200**；jobs 行复位（queued / attempt=0 / failure=null / lease=null）；Outbox 新增 `job.requested` seq 1（`event:job:ee5ebb1f…:retry:b2bdefa6…`），08:16:11.40 发布 |
+| ~08:22:15 | worker 认领并**真实再执行** binary-import（含 `critical_logic_confirmation_degraded` 告警，执行本体在工作）；落账调 `complete()` 被持久层拒绝：`IdempotencyConflict: job already has a different terminal result` |
+| 08:24:16 / 08:26:17 / 08:28:19 / 08:30:20 | 消息按 ~2 分钟节奏重投递 → 走 `_finalize_exhausted` → `fail_exhausted` → 同样 `IdempotencyConflict` → nack，循环持续 |
+| 08:32:35–08:42:35 | 任务 G 连续观测 10 分钟：作业始终 running / attempt=2，lease 由 analysis-worker-1 持有并周期性续期，未达任何终态 → 判定该闭环**不可达**，转入根因诊断 |
+
+### 6.2 探针结论
+
+- **端点契约面全部按设计工作** ✓：404/409/200、Outbox `job.requested` 事件（新 id、sequence 递增）、worker 再认领（queued→running、attempt 0→1→2）、lease/fencing 语义生效。
+- **「retry → 再执行 → 新终态」闭环不可达**（新缺陷）：再执行本身成功完成，但任何终态（成功或失败）都无法落账，作业永久停留 running，worker 以 ~2 分钟节奏无限重投递。属 retry 运营面缺陷，**不影响分析主链路**（任务聚合在 retry 前已收敛且不再变更）。
+
+### 6.3 根因（代码级定位；超出本任务文件边界，未改动）
+
+- `JobRepository.retry_failed`（`code/packages/persistence/src/vulnweaver_persistence/repositories.py:643`）只复位 `jobs` 行；原始执行留下的不可变终态行 `job_results`（按 job_id 1:1，工件不可变红线的延伸）仍记录 FAILED。
+- 再执行成功后 `complete()`（同文件 :862）→ `_existing_completion`（:1025）发现既有终态行 fingerprint 与新结果不一致 → 抛 `IdempotencyConflict`；`fail_exhausted`（:987）同理。**任何**终态都无法写入 → 死循环。
+- 测试盲区：`test_failed_job_retry_requeues_publishes_event_and_conflicts`（`code/tests/api/test_api.py:1148`）用直接 SQL 仅改 `jobs.status` 构造 failed（不写 `job_results` 行），且未驱动 worker 再执行——端点契约面被覆盖，再执行闭环未被任何测试触及。
+
+### 6.4 独立复现（隔离栈，排除单栈环境因素）
+
+| 例 | 作业 | 现象 |
+|---|---|---|
+| 主栈 §3 首轮 | review `job:c0edf8bd2d511c27e95f5b087c82abd3`（样本2 任务） | jobs running/attempt=2 + `job_results` FAILED 行（03:34:36 UTC）——同签名 |
+| 加分栈 | import `job:78728d78a3b3b4c9bc4c1797379e8473`（E2 的 `task:955ffd42…`） | retry 事件 `event:job:78728d78…:retry:f6f16424…`（04:00:34 UTC）；worker 日志 **204 次** `IdempotencyConflict`；卡 running/attempt=2 |
+
+三例同签名同根因；§3 当时"旧 pending 消息交织"的猜测归因就此更正。
+
+### 6.5 修复方向建议（供模块归属者决策，本任务不实施）
+
+任一方向都必须同时保持工件不可变、幂等与审计语义，并补充"真实终态行 + worker 再执行"的集成测试：
+1. retry 改为派生**新 Job**（新 id，因果链接原作业），`job_results` 天然不冲突（契约面需同步改 409/200 语义与前端）；
+2. `job_results` 引入执行代际（retry 复位 epoch 并纳入唯一键/指纹比对）；
+3. 终态历史表化（追加式多代终态，查询取最新代）。
+
+运维提示：该循环在观测窗内持续；两栈共享、本任务只读未干预。重启 analysis-worker 可清空在投消息（作业仍无终态，不会自愈，属数据面残留）。
+
+## 7. 结论表更新（任务 G 定稿）
+
+对 §4 表的修订（其余行不变；加分栈 §2.5 佐证并列收录）：
+
+| 环节 | 修订后状态 | 修订依据 |
+|---|---|---|
+| 人工复核/标注/重试运营面 | **部分通**（原"通"下调） | 契约面（404/409/200、事件、再认领）按设计 ✓（§3、§6.2）；但 retry 再执行闭环在"已有不可变终态行"的作业上不可达（§6.3，三例复现），闭环验收不通过 |
+| 静态语义审计 | 维持"通"，证据面扩大 | 加分栈样本 5（CWE-78 run_report）、样本 6（CWE-134 audit_log）在完全隔离的环境并行命中，与 fixtures 登记预期逐一对应 |
+| 动态（fuzz/exploit） | 维持"部分通" | 加分栈两样本全程无 fuzz/exploit 派发（unverifiable 发现不满足派发门槛），与主栈口径一致 |
+
+样本覆盖：主链路 4 样本 + 加分 2 样本 = **6 个教学样本全部闭环**（全部 completed；5 个命中预期漏洞本体，1 个良性对照无高危误报）；中文报告落盘 artifacts 共 **7 份 markdown + 1 份 PDF**（样本1 md+pdf，样本2/3/4 与加分 3 任务各 md 一份）。
+
+## 8. 遗留问题增补（任务 G）
+
+7. **retry 再执行落账死循环**（新，P1，详见 §6.3/§6.4/§6.5）：仅影响 retry 运营面；分析主链路、任务聚合、报告链路均不受影响。修复归属持久层/API 模块所有者；本任务受文件边界限制仅记录。
+8. **加分样本 6 的 CWE-287 超额候选**（high，unverifiable）：混淆样本中模型多报一个认证类候选，复核未降 false_positive——与 §5.2"复核对非预期候选的压制保守"同属一类观察，合并跟踪。
+9. 加分栈（`vw-e2e-bonus`）与主栈各存在 1 个卡 running 的 import/review 作业（§6.4），为缺陷活体样本；栈为共享只读，处置（修复后清理或留作复现环境）待模块所有者决定。
