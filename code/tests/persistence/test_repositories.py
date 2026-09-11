@@ -533,3 +533,32 @@ def test_outbox_claim_skips_rows_locked_by_another_dispatcher(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_fuzz_job_kind_satisfies_jobs_kind_constraint(
+    seeded_database_url: str,
+) -> None:
+    """Regression: ck_jobs_kind must accept the contract's fuzz Job kind.
+
+    The constraint rewritten by 0017 predated the fuzz kind, so the review
+    settlement's automatic fuzz dispatch failed its INSERT and rolled back the
+    entire settlement transaction, re-running the review Job endlessly.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            fuzz_job = job(
+                "job:t03-fuzz", idempotency_key="job:t03-fuzz-key", kind=JobKind.FUZZ
+            )
+            async with database.transaction() as repositories:
+                result = await repositories.jobs.enqueue_with_outbox(
+                    fuzz_job, job_event(fuzz_job, "event:t03-fuzz")
+                )
+                assert result.created
+                stored = await repositories.jobs.get("job:t03-fuzz")
+                assert stored["kind"] is JobKind.FUZZ
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
