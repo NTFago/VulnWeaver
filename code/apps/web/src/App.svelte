@@ -230,6 +230,12 @@
     return `${format} 报告生成中…`;
   }
 
+  // 与 API 的内容嗅探（_matches_declared_format）一致的扩展名提示；ELF 无通用扩展名，不限制。
+  const uploadAccept: Partial<Record<ArtifactKind, string>> = {
+    source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz",
+    pe: ".exe,.dll,.sys",
+  };
+
   function reportFileName(versionId: string): string {
     const format = artifactVersions.get(versionId)?.generation_config.format;
     if (format === "pdf") return "vulnweaver-report.pdf";
@@ -908,7 +914,7 @@
                 <span>{uploadFile?.name ?? "选择本地样本"}</span>
                 <small>{uploadFile ? `${(uploadFile.size / 1048576).toFixed(2)} MB` : "ZIP / TAR / ELF / PE"}</small>
               </label>
-              <input id="sample-file" class="visually-hidden" type="file" on:change={(e) => uploadFile = e.currentTarget.files?.[0] ?? null} />
+              <input id="sample-file" class="visually-hidden" type="file" accept={uploadAccept[uploadKind] ?? ""} on:change={(e) => uploadFile = e.currentTarget.files?.[0] ?? null} />
               <button class="primary block" on:click={upload} disabled={busy || !uploadFile}>导入工件库</button>
             </div>
           </section>
