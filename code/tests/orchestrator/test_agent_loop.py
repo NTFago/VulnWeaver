@@ -367,6 +367,28 @@ async def _model_token_budget_exhaustion() -> None:
     assert result.fallback["code"] == "loop_model_token_budget_exhausted"
 
 
+def test_model_token_budget_none_is_uncapped() -> None:
+    asyncio.run(_model_token_budget_none_is_uncapped())
+
+
+async def _model_token_budget_none_is_uncapped() -> None:
+    # Usage far beyond the default 200k stays fine when the budget is None,
+    # which is how a task-level budget of 0 ("no limit") reaches the loop.
+    planner = FakePlanner(
+        [
+            ModelCallResult(
+                model_proposal([]), run_stub(tokens=(900_000, 900_000)), None, "endpoint-1"
+            )
+        ]
+    )
+    budget = AgentLoopBudget(max_model_tokens=None)
+
+    result = await build_loop(planner, RecordingExecutor([]), budget=budget).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert result.fallback is None
+
+
 def test_unconfigured_model_degrades_immediately() -> None:
     asyncio.run(_unconfigured_model_degrades_immediately())
 

@@ -372,7 +372,9 @@ class Orchestrator:
                 "project_id": task["project_id"],
                 "object_refs": object_refs,
                 "artifact_kinds": artifact_kinds,
-                "resource_budget": project["resource_budget"],
+                # The task row carries the caller's budget (or the project default
+                # it inherited); model-token limits read it, with 0 = uncapped.
+                "resource_budget": task["resource_budget"],
                 "permission_mode": str(project["permission_mode"]),
                 "checkpoint_node": "validate_inputs",
             }
