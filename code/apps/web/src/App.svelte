@@ -95,6 +95,24 @@
     return Array.isArray(value) ? (value as CriticalLogicEntry[]) : [];
   }
 
+  function runDecisions(run: Record<string, unknown>): { decision: string; reason: string }[] {
+    const raw = run.decisions;
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item) => {
+      const entry = (item ?? {}) as Record<string, unknown>;
+      return { decision: String(entry.decision ?? ""), reason: String(entry.reason ?? "") };
+    });
+  }
+
+  function runFailure(run: Record<string, unknown>): string | null {
+    const failure = run.failure;
+    if (!failure) return null;
+    const detail = (failure ?? {}) as Record<string, unknown>;
+    const code = String(detail.code ?? "");
+    const message = String(detail.message ?? "");
+    return [code, message].filter(Boolean).join(" · ") || null;
+  }
+
   function functionPseudocode(fn: PairFunction): string | null {
     const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
     if (typeof value === "string" && value.trim()) return value;
@@ -1092,7 +1110,17 @@
                   <div>
                     <b>{String(run.model)}</b>
                     <small>{String(run.status)} · 决策 {(run.decisions as unknown[] | undefined)?.length ?? 0} 条 · token {(run.token_usage as Record<string, number> | undefined)?.input_tokens ?? 0}/{(run.token_usage as Record<string, number> | undefined)?.output_tokens ?? 0} · {typeof run.duration_ms === "number" ? `${run.duration_ms}ms` : "运行中"}</small>
-                    {#if run.failure}<p>{(run.failure as Record<string, unknown>).code}</p>{/if}
+                    {#if runFailure(run)}<p>{runFailure(run)}</p>{/if}
+                    {#if runDecisions(run).length > 0}
+                      <details class="run-decisions">
+                        <summary>查看 {runDecisions(run).length} 条决策</summary>
+                        <ol>
+                          {#each runDecisions(run) as item}
+                            <li><code>{item.decision}</code>{item.reason}</li>
+                          {/each}
+                        </ol>
+                      </details>
+                    {/if}
                   </div>
                 </article>
               {/each}
