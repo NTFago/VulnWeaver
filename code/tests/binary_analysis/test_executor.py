@@ -285,7 +285,9 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
                 generation_config = readable_version.get("generation_config")
                 assert isinstance(generation_config, Mapping)
                 assert generation_config.get("format") == "binary-readable-pseudocode"
-                pair_functions = await repositories.pair.list_functions(version_id)
+                # PAIR rows are scoped to the image the analysis read -- the
+                # unpacked one here -- and not to the uploaded artifact.
+                pair_functions = await repositories.pair.list_functions(unpacked_version_id)
                 assert [item["name"] for item in pair_functions] == ["main"]
                 assert pair_functions[0]["binary_location"] is not None
                 assert (

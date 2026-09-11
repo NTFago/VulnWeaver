@@ -103,7 +103,7 @@ class BinaryPairImporter:
         raw = PairRaw(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=raw_id,
-            artifact_version_id=graph_version_id,
+            artifact_version_id=result["analyzed_artifact_version_id"],
             tool=tool,
             format="binary-analysis-result",
             object_ref=raw_object_ref,
@@ -118,7 +118,7 @@ class BinaryPairImporter:
                 created_at=_parse_timestamp(timestamp),
             )
         return BinaryPairImportSummary(
-            artifact_version_id=graph_version_id,
+            artifact_version_id=result["analyzed_artifact_version_id"],
             analyzed_artifact_version_id=analyzed_version_id,
             functions=len(functions),
             nodes=len(nodes),
@@ -171,7 +171,7 @@ def _functions_and_nodes(
         pair_function = PairFunction(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=function_id,
-            artifact_version_id=graph_version_id,
+            artifact_version_id=result["analyzed_artifact_version_id"],
             name=source["name"],
             symbol=source["name"],
             language=str(result["architecture"]),
@@ -185,7 +185,7 @@ def _functions_and_nodes(
             PairNode(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 id=node_id,
-                artifact_version_id=graph_version_id,
+                artifact_version_id=result["analyzed_artifact_version_id"],
                 function_id=function_id,
                 kind=PairNodeKind.FUNCTION,
                 location=location,
@@ -224,7 +224,7 @@ def _instruction_nodes(
             PairNode(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 id=node_id,
-                artifact_version_id=result["artifact_version_id"],
+                artifact_version_id=result["analyzed_artifact_version_id"],
                 function_id=function_id,
                 kind=PairNodeKind.INSTRUCTION,
                 location=_location(
@@ -272,7 +272,7 @@ def _basic_block_nodes(
             PairNode(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 id=node_id,
-                artifact_version_id=result["artifact_version_id"],
+                artifact_version_id=result["analyzed_artifact_version_id"],
                 function_id=function_id,
                 kind=PairNodeKind.BASIC_BLOCK,
                 location=_location(
@@ -443,7 +443,7 @@ def _external_node(
             "external",
             str(address),
         ),
-        artifact_version_id=result["artifact_version_id"],
+        artifact_version_id=result["analyzed_artifact_version_id"],
         function_id=None,
         kind=PairNodeKind.MEMORY_OBJECT,
         location=_location(
@@ -480,7 +480,7 @@ def _edge(
             edge_type.value,
             scope,
         ),
-        artifact_version_id=result["artifact_version_id"],
+        artifact_version_id=result["analyzed_artifact_version_id"],
         source_node_id=source,
         target_node_id=target,
         type=edge_type,
