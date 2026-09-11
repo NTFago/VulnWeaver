@@ -21,15 +21,27 @@ def test_recovery_labels_flattened_dispatcher_without_rewriting_evidence() -> No
     assert "switch (state)" in fixture.read_text(encoding="utf-8")
     assessments = assess_control_flow_flattening(
         [
+            # A dispatcher fans out and is re-entered: the case block jumps back
+            # to it, which is what distinguishes flattening from an ordinary
+            # switch.  Without the second block this is not a dispatcher at all.
             cast(
                 BinaryBasicBlock,
                 {
                     "function_name": "flattened",
                     "start_address": 0x401000,
                     "end_address": 0x401004,
-                    "successor_addresses": [1, 2, 3, 4, 5],
+                    "successor_addresses": [0x401010, 0x401020, 0x401030, 0x401040, 0x401050],
                 },
-            )
+            ),
+            cast(
+                BinaryBasicBlock,
+                {
+                    "function_name": "flattened",
+                    "start_address": 0x401010,
+                    "end_address": 0x401014,
+                    "successor_addresses": [0x401000],
+                },
+            ),
         ],
         [
             cast(

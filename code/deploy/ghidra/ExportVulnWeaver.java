@@ -13,6 +13,9 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.symbol.RefType;
+import ghidra.program.model.symbol.Symbol;
 
 public class ExportVulnWeaver extends GhidraScript {
     private static String escape(String value) {
@@ -53,7 +56,10 @@ public class ExportVulnWeaver extends GhidraScript {
         DecompInterface decompiler = new DecompInterface();
         decompiler.openProgram(currentProgram);
         try (PrintWriter out = new PrintWriter(new FileWriter(target))) {
-            out.print("{\"functions\":[");
+            // Emit the base as well: the address fields below are normalized by
+            // it, but operand text still prints Ghidra's own addresses, so the
+            // reader needs the base to bring branch targets into the same space.
+            out.print("{\"image_base\":" + imageBase + ",\"functions\":[");
             FunctionIterator functions = currentProgram.getFunctionManager().getFunctions(true);
             boolean firstFunction = true;
             int functionCount = 0;
@@ -73,6 +79,10 @@ public class ExportVulnWeaver extends GhidraScript {
             InstructionIterator instructions = currentProgram.getListing().getInstructions(true);
             boolean firstInstruction = true;
             int instructionCount = 0;
+            StringBuilder xrefs = new StringBuilder();
+            boolean firstXref = true;
+            int xrefCount = 0;
+            int xrefLimit = 4 * instructionLimit;
             while (instructions.hasNext() && !monitor.isCancelled()
                    && instructionCount < instructionLimit) {
                 Instruction instruction = instructions.next();
@@ -92,9 +102,44 @@ public class ExportVulnWeaver extends GhidraScript {
                     escape(instruction.getMnemonicString()), escape(operands(instruction)),
                     function == null ? "null" : "\"" + escape(functionName) + "\""
                 );
+                // Resolved flow references.  Ghidra recovers indirect jumps
+                // through jump tables, which operand text cannot express at all:
+                // `jmp *%rax` prints no target, so without these the dispatcher
+                // of a flattened function looks like it has no successors and
+                // no dispatch structure can be measured.
+                Reference[] references = instruction.getReferencesFrom();
+                for (Reference reference : references) {
+                    if (xrefCount >= xrefLimit) break;
+                    RefType referenceType = reference.getReferenceType();
+                    String kind;
+                    if (referenceType.isCall()) kind = "call";
+                    else if (referenceType.isJump()) kind = "jump";
+                    else if (referenceType.isData()) kind = "data";
+                    else continue;
+                    // References into Ghidra's EXTERNAL space carry small
+                    // offsets that would go negative once the image base is
+                    // subtracted; they are not part of this image, so drop them
+                    // rather than emit an address that cannot be normalized.
+                    long targetOffset = reference.getToAddress().getOffset() - imageBase;
+                    long sourceOffset = instruction.getAddress().getOffset() - imageBase;
+                    if (sourceOffset < 0 || targetOffset < 0) continue;
+                    Symbol targetSymbol = currentProgram.getSymbolTable()
+                        .getPrimarySymbol(reference.getToAddress());
+                    if (!firstXref) xrefs.append(",");
+                    firstXref = false;
+                    xrefCount++;
+                    xrefs.append(String.format(
+                        "{\"source_address\":%d,\"target_address\":%d,\"type\":\"%s\","
+                        + "\"source_function\":%s,\"target_symbol\":%s}",
+                        sourceOffset, targetOffset, kind,
+                        function == null ? "null" : "\"" + escape(functionName) + "\"",
+                        targetSymbol == null ? "null"
+                            : "\"" + escape(targetSymbol.getName()) + "\""
+                    ));
+                }
             }
 
-            out.print("],\"basic_blocks\":[],\"xrefs\":[],\"pseudocode\":[");
+            out.print("],\"basic_blocks\":[],\"xrefs\":[" + xrefs + "],\"pseudocode\":[");
             functions = currentProgram.getFunctionManager().getFunctions(true);
             boolean firstPseudocode = true;
             int pseudocodeCount = 0;

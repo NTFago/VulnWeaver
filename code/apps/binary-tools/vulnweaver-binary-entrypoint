@@ -110,6 +110,22 @@ async def main() -> int:
             target, metadata, limits, cancellation, targets
         )
 
+        if ghidra.functions:
+            functions = ghidra.functions
+            instructions = ghidra.instructions
+            basic_blocks = ghidra.basic_blocks
+            xrefs = ghidra.xrefs
+            normalized_from = "ghidra"
+        else:
+            functions = objdump.functions
+            instructions = objdump.instructions
+            basic_blocks = objdump.basic_blocks
+            xrefs = objdump.xrefs
+            normalized_from = "objdump"
+        # objdump is the only source of imports; the Ghidra export emits an
+        # empty list, so this one stays with objdump either way.
+        imports = objdump.imports or ghidra.imports
+
         facts = {
             "schema_version": SCHEMA_VERSION,
             "metadata": dataclasses.asdict(metadata),
@@ -132,13 +148,23 @@ async def main() -> int:
             # These normalized collections are consumed by the worker-side
             # PAIR importer; tool-specific runs above remain available for
             # provenance and diagnostics.
-            "functions": list(objdump.functions),
-            "instructions": list(objdump.instructions),
-            "basic_blocks": list(objdump.basic_blocks),
-            "xrefs": list(objdump.xrefs),
+            #
+            # Ghidra is the primary source because it recovers function
+            # boundaries by flow analysis.  objdump recovers them from the
+            # symbol table instead, so on a stripped image -- which is what
+            # every unpacked sample is -- it reports only section-level labels
+            # and lumps the whole of .text into one "function", which is worse
+            # than useless to a per-function assessment.  objdump remains the
+            # fallback for when Ghidra is unconfigured or produced nothing, and
+            # `normalized_from` records which source was used.
+            "normalized_from": normalized_from,
+            "functions": list(functions),
+            "instructions": list(instructions),
+            "basic_blocks": list(basic_blocks),
+            "xrefs": list(xrefs),
             "pseudocode": list(ghidra.pseudocode),
             "symbolic_facts": list(angr.symbolic_facts),
-            "imports": list(objdump.imports),
+            "imports": list(imports),
             "strings": list(extract_strings(target, metadata, limits)),
             "samples": {
                 "objdump_functions": _sampled(objdump.functions),

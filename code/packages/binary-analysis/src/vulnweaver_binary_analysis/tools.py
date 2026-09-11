@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import os
@@ -118,8 +119,22 @@ class BinaryFactsAdapter:
         limits: BinaryAnalysisLimits,
         cancellation: asyncio.Event,
     ) -> ToolContribution:
-        del path
+        # `path` is not sent to the sandbox -- the tool fetches its input by the
+        # CAS reference pinned in `input_ref`.  That makes it possible to hand
+        # this adapter the unpacked image while it keeps analysing the packed
+        # original, which is a silent, plausible-looking wrong answer.  Refuse
+        # the mismatch instead: the two must name the same bytes.
+        self._assert_pinned_input(path)
         return await self.analyze_ref(cast(ArtifactKind, metadata.format), limits, cancellation)
+
+    def _assert_pinned_input(self, path: Path) -> None:
+        # `input_ref` is a `cas://sha256/<hex>` URI; compare its trailing digest
+        # against the artifact actually being analysed.
+        pinned = self._input_ref.rsplit("/", 1)[-1]
+        if hashlib.sha256(path.read_bytes()).hexdigest() != pinned:
+            raise ToolExecutionError(
+                "binary-facts input_ref does not match the artifact being analyzed"
+            )
 
     async def analyze_ref(
         self,
@@ -794,7 +809,26 @@ def parse_objdump_disassembly(
 def derive_objdump_control_flow(
     instructions: tuple[BinaryInstruction, ...],
     limits: BinaryAnalysisLimits,
+    *,
+    operand_address_bias: int = 0,
+    resolved_targets: Mapping[int, Sequence[int]] | None = None,
 ) -> tuple[tuple[BinaryBasicBlock, ...], tuple[BinaryXref, ...]]:
+    """Derive basic blocks and xrefs from a disassembly.
+
+    `operand_address_bias` brings addresses parsed out of operand *text* back
+    into the same space as the instruction `address` fields.  Ghidra's export
+    normalizes its address fields by the image base while printing operands in
+    its own address space, so without the bias every branch target misses the
+    instruction index: blocks keep no successors, the graph falls apart into
+    singletons, and a dispatcher-shape heuristic has nothing to find.
+
+    `resolved_targets` maps an instruction address to the control-flow targets
+    the producer worked out for it, and covers what operand text cannot: an
+    indirect jump through a jump table prints `jmp *%rax` and names no target,
+    so without this the dispatcher of a flattened function keeps no successors
+    at all and its dispatch shape is invisible.
+    """
+    resolved = resolved_targets or {}
     by_function: dict[str | None, list[BinaryInstruction]] = {}
     xrefs: list[BinaryXref] = []
     xref_keys: set[tuple[int, int, BinaryXrefType]] = set()
@@ -807,10 +841,14 @@ def derive_objdump_control_flow(
         elif mnemonic.startswith("j"):
             reference_type = BinaryXrefType.JUMP
         if reference_type is not None:
-            target = _reference(_DIRECT_TARGET, instruction["operands"])
+            target = _biased(
+                _reference(_DIRECT_TARGET, instruction["operands"]), operand_address_bias
+            )
             if target is not None:
                 _append_xref(xrefs, xref_keys, instruction, target, reference_type, limits)
-        data_target = _reference(_COMMENT_TARGET, instruction["operands"])
+        data_target = _biased(
+            _reference(_COMMENT_TARGET, instruction["operands"]), operand_address_bias
+        )
         if data_target is not None:
             _append_xref(
                 xrefs,
@@ -831,9 +869,14 @@ def derive_objdump_control_flow(
         for index, instruction in enumerate(ordered):
             mnemonic = instruction["mnemonic"].lower()
             if mnemonic.startswith("j"):
-                target = _reference(_DIRECT_TARGET, instruction["operands"])
+                target = _biased(
+                    _reference(_DIRECT_TARGET, instruction["operands"]), operand_address_bias
+                )
                 if target is not None and target[0] in address_indexes:
                     leaders.add(target[0])
+                for resolved_target in resolved.get(instruction["address"], ()):
+                    if resolved_target in address_indexes:
+                        leaders.add(resolved_target)
             if (mnemonic.startswith("j") or mnemonic.startswith("ret")) and index + 1 < len(
                 ordered
             ):
@@ -853,6 +896,10 @@ def derive_objdump_control_flow(
                 last,
                 ordered,
                 stop_index,
+                operand_address_bias=operand_address_bias,
+                resolved=tuple(
+                    value for value in resolved.get(last["address"], ()) if value in address_indexes
+                ),
             )
             blocks.append(
                 BinaryBasicBlock(
@@ -869,16 +916,23 @@ def _block_successors(
     last: BinaryInstruction,
     ordered: list[BinaryInstruction],
     next_index: int,
+    *,
+    operand_address_bias: int = 0,
+    resolved: Sequence[int] = (),
 ) -> list[int]:
     mnemonic = last["mnemonic"].lower()
     fallthrough = ordered[next_index]["address"] if next_index < len(ordered) else None
-    target = _reference(_DIRECT_TARGET, last["operands"])
+    target = _biased(_reference(_DIRECT_TARGET, last["operands"]), operand_address_bias)
     if mnemonic.startswith("ret"):
         return []
     if mnemonic in {"jmp", "jmpq", "ljmp"}:
-        return [target[0]] if target is not None else []
+        # An indirect jump resolves to a set of targets rather than one address.
+        values: set[int] = set(resolved)
+        if target is not None:
+            values.add(target[0])
+        return sorted(values)
     if mnemonic.startswith("j"):
-        values: set[int] = set()
+        values = set(resolved)
         if target is not None:
             values.add(target[0])
         if fallthrough is not None:
@@ -915,6 +969,22 @@ def _reference(pattern: re.Pattern[str], operands: str) -> tuple[int, str | None
     if matched is None:
         return None
     return int(matched.group(1), 16), matched.group(2)[:4096] if matched.group(2) else None
+
+
+def _biased(
+    target: tuple[int, str | None] | None, bias: int
+) -> tuple[int, str | None] | None:
+    """Shift an operand-derived address into the normalized address space.
+
+    A target below the bias cannot belong to this image, so it is dropped
+    rather than wrapped around into a plausible-looking wrong address.
+    """
+    if target is None or bias == 0:
+        return target
+    address, symbol = target
+    if address < bias:
+        return None
+    return (address - bias, symbol)
 
 
 def _instruction_end(instruction: BinaryInstruction) -> int:
@@ -1053,7 +1123,19 @@ def _parse_structured_output(
                 ),
             )
         )
-    derived_blocks, derived_xrefs = derive_objdump_control_flow(tuple(instructions), limits)
+    resolved_targets: dict[int, list[int]] = {}
+    for xref in xrefs:
+        if xref["type"] in (BinaryXrefType.JUMP, BinaryXrefType.CALL):
+            resolved_targets.setdefault(xref["source_address"], []).append(xref["target_address"])
+    # A tool that normalizes its address fields by the image base must declare
+    # that base here, or the branch targets still printed in operand text will
+    # not line up with those fields and the derived CFG will be empty of edges.
+    derived_blocks, derived_xrefs = derive_objdump_control_flow(
+        tuple(instructions),
+        limits,
+        operand_address_bias=_nonnegative_int(mapping.get("image_base"), default=0),
+        resolved_targets=resolved_targets,
+    )
     if not basic_blocks:
         basic_blocks.extend(derived_blocks)
     if not xrefs:

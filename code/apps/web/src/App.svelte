@@ -269,16 +269,15 @@
     } catch (caught) { busy = false; showError(caught); return false; }
   }
 
-  async function createTask(versionIds: string[], tokenBudget: number): Promise<boolean> {
+  async function createTask(versionIds: string[]): Promise<boolean> {
     if (!selectedProject) return false;
     begin();
     try {
+      // No per-task model token budget: the audit loop is not token-gated, and
+      // the project budget is inert bookkeeping (ADR-025).
       const task = await api.createTask(selectedProject.id, {
         artifact_version_ids: versionIds,
-        resource_budget: {
-          ...selectedProject.resource_budget,
-          max_model_tokens: Math.max(0, Math.floor(tokenBudget)),
-        },
+        resource_budget: selectedProject.resource_budget,
       });
       tasks = [task, ...tasks.filter((item) => item.id !== task.id)];
       await openTask(task); done("分析任务已投递");
@@ -543,7 +542,7 @@
 
   async function restartTask(): Promise<void> {
     if (!selectedTask || !selectedProject || busy) return;
-    await createTask([...selectedTask.artifact_version_ids], selectedTask.resource_budget.max_model_tokens);
+    await createTask([...selectedTask.artifact_version_ids]);
   }
 </script>
 

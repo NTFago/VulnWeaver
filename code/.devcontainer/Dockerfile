@@ -13,6 +13,10 @@ ARG PNPM_VERSION=11.10.0
 ARG DEBIAN_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
 ARG DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 ARG NPM_REGISTRY=https://registry.npmmirror.com
+# upx-ucl is not in bookworm main; this is the bookworm-backports build.  It is
+# pinned and fetched from the configured mirror so the packed teaching sample is
+# reproducible.  Build fixtures with: code/tests/fixtures/teaching-samples/build-packed-sample.sh
+ARG UPX_VERSION=4.2.2-3~bpo12+1
 
 COPY --from=node-runtime /usr/local/ /usr/local/
 COPY --from=uv-runtime /uv /uvx /usr/local/bin/
@@ -36,6 +40,10 @@ RUN sed -i \
         fonts-noto-cjk \
         openssh-client \
     && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "${DEBIAN_MIRROR}/pool/main/u/upx-ucl/upx-ucl_${UPX_VERSION}_amd64.deb" \
+        -o /tmp/upx.deb \
+    && dpkg -i /tmp/upx.deb \
+    && rm -f /tmp/upx.deb \
     && npm install --global "pnpm@${PNPM_VERSION}" --registry="${NPM_REGISTRY}" \
     && groupadd --gid "${USER_GID}" "${USERNAME}" \
     && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}"
