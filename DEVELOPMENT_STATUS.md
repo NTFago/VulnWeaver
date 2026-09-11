@@ -9,15 +9,16 @@
 - 项目：VulnWeaver（漏洞织鉴）。
 - 当前主线：T45 二进制脱壳链路修复。
 - 当前分支：`feat/t45-binary-unpacking-chain`。
-- 分支占用：该分支有人正在使用；当前工作树有 4 个未提交代码文件。不得覆盖、回退、提交、清理或切换该分支的实现改动。
+- 分支占用：`feat/t45-binary-unpacking-chain` 的改动已完成并提交，工作树干净，待提 PR。
 - 并行 worktree：`课设-worktree-fe-opts` 使用 `feat/frontend-delete-and-token-budget`，对应 T43。
-- 本次维护：只整理本文件，不认领 T45 代码任务。
+- 本次维护：T45 改动已就绪；门禁 551 passed / 5 skipped、ruff 与 pyright 干净、前端 13 passed。
 
 ## 开发进度
 
 | 任务 | 状态 | 负责人/分支 | 当前事实 | 下一步 |
 |---|---|---|---|---|
-| T45 二进制脱壳链路修复 | 进行中 | 分支使用者 / `feat/t45-binary-unpacking-chain` | 已定位 `BinaryFactsAdapter.analyze()` 丢弃 `analyzed_path`、改用加壳输入，导致脱壳后分析仍读取原壳文件，函数/CFG/xref 为空，混淆检测无输入 | 修复并补脱壳、函数/CFG/xref、反混淆和审计入口测试 |
+| T45 二进制脱壳链路修复 | 待验证 | 分支使用者 / `feat/t45-binary-unpacking-chain` | 修复四处缺陷：①`BinaryFactsAdapter` 丢弃 `analyzed_path` 而用加壳输入（沙箱分析的从来不是脱壳文件）；②壳识别只认段名而真实 UPX 会删掉段表；③Ghidra 地址字段按镜像基址归一化但操作数仍是原地址空间，导致分支目标全部落空、CFG 断裂；④Java 导出的 `xrefs` 硬编码为空，跳转表目标丢失，dispatcher 无出边。函数重构改以 Ghidra 为主来源，从 strip 过的脱壳镜像恢复出正确函数边界；平坦化判据改为「宽扇出且会被重新进入」，真实样本 score=0.700、同镜像其余函数 0.000 | 剩自定义壳脱壳（angr 模拟 stub + 重建 ELF）与部署栈端到端审计链路 |
+| T45-A 取消循环 token 预算 | 待验证 | 分支使用者 / `feat/t45-binary-unpacking-chain` | `AgentLoopBudget.max_model_tokens`（默认 200_000，即上下文窗口的数字）把单次调用的上下文窗口当成了多轮调查的累计上限，超限即 `loop_model_token_budget_exhausted` 截断调查；已删除该字段与硬停，用量仍累计上报。上下文窗口（`context_window_tokens`）与单次输出上限（`max_output_tokens`）是两个不同概念，均未改动；前端任务表单的 Token 预算输入同步移除 | 部署后确认审计循环不再被 token 截断 |
 | T43 删除项目/任务与任务级 token 预算 | 待验证 | ZCode / `feat/frontend-delete-and-token-budget` | 删除 API、级联删除、终态任务限制和 `max_model_tokens` 已实现 | 全量门禁、真实浏览器回归、合并部署 |
 | T42 任务详情双栏对齐 | 已完成 | Codex / `fix/task-panel-alignment` | 桌面双栏同高，窄屏恢复单列 | 无；随 Web 镜像发布 |
 | WEB-INTEGRATE 中文审计工作台 | 已完成 | Codex | 工作台、轨迹、失败说明、报告中心和任务隔离已整合 | 发布前做真实部署 E2E |
