@@ -110,20 +110,21 @@ async def main() -> int:
             target, metadata, limits, cancellation, targets
         )
 
-        if objdump.functions:
-            functions = objdump.functions
-            instructions = objdump.instructions
-            basic_blocks = objdump.basic_blocks
-            xrefs = objdump.xrefs
-            imports = objdump.imports
-            normalized_from = "objdump"
-        else:
+        if ghidra.functions:
             functions = ghidra.functions
             instructions = ghidra.instructions
             basic_blocks = ghidra.basic_blocks
             xrefs = ghidra.xrefs
-            imports = ghidra.imports
             normalized_from = "ghidra"
+        else:
+            functions = objdump.functions
+            instructions = objdump.instructions
+            basic_blocks = objdump.basic_blocks
+            xrefs = objdump.xrefs
+            normalized_from = "objdump"
+        # objdump is the only source of imports; the Ghidra export emits an
+        # empty list, so this one stays with objdump either way.
+        imports = objdump.imports or ghidra.imports
 
         facts = {
             "schema_version": SCHEMA_VERSION,
@@ -148,12 +149,14 @@ async def main() -> int:
             # PAIR importer; tool-specific runs above remain available for
             # provenance and diagnostics.
             #
-            # objdump recovers function boundaries from the symbol table, so a
-            # stripped image -- which is what every unpacked sample is -- yields
-            # nothing at all from it: no functions, no blocks, and therefore no
-            # input for the flattening assessment.  Ghidra's auto-analysis does
-            # not depend on symbols, so fall back to it rather than reporting an
-            # empty binary.  `normalized_from` records which source was used.
+            # Ghidra is the primary source because it recovers function
+            # boundaries by flow analysis.  objdump recovers them from the
+            # symbol table instead, so on a stripped image -- which is what
+            # every unpacked sample is -- it reports only section-level labels
+            # and lumps the whole of .text into one "function", which is worse
+            # than useless to a per-function assessment.  objdump remains the
+            # fallback for when Ghidra is unconfigured or produced nothing, and
+            # `normalized_from` records which source was used.
             "normalized_from": normalized_from,
             "functions": list(functions),
             "instructions": list(instructions),
