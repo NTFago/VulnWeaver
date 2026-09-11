@@ -64,14 +64,25 @@ class ReviewJobScheduler:
         repositories: Repositories,
         source_job: Job,
         finding_ids: Sequence[str],
+        *,
+        revision: str | None = None,
     ) -> tuple[str, ...]:
+        """Queue a review per finding.
+
+        ``revision`` distinguishes a re-review from the finding's first review:
+        the first one keeps the plain deterministic id (and stays idempotent),
+        while a later revision — evidence that arrived after that review, such
+        as a reproduced crash — gets its own id so it can actually run.
+        """
+
         created: list[str] = []
+        suffix = () if revision is None else (revision,)
         task = await repositories.tasks.get(source_job["task_id"], for_update=True)
         for finding_id in sorted(set(finding_ids)):
             finding = await repositories.findings.get(finding_id)
             if finding["task_id"] != task["id"]:
                 raise ValueError("review finding does not belong to the source job task")
-            job_id = _stable_identifier("job", "review", finding_id)
+            job_id = _stable_identifier("job", "review", finding_id, *suffix)
             created_at = finding["created_at"]
             job = Job(
                 schema_version=SchemaVersion.VALUE_1_0_0,
@@ -81,7 +92,7 @@ class ReviewJobScheduler:
                 arguments=cast(JsonObject, {"finding_id": finding_id}),
                 input_refs=source_job["input_refs"],
                 status=JobStatus.QUEUED,
-                idempotency_key=_stable_identifier("review", task["id"], finding_id),
+                idempotency_key=_stable_identifier("review", task["id"], finding_id, *suffix),
                 resource_budget=cast(ResourceBudget, dict(task["resource_budget"])),
                 retry_policy=self._retry_policy,
                 attempt=0,

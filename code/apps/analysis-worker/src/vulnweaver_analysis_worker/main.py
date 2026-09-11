@@ -14,13 +14,18 @@ from types import FrameType
 from typing import Any, cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
-from vulnweaver_binary_analysis import BinaryImportExecutor
+from vulnweaver_binary_analysis import (
+    BinaryAnalysisLimits,
+    BinaryFactsAdapter,
+    BinaryImportExecutor,
+)
 from vulnweaver_contracts import (
     ArtifactKind,
     CrashRecord,
     Finding,
     FindingCategory,
     JsonObject,
+    JsonValue,
     ResourceBudget,
     Task,
     ToolIdentity,
@@ -47,6 +52,7 @@ from vulnweaver_model_gateway import (
     ThinkingConfig,
 )
 from vulnweaver_orchestrator import (
+    CodeAuditAgent,
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
     FuzzJobScheduler,
@@ -58,6 +64,7 @@ from vulnweaver_orchestrator import (
     SemanticAuditJobExecutor,
     SemanticAuditor,
     SemanticAuditScheduler,
+    SymbolicRunner,
     TaskAggregateSettlementHook,
     persist_crash_evidence,
 )
@@ -160,8 +167,14 @@ async def _run() -> None:
         """Build every settings-dependent component from one settings row."""
 
         config = resolve_deployment_config(settings, os.environ)
+        binary_sandbox, binary_digest = await _binary_sandbox(config)
+        symbolic_runner = (
+            _SymbolicVerificationRunner(database, store, binary_sandbox, binary_digest)
+            if binary_sandbox is not None and binary_digest is not None
+            else None
+        )
         review_executor, audit_executor, model_gateway = _model_executors(
-            database, store, settings
+            database, store, settings, symbolic_runner=symbolic_runner
         )
         proof_executor = _proof_executor(database, store, model_gateway, config)
         fuzz_executor = await _fuzz_executor(
@@ -176,7 +189,6 @@ async def _run() -> None:
             registry=tool_registry,
             harness_enabled=model_gateway is not None,
         )
-        binary_sandbox, binary_digest = await _binary_sandbox(config)
         binary_planning_hook = (
             _ReversePlanningHook(
                 ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
@@ -297,6 +309,63 @@ class _WorkerAssembly:
     settlement: TaskAggregateSettlementHook
 
 
+class _SymbolicVerificationRunner:
+    """Run one agent-requested symbolic pass through the Sandbox Runner.
+
+    The audit Job holds no extracted sample, but it does hold the pinned input
+    reference, so the request is built against the CAS object exactly as the
+    binary executor builds it. The sample still only ever executes inside the
+    Sandbox Runner; the worker merely awaits the result. Addresses were already
+    resolved onto the task's immutable index by the audit step executor, so a
+    version id can only name an artifact this task indexed.
+    """
+
+    def __init__(
+        self,
+        database: Database,
+        store: LocalContentAddressedStore,
+        sandbox: SandboxRunnerClient,
+        image_digest: str,
+        *,
+        limits: BinaryAnalysisLimits | None = None,
+    ) -> None:
+        self._database = database
+        self._store = store
+        self._sandbox = sandbox
+        self._image_digest = image_digest
+        self._limits = limits or BinaryAnalysisLimits()
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, target_addresses: tuple[int, ...]
+    ) -> JsonObject:
+        async with self._database.transaction() as repositories:
+            version = await repositories.artifacts.get_version(version_id)
+        adapter = BinaryFactsAdapter(
+            self._sandbox,
+            self._store,
+            image_digest=self._image_digest,
+            input_ref=version["object_ref"],
+            target_addresses=target_addresses,
+            angr_enabled=True,
+        )
+        contribution = await adapter.analyze_ref(
+            artifact_kind, self._limits, asyncio.Event()
+        )
+        targeted = [
+            cast(JsonObject, dict(fact))
+            for fact in contribution.symbolic_facts
+            if fact["function_address"] in target_addresses
+        ]
+        return cast(
+            JsonObject,
+            {
+                "status": "completed",
+                "targets": list(target_addresses),
+                "symbolic_facts": cast(JsonValue, targeted),
+            },
+        )
+
+
 class _ReversePlanningHook:
     """Bridge the orchestrator planning agent to the binary executor hook."""
 
@@ -343,6 +412,8 @@ def _model_executors(
     database: Database,
     store: LocalContentAddressedStore,
     product_settings: dict[str, object],
+    *,
+    symbolic_runner: object | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
     """Build one gateway with an independent endpoint per configured tier.
 
@@ -383,7 +454,24 @@ def _model_executors(
         )
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
-    auditor = SemanticAuditor(database, gateway, store)
+    # The audit runs the shared plan-execute-observe loop over read-only
+    # investigation tools; when the loop degrades the auditor falls back to the
+    # fixed single-shot prompt so the audit baseline still completes.
+    auditor = SemanticAuditor(
+        database,
+        gateway,
+        store,
+        # The auditor owns run persistence for both paths, so the agent gets no
+        # sink of its own and one attempt never writes two run records. The
+        # symbolic runner is None when no Sandbox Runner is configured, and the
+        # agent's symbolic step is then refused structurally.
+        agent=CodeAuditAgent(
+            database,
+            gateway,
+            store,
+            symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
+        ),
+    )
     return (
         ReviewJobExecutor(reviewer),
         SemanticAuditJobExecutor(database, auditor),

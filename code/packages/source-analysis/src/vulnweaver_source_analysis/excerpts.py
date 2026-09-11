@@ -48,6 +48,16 @@ class SourceExcerpt:
     truncated: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SourceFileText:
+    """One whole archive member, decoded for bounded in-memory search."""
+
+    artifact_version_id: str
+    path: str
+    text: str
+    file_digest: str
+
+
 class SourceExcerptReader:
     """All filesystem paths are service-owned; requested paths are archive-relative."""
 
@@ -74,6 +84,57 @@ class SourceExcerptReader:
     def read(self, version: ArtifactVersion, location: SourceLocation) -> SourceExcerpt:
         validate_contract("SourceLocation", location)
         path = location["path"]
+        if location["end_line"] < location["start_line"]:
+            raise SourceImportError("excerpt_invalid_location", "Source line range is invalid")
+        text, _ = self._read_text_member(version, location["artifact_version_id"], path)
+        lines = text.splitlines(keepends=True)
+        anchor = location["start_line"]
+        if anchor > len(lines) or location["end_line"] > len(lines):
+            raise SourceImportError("excerpt_line_missing", "Source line range is unavailable")
+        start = max(1, anchor - self._limits.context_lines)
+        desired_end = min(len(lines), location["end_line"] + self._limits.context_lines)
+        end = min(desired_end, start + self._limits.max_lines - 1)
+        selected_text = "".join(lines[start - 1 : end])
+        encoded = selected_text.encode("utf-8")
+        truncated = end < desired_end or len(encoded) > self._limits.text_bytes
+        if len(encoded) > self._limits.text_bytes:
+            selected_text = encoded[: self._limits.text_bytes].decode("utf-8", errors="ignore")
+            end = start + len(selected_text.splitlines()) - 1
+        if not selected_text:
+            raise SourceImportError("excerpt_text_budget", "Source text cannot fit the byte budget")
+        return SourceExcerpt(
+            artifact_version_id=version["id"],
+            archive_ref=version["object_ref"],
+            archive_digest=version["digest"],
+            path=path,
+            file_digest="sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            start_line=start,
+            end_line=end,
+            text=selected_text,
+            truncated=truncated,
+        )
+
+    def read_file(self, version: ArtifactVersion, path: str) -> SourceFileText:
+        """Read one whole archive member for bounded search.
+
+        Unlike :meth:`read` this returns the entire file rather than a line
+        window, so callers can pattern-match across it. The archive is never
+        extracted: only the requested member is decompressed, and the same
+        ``file_bytes`` limit that bounds excerpts bounds this read too.
+        """
+
+        text, digest = self._read_text_member(version, version["id"], path)
+        return SourceFileText(
+            artifact_version_id=version["id"],
+            path=path,
+            text=text,
+            file_digest=digest,
+        )
+
+    def _read_text_member(
+        self, version: ArtifactVersion, artifact_version_id: str, path: str
+    ) -> tuple[str, str]:
+        """Validate one archive-relative path and return its decoded text and digest."""
         relative = PurePosixPath(path)
         if (
             not path
@@ -83,11 +144,9 @@ class SourceExcerptReader:
             or relative.as_posix() != path
             or ".." in relative.parts
             or any(part in {".git", ".gitmodules"} for part in relative.parts)
-            or location["artifact_version_id"] != version["id"]
+            or artifact_version_id != version["id"]
         ):
             raise SourceImportError("excerpt_invalid_location", "Source location is not permitted")
-        if location["end_line"] < location["start_line"]:
-            raise SourceImportError("excerpt_invalid_location", "Source line range is invalid")
 
         digest = version["digest"]
         if version["object_ref"] != "cas://sha256/" + digest.removeprefix("sha256:"):
@@ -124,29 +183,4 @@ class SourceExcerptReader:
             raise SourceImportError("excerpt_non_utf8", "Source file is not UTF-8 text") from error
         if "\x00" in text:
             raise SourceImportError("excerpt_binary_content", "Source file contains binary data")
-        lines = text.splitlines(keepends=True)
-        anchor = location["start_line"]
-        if anchor > len(lines) or location["end_line"] > len(lines):
-            raise SourceImportError("excerpt_line_missing", "Source line range is unavailable")
-        start = max(1, anchor - self._limits.context_lines)
-        desired_end = min(len(lines), location["end_line"] + self._limits.context_lines)
-        end = min(desired_end, start + self._limits.max_lines - 1)
-        selected_text = "".join(lines[start - 1 : end])
-        encoded = selected_text.encode("utf-8")
-        truncated = end < desired_end or len(encoded) > self._limits.text_bytes
-        if len(encoded) > self._limits.text_bytes:
-            selected_text = encoded[: self._limits.text_bytes].decode("utf-8", errors="ignore")
-            end = start + len(selected_text.splitlines()) - 1
-        if not selected_text:
-            raise SourceImportError("excerpt_text_budget", "Source text cannot fit the byte budget")
-        return SourceExcerpt(
-            artifact_version_id=version["id"],
-            archive_ref=version["object_ref"],
-            archive_digest=digest,
-            path=path,
-            file_digest="sha256:" + hashlib.sha256(raw).hexdigest(),
-            start_line=start,
-            end_line=end,
-            text=selected_text,
-            truncated=truncated,
-        )
+        return text, "sha256:" + hashlib.sha256(raw).hexdigest()
