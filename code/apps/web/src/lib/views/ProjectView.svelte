@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Artifact, ArtifactKind, ArtifactVersion, Project, Task } from "@vulnweaver/contracts";
   import { formatDate, shortId } from "../format";
-  import { taskStatusLabels } from "../i18n";
+  import { taskStatusLabels, taskResultLabels } from "../i18n";
 
   /** 项目详情页：样本导入、任务创建与最近任务列表。 */
 
@@ -22,8 +22,8 @@
   let sampleListExpanded = false;
   const uploadAccept: Partial<Record<ArtifactKind, string>> = { source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz", pe: ".exe,.dll,.sys" };
 
-  function versionFileName(versionId: string): string {
-    return String(artifactVersions.get(versionId)?.generation_config.filename ?? "未命名样本");
+  function versionFileName(versionId: string, versions: Map<string, ArtifactVersion>): string {
+    return String(versions.get(versionId)?.generation_config.filename ?? "未命名样本");
   }
 
   function toggleVersion(versionId: string): void {
@@ -83,7 +83,7 @@
         {#each (sampleListExpanded ? artifacts : artifacts.slice(0, 3)) as artifact (artifact.id)}
           <label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option">
             <input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} />
-            <span><b>{versionFileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
+            <span><b>{versionFileName(artifact.current_version_id, artifactVersions)}</b><small>{artifact.kind === "source_archive" ? "源码压缩包" : artifact.kind === "source_repository" ? "源码仓库" : artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
           </label>
         {/each}
       </div>
@@ -105,7 +105,7 @@
       {#each tasks as task (task.id)}
         <button on:click={() => onOpenTask(task)}>
           <span class={`status-dot ${task.status}`}></span>
-          <span class="task-cell"><b>{taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
+          <span class="task-cell"><b>{task.result ? taskResultLabels[task.result] : taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
           <time>{formatDate(task.updated_at)}</time>
           <span class="arrow" aria-hidden="true">→</span>
         </button>

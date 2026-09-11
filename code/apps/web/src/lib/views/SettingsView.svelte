@@ -38,13 +38,20 @@
   let selectedPreset: string = CUSTOM_PRESET_ID;
   let presetModelNote = "";
 
+  function updateTier(tier: TierName, key: keyof ProductSettings["model_tiers"][TierName], value: string | number): void {
+    productSettings = { ...productSettings, model_tiers: { ...productSettings.model_tiers, [tier]: { ...productSettings.model_tiers[tier], [key]: value } } };
+  }
+
   function applyProviderPreset(preset: ProviderPreset): void {
     if (!productSettings) return;
     selectedPreset = preset.id;
     if (preset.id === CUSTOM_PRESET_ID) { presetModelNote = ""; return; }
-    productSettings.review_model_base_url = preset.base_url;
-    productSettings.review_model_name = preset.models[0].name;
-    productSettings.review_model_context_window_tokens = preset.context_window_tokens;
+    productSettings = {
+      ...productSettings,
+      review_model_base_url: preset.base_url,
+      review_model_name: preset.models[0].name,
+      review_model_context_window_tokens: preset.context_window_tokens,
+    };
     presetModelNote = preset.models[0].note;
   }
 
@@ -161,18 +168,18 @@
               {#if expandedTier === tier}
                 <div class="tier-body">
                   <div class="field-grid">
-                    <label>协议<select bind:value={productSettings.model_tiers[tier].protocol}><option value="openai">OpenAI 兼容（/chat/completions）</option><option value="anthropic">Anthropic（/v1/messages）</option></select></label>
-                    <label>端点<input bind:value={productSettings.model_tiers[tier].base_url} placeholder="https://example.com/v1" /></label>
-                    <label>模型名称<input bind:value={productSettings.model_tiers[tier].model_name} placeholder={`${tier}-model`} /></label>
-                    <label>API Key<input bind:value={tierApiKeys[tier]} type="password" autocomplete="new-password" placeholder={productSettings.tier_api_keys_configured?.[tier] ? "留空以保留现有值" : "输入 API Key（可留空继承全局）"} /></label>
+                    <label>协议<select value={productSettings.model_tiers[tier].protocol} on:change={(e) => updateTier(tier, "protocol", e.currentTarget.value)}><option value="openai">OpenAI 兼容（/chat/completions）</option><option value="anthropic">Anthropic（/v1/messages）</option></select></label>
+                    <label>端点<input value={productSettings.model_tiers[tier].base_url} on:change={(e) => updateTier(tier, "base_url", e.currentTarget.value)} placeholder="https://example.com/v1" /></label>
+                    <label>模型名称<input value={productSettings.model_tiers[tier].model_name} on:change={(e) => updateTier(tier, "model_name", e.currentTarget.value)} placeholder={`${tier}-model`} /></label>
+                    <label>API Key<input value={tierApiKeys[tier]} on:input={(e) => tierApiKeys = { ...tierApiKeys, [tier]: e.currentTarget.value }} type="password" autocomplete="new-password" placeholder={productSettings.tier_api_keys_configured?.[tier] ? "留空以保留现有值" : "输入 API Key（可留空继承全局）"} /></label>
                   </div>
                   {#if productSettings.tier_api_keys_configured?.[tier]}<label class="check"><input type="checkbox" checked={clearTierApiKeys.includes(tier)} on:change={(e) => toggleTierKey(tier, e.currentTarget.checked)} /><span><b>清除该档位已保存的 API Key</b></span></label>{/if}
                   <div class="field-grid cols-4">
-                    <label>上下文窗口（token，0=不限）<input bind:value={productSettings.model_tiers[tier].context_window_tokens} type="number" min="0" /></label>
-                    <label>思考模式<select bind:value={productSettings.model_tiers[tier].thinking_mode}><option value="off">关闭</option><option value="default">开启（供应商默认预算）</option><option value="custom">自定义预算</option></select></label>
-                    {#if productSettings.model_tiers[tier].thinking_mode === "custom"}<label>思考预算（token，≥1024）<input bind:value={productSettings.model_tiers[tier].thinking_budget_tokens} type="number" min="1024" /></label>{/if}
-                    <label>超时（秒，0=沿用全局）<input bind:value={productSettings.model_tiers[tier].timeout_seconds} type="number" min="0" max="600" /></label>
-                    <label>最大尝试（0=沿用全局）<input bind:value={productSettings.model_tiers[tier].max_attempts} type="number" min="0" max="8" /></label>
+                    <label>上下文窗口（token，0=不限）<input value={productSettings.model_tiers[tier].context_window_tokens} on:change={(e) => updateTier(tier, "context_window_tokens", Number(e.currentTarget.value))} type="number" min="0" /></label>
+                    <label>思考模式<select value={productSettings.model_tiers[tier].thinking_mode} on:change={(e) => updateTier(tier, "thinking_mode", e.currentTarget.value)}><option value="off">关闭</option><option value="default">开启（供应商默认预算）</option><option value="custom">自定义预算</option></select></label>
+                    {#if productSettings.model_tiers[tier].thinking_mode === "custom"}<label>思考预算（token，≥1024）<input value={productSettings.model_tiers[tier].thinking_budget_tokens} on:change={(e) => updateTier(tier, "thinking_budget_tokens", Number(e.currentTarget.value))} type="number" min="1024" /></label>{/if}
+                    <label>超时（秒，0=沿用全局）<input value={productSettings.model_tiers[tier].timeout_seconds} on:change={(e) => updateTier(tier, "timeout_seconds", Number(e.currentTarget.value))} type="number" min="0" max="600" /></label>
+                    <label>最大尝试（0=沿用全局）<input value={productSettings.model_tiers[tier].max_attempts} on:change={(e) => updateTier(tier, "max_attempts", Number(e.currentTarget.value))} type="number" min="0" max="8" /></label>
                   </div>
                 </div>
               {/if}
