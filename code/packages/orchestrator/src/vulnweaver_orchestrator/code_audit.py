@@ -19,7 +19,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Protocol
 
 from vulnweaver_artifact_store import ArtifactStore
 from vulnweaver_contracts import (
@@ -100,16 +100,13 @@ class CodeAuditOutcome:
         digest: list[JsonObject] = []
         for step in self.steps[:_MAX_INVESTIGATION_STEPS]:
             digest.append(
-                cast(
-                    JsonObject,
-                    {
-                        "step_id": step.step_id,
-                        "tool": f"{step.tool_name}@{step.tool_version}",
-                        "succeeded": step.succeeded,
-                        "failure_code": step.failure_code,
-                        "observation": _bounded_observation(step.output),
-                    },
-                )
+                {
+                    "step_id": step.step_id,
+                    "tool": f"{step.tool_name}@{step.tool_version}",
+                    "succeeded": step.succeeded,
+                    "failure_code": step.failure_code,
+                    "observation": _bounded_observation(step.output),
+                }
             )
         return digest
 

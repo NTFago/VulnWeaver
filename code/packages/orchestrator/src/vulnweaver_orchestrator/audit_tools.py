@@ -17,7 +17,7 @@ import asyncio
 import json
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import cast
 
 from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError
@@ -290,26 +290,30 @@ class AuditWorkspaceLimits:
     max_text_chars: int = _MAX_TEXT_CHARS
 
 
-@dataclass(slots=True)
 class AuditWorkspace:
     """Task-scoped read-only view the audit agent investigates through."""
 
-    database: Database
-    store: ArtifactStore
-    task_id: str
-    limits: AuditWorkspaceLimits = field(default_factory=AuditWorkspaceLimits)
-    fact_loader: SourceReviewFactLoader | None = None
-    _functions: list[AuditFunctionRef] = field(default_factory=list, init=False)
-    _functions_by_id: dict[str, AuditFunctionRef] = field(default_factory=dict, init=False)
-    _version_kinds: dict[str, ArtifactKind] = field(default_factory=dict, init=False)
-    _versions: dict[str, ArtifactVersion] = field(default_factory=dict, init=False)
-    _files: dict[tuple[str, str], str | None] = field(default_factory=dict, init=False)
-    _documents: dict[str, JsonObject | None] = field(default_factory=dict, init=False)
-    _reader: SourceExcerptReader | None = field(default=None, init=False)
-
-    def __post_init__(self) -> None:
-        if self.fact_loader is None:
-            self.fact_loader = SourceReviewFactLoader(self.database, self.store)
+    def __init__(
+        self,
+        database: Database,
+        store: ArtifactStore,
+        task_id: str,
+        *,
+        limits: AuditWorkspaceLimits | None = None,
+        fact_loader: SourceReviewFactLoader | None = None,
+    ) -> None:
+        self.database = database
+        self.store = store
+        self.task_id = task_id
+        self.limits = limits or AuditWorkspaceLimits()
+        self.fact_loader = fact_loader or SourceReviewFactLoader(database, store)
+        self._functions: list[AuditFunctionRef] = []
+        self._functions_by_id: dict[str, AuditFunctionRef] = {}
+        self._version_kinds: dict[str, ArtifactKind] = {}
+        self._versions: dict[str, ArtifactVersion] = {}
+        self._files: dict[tuple[str, str], str | None] = {}
+        self._documents: dict[str, JsonObject | None] = {}
+        self._reader: SourceExcerptReader | None = None
 
     async def load(self) -> None:
         """Index the task's artifact versions and every function they hold."""
@@ -696,12 +700,12 @@ class AuditWorkspace:
             return source.read()
 
 
-@dataclass(slots=True)
 class AuditStepExecutor:
     """Run one approved plan step against the workspace and bound its output."""
 
-    workspace: AuditWorkspace
-    reported: list[ReportedFinding] = field(default_factory=list)
+    def __init__(self, workspace: AuditWorkspace) -> None:
+        self.workspace = workspace
+        self.reported: list[ReportedFinding] = []
 
     async def execute(self, call: ScheduledToolCall) -> JsonObject:
         name = call.tool["name"]

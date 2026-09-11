@@ -173,6 +173,34 @@ class TaskAggregateSettlementHook:
                         await self._fuzz_scheduler.schedule_finding_in_transaction(
                             repositories, finding["id"]
                         )
+        if (
+            self._review_scheduler is not None
+            and job["kind"] in {JobKind.FUZZ, JobKind.PROOF}
+            and result["evidence_ids"]
+            and not review_pending
+        ):
+            # Dynamic verification lands its evidence *after* the finding's first
+            # review, and a settled fuzz/proof Job otherwise never re-opens
+            # review — so a reproduced crash could never reach the confirmation
+            # gate. Re-review only the findings that job actually attached
+            # evidence to, under a revision id so the first review keeps its own.
+            touched = set(result["evidence_ids"])
+            for finding in findings:
+                relations = await repositories.findings.list_evidence_relations(finding["id"])
+                linked = sorted(
+                    relation["evidence_id"]
+                    for relation in relations
+                    if relation["evidence_id"] in touched
+                )
+                if not linked:
+                    continue
+                revision = "evidence-" + hashlib.sha256(
+                    "\0".join(linked).encode()
+                ).hexdigest()[:16]
+                await self._review_scheduler.schedule_in_transaction(
+                    repositories, job, [finding["id"]], revision=revision
+                )
+            jobs = await repositories.jobs.list_for_task(task["id"])
         # Dynamic schedulers run in this transaction. Reload their durable Jobs
         # before aggregation so a newly queued proof/fuzz Job cannot be skipped.
         jobs = await repositories.jobs.list_for_task(task["id"])
