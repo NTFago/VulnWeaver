@@ -493,6 +493,21 @@ class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
+    async def exists(self, job_id: str) -> bool:
+        """Return whether the job id is taken, without aborting the transaction.
+
+        Callers that probe for deterministic identifiers inside an active
+        settlement transaction need a non-raising check: a failed statement
+        would abort the surrounding PostgreSQL transaction.
+        """
+
+        row = (
+            await self._connection.execute(
+                select(jobs.c.id).where(jobs.c.id == job_id)
+            )
+        ).first()
+        return row is not None
+
     async def create_without_outbox(self, job: Job) -> CreateResult[Job]:
         """Create a waiting job without publishing it before permission is granted."""
 

@@ -19,7 +19,6 @@ from vulnweaver_contracts import (
     JsonValue,
     NetworkAccess,
     PermissionMode,
-    ResourceBudget,
     SchemaVersion,
     ToolSpec,
     validate_contract,
@@ -41,10 +40,14 @@ class PolicyDecisionStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class PolicyContext:
-    """Facts supplied by the project/task boundary, never by model output."""
+    """Facts supplied by the project/task boundary, never by model output.
+
+    Compute-resource budgets are deliberately absent: tool scheduling is no
+    longer gated on CPU/memory/disk/token quotas. Isolation and permission
+    facts remain because those are security boundaries, not resource limits.
+    """
 
     artifact_kinds: Mapping[str, ArtifactKind | str]
-    resource_budget: ResourceBudget
     permission_mode: PermissionMode
     allowed_network_hosts: frozenset[str] = frozenset()
     granted_approvals: frozenset[str] = frozenset()
@@ -312,46 +315,6 @@ def _check_step(
             )
 
     violations.extend(_check_network(spec, arguments, context, step_id))
-    violations.extend(_check_resources(spec, context, step_id))
-    return violations
-
-
-def _check_resources(
-    spec: ToolSpec, context: PolicyContext, step_id: str
-) -> list[PolicyViolation]:
-    violations: list[PolicyViolation] = []
-    for resource_name in (
-        "max_model_tokens",
-        "cpu_millis",
-        "memory_bytes",
-        "disk_bytes",
-        "max_tool_concurrency",
-        "max_dynamic_runs",
-        "timeout_seconds",
-    ):
-        requested = spec["resource_limits"][resource_name]
-        allowed = context.resource_budget[resource_name]
-        if requested > allowed:
-            violations.append(
-                _violation(
-                    "resource_limit_exceeded",
-                    "ToolSpec resource limit exceeds the task budget",
-                    step_id,
-                    resource=resource_name,
-                    requested=requested,
-                    allowed=allowed,
-                )
-            )
-    if spec["timeout_seconds"] > context.resource_budget["timeout_seconds"]:
-        violations.append(
-            _violation(
-                "timeout_exceeded",
-                "tool timeout exceeds the task budget",
-                step_id,
-                requested=spec["timeout_seconds"],
-                allowed=context.resource_budget["timeout_seconds"],
-            )
-        )
     return violations
 
 

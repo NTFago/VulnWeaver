@@ -105,7 +105,9 @@ class HarnessPipeline:
                 break
             repaired = await self._repairer.repair(
                 task_id=task_id,
-                job_id=job_id,
+                # Each repair round needs its own AgentRun id: the recorder
+                # rejects a second append with identical content otherwise.
+                job_id=f"{job_id}:repair:{attempt}",
                 source=current,
                 diagnostics="\n".join(outcome.diagnostics) or outcome.message,
             )

@@ -133,11 +133,11 @@ def test_review_executor_enforces_budget_and_attempt_identity() -> None:
         assert reviewer.attempt_key == "job:review:attempt:2"
         assert reviewer.max_output_tokens == 1000
 
+        # A zero model budget now means "no output cap" instead of a policy failure.
         value["resource_budget"]["max_model_tokens"] = 0
-        denied = await ReviewJobExecutor(reviewer).execute(value, asyncio.Event())
-        assert denied["status"] is JobStatus.FAILED
-        assert denied["failure"] is not None
-        assert denied["failure"]["code"] == "review.model_budget_exhausted"
+        uncapped = await ReviewJobExecutor(reviewer).execute(value, asyncio.Event())
+        assert uncapped["status"] is JobStatus.SUCCEEDED
+        assert reviewer.max_output_tokens is None
 
     asyncio.run(scenario())
 

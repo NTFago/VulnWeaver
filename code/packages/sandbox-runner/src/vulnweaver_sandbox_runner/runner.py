@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import logging
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
@@ -36,6 +37,13 @@ from vulnweaver_sandbox_runner.runtime import (
 )
 
 CommandBuilder = Callable[[Mapping[str, object], PurePath, PurePath], Sequence[str]]
+
+LOGGER = logging.getLogger(__name__)
+
+# Operational disk protection for the shared CAS volume, not a compute-resource quota:
+# it is orders of magnitude above any legitimate tool output and exists only so a
+# runaway container cannot fill the host disk shared by PostgreSQL and the artifact store.
+MAX_SANDBOX_OUTPUT_BYTES = 8 * 1024**3
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +148,7 @@ class SandboxRunner:
                     output_dir=output_dir,
                     resource_budget=request["resource_budget"],
                     timeout_seconds=request["timeout_seconds"],
-                    max_output_bytes=request["resource_budget"]["disk_bytes"],
+                    max_output_bytes=MAX_SANDBOX_OUTPUT_BYTES,
                 )
                 runtime_started = True
                 try:
@@ -153,6 +161,13 @@ class SandboxRunner:
                         resource_usage=_usage(0, 0, 0, 0),
                     )
                 except (OSError, TimeoutError, RuntimeError) as error:
+                    # The structured failure only carries the exception type; log the
+                    # message so runtime failures stay diagnosable from runner logs.
+                    LOGGER.error(
+                        "sandbox_runtime_failed request_id=%s error=%s",
+                        request["id"],
+                        str(error)[:2000],
+                    )
                     result = _policy_result(
                         request["id"],
                         "sandbox.runtime_failed",
@@ -300,20 +315,9 @@ class SandboxRunner:
                 _usage(0, 0, 0, 0),
                 details={"errors": [error.message for error in command_errors[:8]]},
             )
-        if not _budget_within(request["resource_budget"], spec["resource_limits"]):
-            return _policy_result(
-                request["id"],
-                "sandbox.resource_budget_exceeded",
-                "sandbox request exceeds the registered ToolSpec resource limits",
-                _usage(0, 0, 0, 0),
-            )
-        if request["timeout_seconds"] > spec["timeout_seconds"]:
-            return _policy_result(
-                request["id"],
-                "sandbox.timeout_exceeded",
-                "sandbox request timeout exceeds the registered ToolSpec timeout",
-                _usage(0, 0, 0, 0),
-            )
+        # Compute-resource budgets are inert (ADR-025): requests are not rejected for
+        # exceeding ToolSpec resource limits or timeouts. The per-request timeout still
+        # stops runaway containers because it is an operational stop, not a quota.
         try:
             _validate_argv(
                 tuple(
@@ -359,16 +363,8 @@ class SandboxRunner:
             execution.memory_bytes,
             total_output,
         )
-        if total_output > request["resource_budget"]["disk_bytes"]:
-            return _policy_result(
-                request["id"],
-                "sandbox.output_limit_exceeded",
-                "sandbox output exceeds the request disk budget",
-                usage,
-                status=SandboxStatus.FAILED,
-            )
         output_refs = _store_outputs(self._store, approved_outputs)
-        remaining = request["resource_budget"]["disk_bytes"] - output_bytes
+        remaining = MAX_SANDBOX_OUTPUT_BYTES - output_bytes
         stdout_ref, _ = _store_stream(self._store, execution.stdout, remaining)
         stderr_ref, _ = _store_stream(self._store, execution.stderr, remaining - stdout_bytes)
         status = _status(execution.status)
@@ -453,26 +449,6 @@ def _store_stream(store: ArtifactStore, value: bytes, max_bytes: int) -> tuple[s
         return None, 0
     stored = store.put_stream(io.BytesIO(value), max_bytes=max(1, max_bytes))
     return stored.object_ref, stored.size_bytes
-
-
-def _budget_within(request: Mapping[str, object], limit: Mapping[str, object]) -> bool:
-    keys = (
-        "max_model_tokens",
-        "cpu_millis",
-        "memory_bytes",
-        "disk_bytes",
-        "max_tool_concurrency",
-        "max_dynamic_runs",
-        "timeout_seconds",
-    )
-    for key in keys:
-        request_value = request[key]
-        limit_value = limit[key]
-        if not isinstance(request_value, int) or not isinstance(limit_value, int):
-            return False
-        if request_value > limit_value:
-            return False
-    return True
 
 
 def _validate_argv(argv: tuple[str, ...]) -> None:

@@ -291,7 +291,7 @@ def test_runner_rejects_unapproved_output_and_reports_orphan_cleanup(tmp_path: P
     assert len(runtime.cleaned) == 1
 
 
-def test_runner_rejects_combined_file_and_stream_output_before_publication(
+def test_runner_publishes_large_combined_output_without_a_disk_budget(
     tmp_path: Path,
 ) -> None:
     runtime = _FakeRuntime(stdout=b"x" * (1024 * 1024))
@@ -302,12 +302,12 @@ def test_runner_rejects_combined_file_and_stream_output_before_publication(
 
     result = asyncio.run(sandbox.run(value, asyncio.Event()))
 
-    assert result["status"] is SandboxStatus.FAILED
-    assert result["failure"] is not None
-    assert result["failure"]["code"] == "sandbox.output_limit_exceeded"
-    assert result["outputs"] == []
-    assert result["stdout_ref"] is None
-    assert result["stderr_ref"] is None
+    # Output size is no longer gated by the request disk budget (ADR-025); the
+    # combined size is still reported in the usage record.
+    assert result["status"] is SandboxStatus.SUCCEEDED
+    assert result["failure"] is None
+    assert result["outputs"] != []
+    assert result["stdout_ref"] is not None
     assert result["resource_usage"]["output_bytes"] == 1024 * 1024 + len("safe output")
 
 
@@ -368,7 +368,9 @@ def test_docker_runtime_builds_fixed_isolated_flags_and_rejects_host_mounts(
     assert volume_arguments[-1] == "vw-sbx-test-output"
     assert "type=tmpfs" in volume_arguments
     assert "device=tmpfs" in volume_arguments
-    assert any(item == "o=size=1048576,uid=10001,gid=10001,mode=0700" for item in volume_arguments)
+    # No per-request size quota is imposed on the output volume (ADR-025).
+    assert not any(item.startswith("o=size=") for item in volume_arguments)
+    assert any(item == "o=uid=10001,gid=10001,mode=0700" for item in volume_arguments)
     keeper_arguments = runtime.build_output_keeper_arguments(value)
     assert "--detach" in keeper_arguments
     assert "--read-only" in keeper_arguments

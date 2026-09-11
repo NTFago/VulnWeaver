@@ -92,7 +92,6 @@ def plan(arguments: dict[str, object] | None = None, **step_overrides: object) -
 def context(**overrides: object) -> PolicyContext:
     value: dict[str, object] = {
         "artifact_kinds": {"version:1": ArtifactKind.SOURCE_ARCHIVE},
-        "resource_budget": budget(),
         "permission_mode": PermissionMode.REQUEST_PERMISSION,
     }
     value.update(overrides)
@@ -161,11 +160,10 @@ def test_policy_rejects_absolute_and_traversal_paths() -> None:
         assert "host_path_or_traversal" in decision.reason_codes
 
 
-def test_policy_enforces_artifact_resource_and_network_boundaries() -> None:
+def test_policy_enforces_artifact_and_network_boundaries() -> None:
     network_spec = spec(
         name="dependency-fetcher",
         network_policy={"access": "allowlist", "allowed_hosts": ["pypi.org"]},
-        resource_limits=budget(cpu_millis=4_000),
     )
     engine = PolicyEngine(ToolRegistry([network_spec]), clock=lambda: NOW)
     p = plan(
@@ -178,12 +176,10 @@ def test_policy_enforces_artifact_resource_and_network_boundaries() -> None:
         context(
             artifact_kinds={"version:1": ArtifactKind.ELF},
             allowed_network_hosts=frozenset({"pypi.org", "evil.example"}),
-            resource_budget=budget(cpu_millis=2_000),
         ),
     )
     assert decision.status is PolicyDecisionStatus.DENIED
     assert "artifact_kind_not_accepted" in decision.reason_codes
-    assert "resource_limit_exceeded" in decision.reason_codes
     assert "network_host_not_allowlisted" in decision.reason_codes
 
 

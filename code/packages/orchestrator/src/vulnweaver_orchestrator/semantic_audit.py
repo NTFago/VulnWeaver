@@ -173,9 +173,8 @@ class SemanticAuditor:
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
         run_id = _stable_id("agent-run", "semantic-audit", job["id"], str(job["attempt"]))
-        max_tokens = job["resource_budget"]["max_model_tokens"]
-        if max_tokens < 1:
-            raise _AuditError("semantic_audit.model_budget_exhausted", FailureKind.POLICY)
+        # max_model_tokens 0 means uncapped; compute-resource budgets no longer gate jobs.
+        max_tokens = job["resource_budget"]["max_model_tokens"] or None
         entries, source_version_id, binary_version_id = await self._auditable_functions(task_id)
         if not entries:
             # Nothing indexed to audit: a successful no-op baseline keeps the

@@ -206,8 +206,10 @@ class DockerCliRuntime:
         self._validate_request(request)
 
     def _run_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
-        cpus = max(0.001, request.resource_budget["cpu_millis"] / 1000)
         image = f"{request.image_ref}@{request.image_digest}"
+        # Compute-resource quotas (CPUs, memory, PID count, tmpfs sizes) were removed
+        # per ADR-025; containers stay isolated by the security flags below, and the
+        # per-request timeout remains the operational stop for runaway workloads.
         return (
             self._docker,
             "run",
@@ -226,16 +228,10 @@ class DockerCliRuntime:
             "ALL",
             "--security-opt",
             "no-new-privileges=true",
-            "--pids-limit",
-            "128",
-            "--memory",
-            str(request.resource_budget["memory_bytes"]),
-            "--cpus",
-            f"{cpus:g}",
             "--tmpfs",
-            f"/tmp:rw,noexec,nosuid,size={request.resource_budget['disk_bytes']}",
+            "/tmp:rw,noexec,nosuid",
             "--tmpfs",
-            f"/work:rw,exec,nosuid,size={request.resource_budget['disk_bytes']}",
+            "/work:rw,exec,nosuid",
             "--mount",
             f"type=bind,src={self._docker_visible_path(request.input_dir)},dst=/input,readonly",
             "--mount",
@@ -308,6 +304,8 @@ class DockerCliRuntime:
             )
 
     def _output_volume_arguments(self, request: RuntimeRequest) -> tuple[str, ...]:
+        # tmpfs volume without an explicit size: the kernel default (half of host RAM)
+        # bounds it without imposing a per-request disk quota (ADR-025).
         return (
             self._docker,
             "volume",
@@ -321,7 +319,7 @@ class DockerCliRuntime:
             "--opt",
             "device=tmpfs",
             "--opt",
-            (f"o=size={request.resource_budget['disk_bytes']},uid=10001,gid=10001,mode=0700"),
+            "o=uid=10001,gid=10001,mode=0700",
             _output_volume_name(request.container_name),
         )
 

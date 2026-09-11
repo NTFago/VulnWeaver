@@ -19,7 +19,6 @@ from vulnweaver_contracts import (
     PocResult,
     PocStatus,
     ProofRequest,
-    ResourceBudget,
     SandboxRequest,
     SandboxResult,
     SandboxStatus,
@@ -30,7 +29,6 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_domain import evaluate_exploit_eligibility
 from vulnweaver_persistence import Database
-from vulnweaver_tool_runtime import bounded_resource_budget
 
 from .auto_exploit import AutoExploitError, ExploitScriptGenerator
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
@@ -166,7 +164,7 @@ class ProofJobExecutor:
                 "image_digest": image_digest,
                 "permission_mode": permission_mode,
                 "resource_budget": dict(budget),
-                "timeout_seconds": min(120, int(budget["timeout_seconds"])),
+                "timeout_seconds": int(budget["timeout_seconds"]),
             },
         )
 
@@ -196,7 +194,6 @@ class ProofExecutionService:
         tool_name: str,
         tool_version: str,
         output_file_names: tuple[str, ...] = ("result.json",),
-        resource_limits: ResourceBudget | None = None,
     ) -> None:
         if not tool_name or not tool_version or not output_file_names:
             raise ValueError("proof tool identity and outputs are required")
@@ -204,7 +201,6 @@ class ProofExecutionService:
         self._tool_name = tool_name
         self._tool_version = tool_version
         self._output_file_names = output_file_names
-        self._resource_limits = resource_limits
 
     async def run(
         self,
@@ -227,13 +223,7 @@ class ProofExecutionService:
         if kind is PocKind.EXPLOIT and not decision.allowed:
             return self._poc(request, kind, PocStatus.FAILED, PocResult.POLICY_DENIED)
 
-        # The Runner refuses a request whose budget exceeds the registered ToolSpec, so the
-        # project budget carried by the request must be clamped to the proof tool's limits.
-        budget = (
-            bounded_resource_budget(request["resource_budget"], self._resource_limits)
-            if self._resource_limits is not None
-            else request["resource_budget"]
-        )
+        budget = request["resource_budget"]
         sandbox_request = cast(
             SandboxRequest,
             {
@@ -247,7 +237,7 @@ class ProofExecutionService:
                 "arguments": {"finding_id": request["finding_id"], "kind": kind.value},
                 "output_file_names": list(self._output_file_names),
                 "resource_budget": budget,
-                "timeout_seconds": min(request["timeout_seconds"], budget["timeout_seconds"]),
+                "timeout_seconds": request["timeout_seconds"],
             },
         )
         result = await self._sandbox.run(sandbox_request, cancellation)

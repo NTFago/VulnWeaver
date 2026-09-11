@@ -546,11 +546,13 @@ class ModelGateway:
             endpoints.append(route.fallback)
         for endpoint_index, endpoint in enumerate(endpoints):
             model = endpoint.model_for(tier)
-            if endpoint.context_window_tokens:
-                _check_context_budget(endpoint, messages, max_output_tokens)
+            endpoint_messages, trim_decisions = _fit_context_window(
+                endpoint, messages, max_output_tokens
+            )
+            all_decisions.extend(trim_decisions)
             try:
                 outcome = await self._request_endpoint(
-                    endpoint, model, messages, max_output_tokens
+                    endpoint, model, endpoint_messages, max_output_tokens
                 )
             except ModelGatewayError as error:
                 endpoint_errors.append(error)
@@ -709,37 +711,70 @@ def _mark_attempts(
 
 _CHARS_PER_TOKEN = 4
 _OUTPUT_RESERVE_FRACTION = 4
+_MIN_TRIM_CONTENT_CHARS = 512
+_TRIM_MARKER = "\n…[context trimmed]…\n"
 
 
-def _check_context_budget(
+def _fit_context_window(
     endpoint: ModelEndpoint,
     messages: Sequence[Mapping[str, str]],
     max_output_tokens: int | None,
-) -> None:
-    """Deterministic context-window guard without shipping a tokenizer.
+) -> tuple[list[dict[str, str]], tuple[tuple[str, str], ...]]:
+    """Bound the request to the configured context window instead of rejecting it.
 
-    The estimate is deliberately coarse (4 chars per token) and only rejects
-    requests that cannot possibly fit, so a false negative just falls through
-    to the provider's own limit.
+    The estimate is deliberately coarse (4 chars per token). When the estimate
+    exceeds the window, the largest message contents are shortened first — each
+    keeps its head and tail around a trim marker so anchors at either end of an
+    excerpt survive. Every message is preserved; nothing is dropped entirely.
+    Decision records describe the trim so AgentRun trajectories stay truthful.
     """
 
+    messages_out = [
+        {str(key): str(value) for key, value in message.items()} for message in messages
+    ]
     window = endpoint.context_window_tokens
     if window <= 0:
-        return
-    estimated_input = (
-        sum(len(str(message.get("content", ""))) for message in messages) // _CHARS_PER_TOKEN
-    )
+        return messages_out, ()
     reserve = max_output_tokens or window // _OUTPUT_RESERVE_FRACTION
-    if estimated_input + reserve > window:
-        raise ModelOutputError(
-            "estimated input exceeds the configured context window",
-            details={
-                "endpoint": endpoint.name,
-                "context_window_tokens": window,
-                "estimated_input_tokens": estimated_input,
-                "reserved_output_tokens": reserve,
-            },
-        )
+    budget_chars = max(0, window - reserve) * _CHARS_PER_TOKEN
+    if budget_chars == 0:
+        # Reserve consumed the whole window: keep a minimal workable slice and let
+        # the provider have the final say.
+        budget_chars = 1024 * _CHARS_PER_TOKEN
+    total_chars = sum(len(str(message.get("content", ""))) for message in messages_out)
+    if total_chars <= budget_chars:
+        return messages_out, ()
+
+    order = sorted(
+        range(len(messages_out)),
+        key=lambda index: len(messages_out[index].get("content", "")),
+        reverse=True,
+    )
+    trimmed_count = 0
+    for index in order:
+        if total_chars <= budget_chars:
+            break
+        content = messages_out[index].get("content", "")
+        if len(content) < _MIN_TRIM_CONTENT_CHARS:
+            continue
+        excess = total_chars - budget_chars
+        keep = max(_MIN_TRIM_CONTENT_CHARS, len(content) - excess)
+        head = keep * 2 // 3
+        tail = keep - head
+        trimmed = content[:head] + _TRIM_MARKER
+        if tail > 0:
+            trimmed += content[len(content) - tail :]
+        total_chars -= len(content) - len(trimmed)
+        messages_out[index]["content"] = trimmed
+        trimmed_count += 1
+    decision = (
+        "context_window_trimmed",
+        (
+            f"trimmed {trimmed_count} message(s) to fit the configured context window "
+            f"of {window} tokens on {endpoint.name}"
+        ),
+    )
+    return messages_out, (decision,)
 
 
 def _response_object(value: object) -> Mapping[str, object]:

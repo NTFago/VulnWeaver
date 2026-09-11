@@ -226,10 +226,25 @@ def _binary_resource_budget(config: ResolvedDeploymentConfig | None) -> Resource
 
 
 def _resolve_local_image_digest(image_ref: str) -> str:
-    """Resolve a locally built fixed image without weakening digest pinning."""
+    """Resolve a locally built fixed image without weakening digest pinning.
+
+    Prefers a repository manifest digest (``RepoDigests``): containerd-backed
+    daemons resolve ``name@digest`` against manifest digests, while a config
+    digest reported by an older docker client is not locally resolvable and
+    would trigger a registry pull. Falls back to the image ID, which the
+    classic store resolves by configuration digest.
+    """
+
     try:
         result = subprocess.run(
-            ["docker", "image", "inspect", "--format", "{{.Id}}", image_ref],
+            [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                "{{range .RepoDigests}}{{.}} {{end}}{{.Id}}",
+                image_ref,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -237,8 +252,11 @@ def _resolve_local_image_digest(image_ref: str) -> str:
         )
     except (OSError, subprocess.SubprocessError):
         return ""
-    digest = result.stdout.strip()
-    return digest if digest.startswith("sha256:") else ""
+    for token in result.stdout.split():
+        digest = token.rsplit("@", 1)[-1]
+        if digest.startswith("sha256:") and len(digest) == 71:
+            return digest
+    return ""
 
 
 

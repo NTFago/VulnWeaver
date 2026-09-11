@@ -58,6 +58,7 @@ export interface ProductSettings {
   review_model_max_attempts: number;
   review_model_repair_attempts: number;
   review_model_min_interval_seconds: number;
+  review_model_context_window_tokens: number;
   api_key_configured: boolean;
   tool_image_digests: ToolImageDigests;
   sandbox_budgets: {

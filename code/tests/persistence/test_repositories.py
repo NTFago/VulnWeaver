@@ -533,3 +533,19 @@ def test_outbox_claim_skips_rows_locked_by_another_dispatcher(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_job_exists_does_not_abort_the_transaction(seeded_database_url: str) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(seeded_database_url))
+        try:
+            async with database.transaction() as repositories:
+                assert await repositories.jobs.exists("job:t03")
+                assert not await repositories.jobs.exists("job:t03-missing")
+                # The probe stays usable inside the same active transaction:
+                # listing still succeeds after a negative lookup.
+                assert await repositories.jobs.list_for_task("task:t03")
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
