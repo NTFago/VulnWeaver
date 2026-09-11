@@ -421,3 +421,52 @@ def test_binary_pseudocode_finding_is_anchored_by_address(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_executor_drops_a_candidate_whose_derived_id_collides(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """Two candidates at the same location and CWE derive the same finding id.
+
+    The store refuses to merge them -- they are genuinely different findings --
+    and that refusal used to escape as an unhandled EntityConflict and take the
+    whole audit job down.  The colliding candidate is dropped and counted.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(database)
+        task_id = f"task:{suffix}"
+        real_path = "src/app.py"
+        async with database.transaction() as repositories:
+            await repositories.pair.import_graph(
+                [pair_function(f"pair-fn:{suffix}", version_id, real_path)],
+                [],
+                [],
+                None,
+                created_at=NOW,
+            )
+        first = model_finding(real_path, 2)
+        second = {**model_finding(real_path, 2), "title": "a different claim at the same line"}
+        model = FakeAuditModel(report([first, second]))
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        audit_job = semantic_job(f"job:audit:{suffix}", task_id)
+        try:
+            result = await executor.execute(audit_job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+            # Only the first candidate persists; the colliding one is dropped
+            # rather than aborting the audit.
+            assert len(findings) == 1
+            assert findings[0]["title"] == "eval on request data"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

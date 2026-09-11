@@ -52,7 +52,7 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_model_gateway import ModelCallResult, ModelGatewayError, ModelTier
 from vulnweaver_pair import build_call_path_steps, pseudocode_text
-from vulnweaver_persistence import Database, Repositories
+from vulnweaver_persistence import Database, EntityConflict, Repositories
 
 from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
@@ -418,9 +418,19 @@ class SemanticAuditor:
                         investigation=investigation,
                     )
                 )
-                await repositories.findings.upsert_candidate(
-                    _finding(finding_id, job, finding, location, call_path)
-                )
+                try:
+                    await repositories.findings.upsert_candidate(
+                        _finding(finding_id, job, finding, location, call_path)
+                    )
+                except EntityConflict:
+                    # Two candidates that anchor to the same (cwe_id, location)
+                    # but differ in the fields the store treats as identity
+                    # derive the same finding id.  The store is right to refuse
+                    # the merge -- they are not the same finding -- but that must
+                    # not take the whole audit down, so this one is dropped and
+                    # counted rather than raised.
+                    dropped += 1
+                    continue
                 await repositories.findings.link_evidence(
                     FindingEvidence(
                         schema_version=SchemaVersion.VALUE_1_0_0,
