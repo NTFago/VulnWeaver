@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：报告 PR #59 与智能体审计 PR #60 均已合入 main@3fcbe1e。本轮完成 WEB-INTEGRATE：保留 main 行为基准，合并 work7 组件化中文界面，接入真实执行进度、审计轨迹与三格式报告中心；尚未推送、创建 PR 或部署。
+- **当前阶段**：报告 PR #59 与智能体审计 PR #60 均已合入 main@3fcbe1e。本轮完成 WEB-INTEGRATE：保留 main 行为基准，合并 work7 组件化中文界面，接入真实执行进度、审计轨迹与三格式报告中心；已推送并创建 [PR #61](https://github.com/NTFago/VulnWeaver/pull/61)，目标 main；未合并或部署。
 - **当前分支**：`feat/web-audit-integration`（基线 origin/main@3fcbe1e，包含 frontend-zh 的历史与 Terra 后端两个提交）
 - **当前负责人**：Codex 主控/UI；后端只读轨迹由 GPT-5.6 Terra high 子任务完成并集成
 - **当前 worktree**：`.worktree/web-audit-integration`；原 work7 与主工作区未改动
@@ -202,7 +202,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
-| 2026-09-11 | WEB-INTEGRATE：中文审计工作台与 main 功能整合，Terra 只读审计轨迹接入 | Python 540 passed / 5 skipped、81.71%；前端 12 passed、Svelte/TypeScript 0 错误、Vite build 通过；桌面和 390px 窄屏验收通过 | 未推送/提 PR/部署；发布前补真实部署 E2E，详细边界见验收文档 |
+| 2026-09-11 | WEB-INTEGRATE：中文审计工作台与 main 功能整合，Terra 只读审计轨迹接入 | Python 540 passed / 5 skipped、81.71%；前端 12 passed、Svelte/TypeScript 0 错误、Vite build 通过；桌面和 390px 窄屏验收通过 | 已推送并创建 PR #61；未合并/部署，发布前补真实部署 E2E，详细边界见验收文档 |
 | 2026-09-11 | T40 智能体调查式审计（`dev`，提交 `c7d3089`） | 新增 `audit_tools.py`（8 件只读调查工具 + `AuditWorkspace` + `AuditStepExecutor`）与 `code_audit.py`（`CodeAuditAgent`）；`semantic_audit` 改为循环驱动并在降级时回落一次性路径；修复二进制伪代码读取、`AgentRun.prompt_hash` 前缀、策略层自由文本误杀三项缺陷。Linux Dev Container：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **492 passed / 5 skipped**（PostgreSQL/Redis 集成实跑） | 真实模型端到端与动态验证自主权 |
 | 2026-09-11 | T40 真实模型审计端到端（部署栈，未改动运行中的服务） | 以部署栈中已配置的模型（`ROUTES audit/planning/report/review`）对运行库中一个真实任务（102 个 Python 函数的真实开源项目）直接运行 `CodeAuditAgent.audit()`（只读，不落库）：智能体自主完成 **25 次工具调用、8 轮规划**，使用 `code-function-read`/`code-search`/`code-function-list`/`artifact-facts`/`static-leads`/`critical-logic`，并报出它自己读到并确认的 **CWE-78** 定位候选（`check_pi_extension.py:220`，调用方提供的可执行名未校验即执行）。过程中修复：`feedback["last_steps"]` 原为累计步骤列表，每轮重放全部历史致提示词膨胀、收敛指令被淹没——改为只带本轮步骤并给出剩余轮数后即正常产出 | 整条管线（worker → `semantic_audit` Job → 落库 → 复核 → 报告）与浏览器证据链回归仍未执行；二进制侧真实模型验收未执行 |
 | 2026-09-11 | T40 智能体可发起有界符号执行（`dev`） | 新增 `symbolic-execute` 工具与 `SymbolicRunner` 协议：地址经 `function_at_address` 锚定到任务索引、未开启动态验证即结构化拒绝、单次审计运行上限 2 与地址上限 16 在步执行器内强制；`BinaryFactsAdapter.analyze_ref` 支持以 CAS 引用驱动 profile；worker 用既有 `binary_sandbox`/`binary_digest` 构造 runner。新增测试 2 项（拒绝路径且**断言未发生任何沙箱调用**、锚定/丢弃/上限）。全量门禁 **498 passed / 5 skipped**、ruff 通过、pyright 0 错误 | 真实 Runner 回放未执行 |
@@ -265,7 +265,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 
 ## 10. 下一步
 
-本轮本地集成已完成，入口为 [整合验收记录](code/docs/progress/2026-09-11-web-integration-acceptance.md)。下一步在用户确认发布范围后推送并创建指向 main 的 PR；本轮未获得这项新前端 PR 的发布指令。合并/部署前，在独立部署环境验证真实源码与 ELF 任务、实时事件、复核及三种报告下载。PR #59、#60 已在 main，不再等待这两个 PR 的合并。以下保留其他任务包的实机验证待办，不能因本轮界面模拟验收而标记完成。
+本轮本地集成已完成，入口为 [整合验收记录](code/docs/progress/2026-09-11-web-integration-acceptance.md)。用户已明确授权提交 PR；分支已推送并创建 [PR #61](https://github.com/NTFago/VulnWeaver/pull/61)，目标 main。下一步检查该 PR 的 CI 与评审结果，合并需另行授权。合并/部署前，在独立部署环境验证真实源码与 ELF 任务、实时事件、复核及三种报告下载。PR #59、#60 已在 main，不再等待这两个 PR 的合并。以下保留其他任务包的实机验证待办，不能因本轮界面模拟验收而标记完成。
 
 1. T32 真实 E2E 前置（按序）：①构建包含 `compile_harness` 的 `vulnweaver-afl-casr:fixed`；②向 sandbox-runner 与 analysis-worker 配置同一 `AFL_CASR_IMAGE_DIGEST` 和令牌；③以授权源码教学样本验证有界源码摘录→Harness 生成/修复→沙箱编译→小型初始种子 Fuzz→崩溃证据挂接，并以 ELF 验证直接 Fuzz 路径。
 2. T34 真实报告 Job 端到端：生成含调用路径的 Markdown/PDF/SARIF 并经 API 下载，SARIF 追加独立 Schema 校验（当前仅项目内 `validate_sarif` 信封校验）。
