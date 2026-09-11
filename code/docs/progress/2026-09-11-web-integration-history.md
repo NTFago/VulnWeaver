@@ -1,0 +1,12 @@
+# 整合前的历史完成记录归档
+
+从 DEVELOPMENT_STATUS.md 最近完成记录移入；状态描述为当时事实。
+
+| 日期 | 任务/变更 | 验证结果 | 后续工作 |
+|---|---|---|---|
+| 2026-09-10 | T36 Web 设置默认页与界面现代化改版（`feat/web-settings-first-modernization`，PR #49 已合并入 `main` `50fcbca`） | Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 0 错误 0 警告、`vite build` 成功；以临时 Mock API（契约同形数据，存系统临时目录不入库）+ 浏览器采集 17 张页面截图（桌面设置/项目/任务/认证三变体 + 移动端两张）经 judge 视觉验收全部通过；CI Python quality gate 通过 | 部署环境重建 Web 镜像后的真实浏览器回归待执行；远程分支 `origin/feat/web-settings-first-modernization` 保留未删（删远程分支需用户确认） |
+| 2026-09-10 | Q-015/Q-016 修复（`fix/fresh-deploy-defaults`）：沙箱客户端超时默认值回归、工件卷属主竞争 | `docker compose config --quiet` 通过，依赖关系核对无误（api/analysis-worker/sandbox-runner → artifact-init，orchestrator 不受影响）；**删卷重建实测**：`down -v` 后 `up -d`，`artifact-init` exit 0、11 个容器全部 Up、`analysis-worker` 稳定（此前必崩溃循环）、工件卷 `.staging`/`.objects`/`.uploads` 属主均为 10001；Web `200`、`/health/ready` ready、`/api/auth/installation` `registration_open: true`（空库） | 无 |
+| 2026-09-10 | Q-014 沙箱客户端超时默认值修正（`compose.yaml` / `.env.example`：60s → 660s） | 实时栈实测：60s 时 `binary-import` 在任务批准后精确 61s 失败（`ToolExecutionError`），沙箱容器在 Job 失败后仍在运行；置为 600s 后同一 PE 样本的 `import` Job `succeeded`，任务走完 `validating→analyzing→reporting→completed`（`result=partial`，产出 3 个工件版本） | 长耗时工具接入时按最长工具超时复核该默认值 |
+| 2026-09-10 | Q-010~Q-013 修复（`fix/budget-and-orchestration-resilience`，基于 main `0098798`，已合并入 `main` `bf956b6`）：项目预算一致性、Task 失败可见性、队列韧性、proof/fuzz 预算方向 | 见下方验证记录；ADR-023/024 已新增；契约 `--check` 无漂移 | 由用户以浏览器走通「新建项目（默认预算）→ 提交 PE 任务」；已存在项目的预算需重建或修正（无更新端点）；是否推送 / 开 PR 待用户确认 |
+| 2026-09-10 | T35 主分支全链路接线修复（`codex/fix-main-review`） | Linux Dev Container `pnpm run check`：437 passed、5 skipped、覆盖率 82.11%，Ruff/Pyright/TS/Svelte 0 错误；基础 Compose 重建成功，Web 首页与 Web→API 代理均 HTTP 200；新增二进制审计、自动报告、Harness 解包和复核历史回归 | 配置真实模型与固定 AFL/Proof 镜像后执行动态 E2E |
+| 2026-09-10 | T32 自动投递接通（`feat/t32-fuzz-auto`，提交 `4ec38a0`） | `TaskAggregateSettlementHook` 新增 `FuzzDispatchScheduler` 协议与 fuzz 调度参数：复核结算后按 `exploit_validation_enabled` opt-in 对非 FALSE_POSITIVE 的 Finding 调度 fuzz（与 T31 同一门禁，动态执行语义一致）；`FuzzJobScheduler` 新增 `FuzzTargetResolver` 注入点与 `schedule_finding_in_transaction`，`schedule_in_transaction` 改为按 `task["artifact_version_ids"]` 绑定（`Task` 无 `input_refs` 字段，修正了错误的键访问）；analysis-worker 装配 `_fuzz_scheduler` 与 `_fuzz_target` 解析器（仅内存破坏/注入类别、锚定工件须属任务范围、无摘要则关闭）。新增 `test_fuzz_dispatch.py` 3 项（请求绑定新 Job 并通过契约校验、无目标时拒绝、无解析器时拒绝）。全量门禁：435 passed、5 skipped、覆盖率 82.24%，ruff/pyright 0 | 真实镜像 E2E；种子语料已按 D-002 决策维持默认，无剩余设计项 |

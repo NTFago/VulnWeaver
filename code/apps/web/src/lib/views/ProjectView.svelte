@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Artifact, ArtifactKind, ArtifactVersion, Project, Task } from "@vulnweaver/contracts";
   import { formatDate, shortId } from "../format";
-  import { taskStatusLabels } from "../i18n";
+  import { taskStatusLabels, taskResultLabels } from "../i18n";
 
   /** 项目详情页：样本导入、任务创建与最近任务列表。 */
 
@@ -19,9 +19,11 @@
   let uploadKind: ArtifactKind = "source_archive";
   let uploadFile: File | null = null;
   let selectedVersionIds: string[] = [];
+  let sampleListExpanded = false;
+  const uploadAccept: Partial<Record<ArtifactKind, string>> = { source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz", pe: ".exe,.dll,.sys" };
 
-  function versionFileName(versionId: string): string {
-    return String(artifactVersions.get(versionId)?.generation_config.filename ?? "未命名样本");
+  function versionFileName(versionId: string, versions: Map<string, ArtifactVersion>): string {
+    return String(versions.get(versionId)?.generation_config.filename ?? "未命名样本");
   }
 
   function toggleVersion(versionId: string): void {
@@ -53,7 +55,7 @@
 
 <section class="page-heading">
   <div>
-    <button class="breadcrumb" on:click={onGoOverview}>项目</button>
+    <button class="breadcrumb" disabled={busy} on:click={onGoOverview}>项目</button>
     <h1>{project.name}</h1>
     <p><code class="mono-id">{shortId(project.id)}</code>{project.input_scope.length > 0 ? ` · ${project.input_scope.join(" / ")}` : ""}</p>
   </div>
@@ -68,7 +70,7 @@
         <span>{uploadFile?.name ?? "选择本地样本"}</span>
         <small>{uploadFile ? `${(uploadFile.size / 1048576).toFixed(2)} MB` : "ZIP / TAR / ELF / PE"}</small>
       </label>
-      <input id="sample-file" class="visually-hidden" type="file" on:change={(e) => uploadFile = e.currentTarget.files?.[0] ?? null} />
+      <input id="sample-file" class="visually-hidden" type="file" accept={uploadAccept[uploadKind] ?? ""} on:change={(e) => uploadFile = e.currentTarget.files?.[0] ?? null} />
       <button class="primary block" on:click={upload} disabled={busy || !uploadFile}>导入工件库</button>
     </div>
   </section>
@@ -77,14 +79,19 @@
     {#if artifacts.length === 0}
       <div class="compact-empty">导入样本后，可在此创建分析任务。</div>
     {:else}
-      <div class="sample-options">
-        {#each artifacts as artifact (artifact.id)}
+      <div class="sample-options" class:expanded={sampleListExpanded}>
+        {#each (sampleListExpanded ? artifacts : artifacts.slice(0, 3)) as artifact (artifact.id)}
           <label class:selected={selectedVersionIds.includes(artifact.current_version_id)} class="sample-option">
             <input type="checkbox" checked={selectedVersionIds.includes(artifact.current_version_id)} on:change={() => toggleVersion(artifact.current_version_id)} />
-            <span><b>{versionFileName(artifact.current_version_id)}</b><small>{artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
+            <span><b>{versionFileName(artifact.current_version_id, artifactVersions)}</b><small>{artifact.kind === "source_archive" ? "源码压缩包" : artifact.kind === "source_repository" ? "源码仓库" : artifact.kind.toUpperCase()} · sha256:{artifactVersions.get(artifact.current_version_id)?.digest.slice(0, 12)}…</small></span>
           </label>
         {/each}
       </div>
+      {#if artifacts.length > 3}
+        <button class="sample-list-toggle" type="button" aria-expanded={sampleListExpanded} on:click={() => sampleListExpanded = !sampleListExpanded}>
+          <span>{sampleListExpanded ? "收起样本" : `展开全部 ${artifacts.length} 个样本`}</span><small>已选 {selectedVersionIds.length} 个</small><span class="arrow" aria-hidden="true">⌄</span>
+        </button>
+      {/if}
       <button class="primary block" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务{selectedVersionIds.length > 0 ? `（${selectedVersionIds.length}）` : ""}</button>
     {/if}
   </section>
@@ -96,9 +103,9 @@
   {:else}
     <div class="task-list">
       {#each tasks as task (task.id)}
-        <button on:click={() => onOpenTask(task)}>
+        <button disabled={busy} on:click={() => onOpenTask(task)}>
           <span class={`status-dot ${task.status}`}></span>
-          <span class="task-cell"><b>{taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
+          <span class="task-cell"><b>{task.result ? taskResultLabels[task.result] : taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
           <time>{formatDate(task.updated_at)}</time>
           <span class="arrow" aria-hidden="true">→</span>
         </button>

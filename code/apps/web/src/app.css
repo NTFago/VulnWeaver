@@ -690,8 +690,13 @@ textarea { resize: vertical; min-height: 44px; }
   border-top: 1px solid var(--line);
 }
 .proof-actions label { display: grid; gap: 8px; font-size: 12.5px; color: var(--muted); }
-.proof-actions.review-actions { grid-template-columns: minmax(170px, 1fr) minmax(240px, 2fr) auto; align-items: start; }
-.proof-actions.annotation-actions { grid-template-columns: minmax(240px, 2fr) auto; align-items: start; }
+.finding-detail { container-type: inline-size; }
+.proof-actions.review-actions { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; align-items: start; }
+.proof-actions.annotation-actions { grid-template-columns: minmax(0, 2fr) auto; align-items: start; }
+@container (max-width: 560px) {
+  .proof-actions.review-actions, .proof-actions.annotation-actions { grid-template-columns: minmax(0, 1fr); }
+  .proof-actions.review-actions .secondary, .proof-actions.annotation-actions .secondary { width: 100%; }
+}
 .proof-actions.review-actions .secondary, .proof-actions.annotation-actions .secondary { align-self: end; }
 .proof-actions input, .proof-actions select, .proof-actions textarea { font-size: 14px; padding: 9px 12px; }
 .proof-actions .secondary, .proof-actions .danger { margin: 0; white-space: nowrap; }

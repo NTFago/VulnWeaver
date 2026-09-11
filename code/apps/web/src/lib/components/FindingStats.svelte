@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Finding, FindingStatus, Severity } from "@vulnweaver/contracts";
+  import { findingCounts } from "../report-view";
   import { findingStatusLabels, severityLabels } from "../i18n";
 
   /** 漏洞统计：按严重等级（横向条形）与确认状态（计数徽章）汇总。 */
@@ -16,10 +17,11 @@
     unverifiable: "muted",
   };
 
-  $: total = findings.length;
-  $: maxSeverityCount = Math.max(1, ...severityOrder.map((sev) => findings.filter((finding) => finding.severity === sev).length));
+  $: counts = findingCounts(findings);
+  $: total = counts.active.length;
+  $: maxSeverityCount = Math.max(1, ...severityOrder.map((sev) => counts.active.filter((finding) => finding.severity === sev).length));
   $: severityRows = severityOrder.map((sev) => {
-    const count = findings.filter((finding) => finding.severity === sev).length;
+    const count = counts.active.filter((finding) => finding.severity === sev).length;
     return { key: sev, label: severityLabels[sev], count, percent: Math.round((count / maxSeverityCount) * 100) };
   });
   $: statusRows = statusOrder.map((status) => ({
@@ -32,8 +34,8 @@
 
 <section class="panel finding-stats" aria-label="漏洞统计">
   <header class="panel-head">
-    <div><h2>漏洞统计</h2><p>按严重等级与确认状态汇总，随任务事件实时更新。</p></div>
-    <span class="badge accent">共 {total} 个</span>
+    <div><h2>漏洞统计</h2><p>等级分布排除已标记误报；待复核发现不代表已确认漏洞。</p></div>
+    <span class="badge accent">{total} 个有效发现</span>
   </header>
   <div class="stats-body">
     <div class="severity-bars">

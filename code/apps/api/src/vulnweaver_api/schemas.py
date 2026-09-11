@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from vulnweaver_contracts import (
@@ -248,3 +248,69 @@ class ArtifactDetail(StrictModel):
 
 class HealthResponse(StrictModel):
     status: Literal["ok", "ready"]
+
+
+class AuditTrailDecision(StrictModel):
+    sequence: int
+    decision: str
+    reason: str
+    created_at: str
+
+
+class AuditTrailToolStep(StrictModel):
+    step_id: str
+    tool: str | None
+    succeeded: bool
+    failure_code: str | None
+    observation: dict[str, Any] | None
+    observation_status: Literal["not_recorded"]
+
+
+class AuditTrailAgentRun(StrictModel):
+    id: str
+    status: str
+    model: str
+    prompt_hash: str
+    input_refs: list[str]
+    result_refs: list[str]
+    token_usage: dict[str, int]
+    duration_ms: int | None
+    failure: dict[str, Any] | None
+    created_at: str
+    updated_at: str
+    role: Literal[
+        "semantic_audit",
+        "semantic_audit_agent",
+        "reverse_analysis_planner",
+        "readable_pseudocode",
+        "fuzz_harness_generator",
+        "critical_logic_analyst",
+        "exploit_generator",
+        "independent_reviewer",
+        "unknown",
+    ]
+    job_id: str | None
+    job_attempt: int | None
+    association: Literal[
+        "exact_run_id_rule_with_attempt",
+        "exact_run_id_rule",
+        "unknown",
+    ]
+    decisions: list[AuditTrailDecision]
+    tool_steps: list[AuditTrailToolStep]
+
+
+class BinaryAnalysisJobSummary(StrictModel):
+    job_id: str
+    status: str
+    attempt: int
+    input_refs: list[str]
+    output_version_ids: list[str]
+    facts_status: Literal["not_exposed"]
+
+
+class AuditTrailResponse(StrictModel):
+    schema_version: Literal["1.0.0"]
+    task_id: str
+    agent_runs: list[AuditTrailAgentRun]
+    binary_analysis_jobs: list[BinaryAnalysisJobSummary]

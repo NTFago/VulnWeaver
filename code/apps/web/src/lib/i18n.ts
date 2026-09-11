@@ -4,7 +4,6 @@
  */
 
 import type {
-  AgentRun,
   EvidenceStrength,
   EvidenceType,
   FindingCategory,
@@ -319,34 +318,4 @@ export function eventTitle(event: QueueEvent, jobKindById: Map<string, JobKind>)
     return payload.failure ? `${base}：${failureCodeText(payload.failure.code)}` : base;
   }
   return rawType;
-}
-
-/* ---------- 智能体协作 ---------- */
-
-const agentRoleKeywords: Array<{ keywords: string[]; label: string }> = [
-  { keywords: ["key_logic", "key logic", "critical", "关键"], label: "关键逻辑" },
-  { keywords: ["reverse", "ghidra", "deobfusc", "disassembl", "逆向"], label: "逆向分析" },
-  { keywords: ["fuzz", "afl", "harness", "模糊"], label: "模糊测试" },
-  { keywords: ["exploit", "利用"], label: "利用生成" },
-  { keywords: ["proof", "verif"], label: "验证" },
-  { keywords: ["review", "复核"], label: "独立复核" },
-  { keywords: ["static", "semgrep", "scan", "audit", "静态", "语义"], label: "静态审计" },
-  { keywords: ["import", "ingest", "parse", "导入"], label: "导入解析" },
-  { keywords: ["plan", "orchestr", "dispatch", "schedul", "调度"], label: "调度" },
-  { keywords: ["report", "summar", "报告"], label: "报告" },
-];
-
-/** 依据运行记录中可能的智能体标识字段与模型名推断中文角色名；无法识别时显示「模型分析」。 */
-export function agentRoleLabel(run: AgentRun): string {
-  const hints = run as unknown as Record<string, unknown>;
-  const haystack = [hints.agent, hints.agent_type, hints.role, hints.stage, hints.kind, run.model]
-    .filter((hint): hint is string => typeof hint === "string" && hint.trim().length > 0)
-    .join(" ")
-    .toLowerCase();
-  if (haystack) {
-    for (const entry of agentRoleKeywords) {
-      if (entry.keywords.some((keyword) => haystack.includes(keyword))) return entry.label;
-    }
-  }
-  return "模型分析";
 }

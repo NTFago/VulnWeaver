@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +19,7 @@ from vulnweaver_api.app import (
 )
 from vulnweaver_api.auth import SESSION_COOKIE, token_digest
 from vulnweaver_contracts import (
+    AgentRun,
     ArtifactVersion,
     Evidence,
     EvidenceRelation,
@@ -32,6 +35,7 @@ from vulnweaver_contracts import (
     JobStatus,
     PairFunction,
     ResourceBudget,
+    RunStatus,
     Severity,
     StructuredFailure,
 )
@@ -668,6 +672,250 @@ def test_task_observability_summarizes_jobs_events_and_findings(client: TestClie
     assert payload["events_total"] == 1
     assert payload["findings_total"] == 0
     assert payload["findings_by_status"] == {}
+
+
+def test_audit_trail_uses_exact_run_id_rules_and_never_guesses(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf, key="project:audit-trail")
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "artifact:audit-trail"},
+        content=b"PK\x03\x04harmless",
+    )
+    version_id = upload.json()["versions"][0]["id"]
+    task_id = client.post(
+        f"/api/projects/{project['id']}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:audit-trail"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version_id],
+            "resource_budget": _budget(),
+        },
+    ).json()["id"]
+    audit_job_id = "job:audit-trail"
+    digest = hashlib.sha256(
+        "\0".join(("semantic-audit", audit_job_id, "1")).encode()
+    ).hexdigest()[:32]
+    historic_digest = hashlib.sha256(
+        "\0".join(("semantic-audit", audit_job_id, "0")).encode()
+    ).hexdigest()[:32]
+    review_job_id = "job:review-trail"
+    review_identity = hashlib.sha256(
+        json.dumps(
+            ["finding:audit-trail", f"{review_job_id}:attempt:2"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    agent_run = AgentRun(
+        schema_version="1.0.0",
+        id=f"agent-run:{digest}-agent",
+        task_id=task_id,
+        status=RunStatus.SUCCEEDED,
+        model="unrelated-model-name",
+        prompt_hash="sha256:" + "b" * 64,
+        input_refs=["cas://sha256/" + "a" * 64],
+        decisions=[
+            {
+                "sequence": 0,
+                "decision": "step_executed",
+                "reason": "step inspect-1 via code-function-read@1.0.0",
+                "created_at": "2026-09-11T00:00:00Z",
+            }
+        ],
+        token_usage={"input_tokens": 2, "output_tokens": 3},
+        result_refs=[],
+        failure=None,
+        created_at="2026-09-11T00:00:00Z",
+        updated_at="2026-09-11T00:00:00Z",
+    )
+
+    async def seed() -> None:
+        database = client.app.state.database
+        assert isinstance(database, Database)
+        async with database.transaction() as repositories:
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id=audit_job_id,
+                    task_id=task_id,
+                    kind=JobKind.SEMANTIC_AUDIT,
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.SUCCEEDED,
+                    idempotency_key="job:audit-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=1,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id="job:binary-trail",
+                    task_id=task_id,
+                    kind=JobKind.IMPORT,
+                    tool={"name": "binary-import", "version": "1.0.0", "image_digest": None},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.QUEUED,
+                    idempotency_key="job:binary-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=0,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id="job:fuzz-trail",
+                    task_id=task_id,
+                    kind=JobKind.FUZZ,
+                    arguments={"harness_context": {}},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.SUCCEEDED,
+                    idempotency_key="job:fuzz-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=2,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id=review_job_id,
+                    task_id=task_id,
+                    kind=JobKind.REVIEW,
+                    arguments={"finding_id": "finding:audit-trail"},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.SUCCEEDED,
+                    idempotency_key="job:review-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=2,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
+            await repositories.agent_runs.add(agent_run)
+            unknown = dict(agent_run)
+            unknown["id"] = "agent-run:unlinked"
+            await repositories.agent_runs.add(cast(AgentRun, unknown))
+            historic = dict(agent_run)
+            historic["id"] = f"agent-run:{historic_digest}"
+            await repositories.agent_runs.add(cast(AgentRun, historic))
+            planner = dict(agent_run)
+            planner["id"] = "agent-run:reverse-plan:job:binary-trail"
+            await repositories.agent_runs.add(cast(AgentRun, planner))
+            harness = dict(agent_run)
+            harness["id"] = "agent-run:harness:job:fuzz-trail:attempt:2:repair:1"
+            await repositories.agent_runs.add(cast(AgentRun, harness))
+            review = dict(agent_run)
+            review["id"] = f"agent-run:review:{review_identity}"
+            await repositories.agent_runs.add(cast(AgentRun, review))
+            unlinked_reviewer = dict(agent_run)
+            unlinked_reviewer["id"] = "agent-run:review:unlinked"
+            await repositories.agent_runs.add(cast(AgentRun, unlinked_reviewer))
+
+    asyncio.run(seed())
+    response = client.get(f"/api/tasks/{task_id}/audit-trail")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["schema_version"] == "1.0.0"
+    linked = next(item for item in payload["agent_runs"] if item["id"] == agent_run["id"])
+    assert linked["role"] == "semantic_audit_agent"
+    assert linked["job_id"] == audit_job_id
+    assert linked["job_attempt"] == 1
+    assert linked["association"] == "exact_run_id_rule_with_attempt"
+    assert linked["tool_steps"] == [
+        {
+            "step_id": "inspect-1",
+            "tool": "code-function-read@1.0.0",
+            "succeeded": True,
+            "failure_code": None,
+            "observation": None,
+            "observation_status": "not_recorded",
+        }
+    ]
+    unknown = next(item for item in payload["agent_runs"] if item["id"] == "agent-run:unlinked")
+    assert unknown["role"] == "unknown"
+    assert unknown["job_id"] is None
+    assert unknown["association"] == "unknown"
+    historic = next(
+        item for item in payload["agent_runs"] if item["id"] == f"agent-run:{historic_digest}"
+    )
+    assert historic["role"] == "unknown"
+    assert historic["job_id"] is None
+    assert historic["job_attempt"] is None
+    planner = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == "agent-run:reverse-plan:job:binary-trail"
+    )
+    assert planner["role"] == "reverse_analysis_planner"
+    assert planner["job_id"] == "job:binary-trail"
+    assert planner["job_attempt"] is None
+    assert planner["association"] == "exact_run_id_rule"
+    harness = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == "agent-run:harness:job:fuzz-trail:attempt:2:repair:1"
+    )
+    assert harness["role"] == "fuzz_harness_generator"
+    assert harness["job_id"] == "job:fuzz-trail"
+    assert harness["job_attempt"] == 2
+    review = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == f"agent-run:review:{review_identity}"
+    )
+    assert review["role"] == "independent_reviewer"
+    assert review["job_id"] == review_job_id
+    assert review["job_attempt"] == 2
+    unlinked_reviewer = next(
+        item for item in payload["agent_runs"] if item["id"] == "agent-run:review:unlinked"
+    )
+    assert unlinked_reviewer["role"] == "unknown"
+    assert unlinked_reviewer["job_id"] is None
+    assert payload["binary_analysis_jobs"] == [
+        {
+            "job_id": "job:binary-trail",
+            "status": "queued",
+            "attempt": 0,
+            "input_refs": ["cas://sha256/" + "a" * 64],
+            "output_version_ids": [],
+            "facts_status": "not_exposed",
+        }
+    ]
 
 
 def test_finding_evidence_review_and_annotation_api_are_auditable(
