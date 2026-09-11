@@ -35,6 +35,7 @@ from vulnweaver_contracts import (
 from vulnweaver_model_gateway import ModelCallResult
 from vulnweaver_orchestrator import (
     AUDIT_TOOLS,
+    AuditStepExecutor,
     AuditWorkspace,
     AuditWorkspaceLimits,
     CodeAuditAgent,
@@ -44,7 +45,12 @@ from vulnweaver_orchestrator import (
 from vulnweaver_orchestrator.source_facts import SourceReviewFacts
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_source_analysis import SourceExcerpt
-from vulnweaver_tool_runtime import PolicyContext, PolicyEngine, ToolRegistry
+from vulnweaver_tool_runtime import (
+    PolicyContext,
+    PolicyEngine,
+    ScheduledToolCall,
+    ToolRegistry,
+)
 
 from tests.persistence.factories import artifact, artifact_version, job, project, task
 
@@ -216,7 +222,7 @@ def audit_job(identifier: str, task_id: str) -> Job:
 
 def test_audit_tools_register_and_enforce_read_only_boundaries() -> None:
     registry = ToolRegistry(AUDIT_TOOLS)
-    assert len(registry) == 8
+    assert len(registry) == 9
     for spec in registry.snapshot():
         validate_contract("ToolSpec", cast(Any, spec))
         assert spec["approval_required"] is False
@@ -605,6 +611,114 @@ def test_static_leads_are_leads_and_never_become_findings_by_themselves(
             # The scanner lead is still just a candidate; the agent added nothing.
             assert len(findings) == 1
             assert findings[0]["cwe_id"] == "CWE-78"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class FakeSymbolicRunner:
+    """Stand-in for the worker-backed Sandbox Runner call."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, tuple[int, ...]]] = []
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, target_addresses: tuple[int, ...]
+    ) -> JsonObject:
+        self.calls.append((version_id, str(artifact_kind), target_addresses))
+        return {
+            "targets": list(target_addresses),
+            "status": "completed",
+            "symbolic_facts": len(target_addresses),
+        }
+
+
+def _symbolic_call(arguments: JsonObject, *, step_id: str = "sym") -> ScheduledToolCall:
+    spec = ToolRegistry(AUDIT_TOOLS).resolve("symbolic-execute", "1.0.0")
+    return ScheduledToolCall(
+        step_id=step_id,
+        tool=spec,
+        input_refs=(),
+        arguments=arguments,
+        task_id="task:symbolic",
+        plan_id="plan:symbolic",
+    )
+
+
+def test_symbolic_execute_is_refused_without_a_runner_or_a_project_opt_in(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, _ = await seed(
+            database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
+        )
+        workspace = AuditWorkspace(
+            database, LocalContentAddressedStore(tmp_path), f"task:{suffix}"
+        )
+        try:
+            await workspace.load()
+            call = _symbolic_call({"addresses": [0x1050]})
+
+            no_runner = await AuditStepExecutor(workspace).execute(call)
+            assert no_runner["failed"] is True
+            assert no_runner["reason_code"] == "symbolic.no_runner_configured"
+
+            runner = FakeSymbolicRunner()
+            no_opt_in = await AuditStepExecutor(workspace, symbolic_runner=runner).execute(call)
+            assert no_opt_in["reason_code"] == "symbolic.dynamic_verification_disabled"
+            assert runner.calls == [], "no sandbox run may happen without the project opt-in"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_symbolic_execute_anchors_addresses_on_the_index_and_caps_runs(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, _ = await seed(
+            database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
+        )
+        workspace = AuditWorkspace(
+            database, LocalContentAddressedStore(tmp_path), f"task:{suffix}"
+        )
+        try:
+            await workspace.load()
+            function_version = workspace.function_refs()[0].version_id
+            runner = FakeSymbolicRunner()
+            executor = AuditStepExecutor(
+                workspace, symbolic_runner=runner, dynamic_verification_enabled=True
+            )
+
+            first = await executor.execute(
+                _symbolic_call({"addresses": [0x1050, 0xDEADBEEF]}, step_id="sym-1")
+            )
+            assert first["executed"] is True
+            assert first["dropped_addresses"] == 1, "an unindexed address is never executed"
+            assert runner.calls[0][0] == function_version
+            assert runner.calls[0][2] == (0x1050,)
+
+            # A second planned run is allowed; by then the per-attempt budget is spent.
+            await executor.execute(_symbolic_call({"addresses": [0x1050]}, step_id="sym-2"))
+            assert len(runner.calls) == 2
+            exhausted = await executor.execute(
+                _symbolic_call({"addresses": [0x1050]}, step_id="sym-3")
+            )
+            assert exhausted["failed"] is True
+            assert exhausted["reason_code"] == "symbolic.budget_exhausted"
+            assert len(runner.calls) == 2, "the cap is enforced here, not by the plan"
+
+            # Addresses that resolve to nothing are reported, and nothing runs.
+            idle = FakeSymbolicRunner()
+            unresolved = await AuditStepExecutor(
+                workspace, symbolic_runner=idle, dynamic_verification_enabled=True
+            ).execute(_symbolic_call({"addresses": [0x1]}))
+            assert unresolved["reason_code"] == "symbolic.no_anchored_targets"
+            assert idle.calls == []
         finally:
             await database.dispose()
 

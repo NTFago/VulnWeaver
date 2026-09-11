@@ -54,6 +54,7 @@ from vulnweaver_orchestrator.audit_tools import (
     AuditWorkspace,
     AuditWorkspaceLimits,
     ReportedFinding,
+    SymbolicRunner,
 )
 
 AUDIT_AGENT_OBJECTIVE = (
@@ -73,10 +74,15 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "could not substantiate. Report source findings with path and start_line, and "
     "binary findings with the function address, copied exactly from what a tool "
     "returned; anything that does not resolve to an indexed function is discarded. "
-    "Set verification_request to fuzz only when dynamic confirmation would settle "
-    "a memory-safety question you cannot settle by reading. Arguments must never "
-    "contain absolute paths or parent-directory segments. When you have reported "
-    "everything you can substantiate, return zero steps and explain why."
+    "Use symbolic-execute only for a binary function whose reachability or "
+    "sink behaviour you cannot settle by reading: it runs inside the sandbox, may "
+    "run at most twice per audit, and is refused unless the project enabled "
+    "dynamic validation. Its result is an observation to reason about, never a "
+    "finding on its own. Set verification_request to fuzz only when dynamic "
+    "confirmation would settle a memory-safety question you cannot settle by "
+    "reading. Arguments must never contain absolute paths or parent-directory "
+    "segments. When you have reported everything you can substantiate, return "
+    "zero steps and explain why."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
@@ -143,6 +149,8 @@ class CodeAuditAgent:
         sink: AgentRunSink | None = None,
         budget: AgentLoopBudget | None = None,
         limits: AuditWorkspaceLimits | None = None,
+        symbolic_runner: SymbolicRunner | None = None,
+        dynamic_verification_enabled: bool = False,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
@@ -150,6 +158,8 @@ class CodeAuditAgent:
         self._gateway = gateway
         self._store = store
         self._sink = sink
+        self._symbolic_runner = symbolic_runner
+        self._dynamic_verification_enabled = dynamic_verification_enabled
         self._budget = budget or AgentLoopBudget(
             max_planning_rounds=6,
             max_plan_rejections=4,
@@ -171,7 +181,13 @@ class CodeAuditAgent:
     ) -> CodeAuditOutcome:
         workspace = AuditWorkspace(self._database, self._store, task_id, limits=self._limits)
         await workspace.load()
-        executor = AuditStepExecutor(workspace)
+        executor = AuditStepExecutor(
+            workspace,
+            symbolic_runner=self._symbolic_runner,
+            dynamic_verification_enabled=(
+                self._dynamic_verification_enabled or await self._project_opt_in(task_id)
+            ),
+        )
         registry = ToolRegistry(AUDIT_TOOLS)
         loop = AgentLoop(
             self._gateway,
@@ -205,6 +221,14 @@ class CodeAuditAgent:
             degraded=result.status is AgentLoopStatus.DEGRADED,
             fallback_code=str(fallback["code"]) if fallback is not None else None,
         )
+
+    async def _project_opt_in(self, task_id: str) -> bool:
+        """Dynamic validation is a project-level opt-in, resolved per task."""
+
+        async with self._database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            project = await repositories.projects.get(task["project_id"])
+        return bool(project["exploit_validation_enabled"])
 
     async def _context(self, task_id: str, workspace: AuditWorkspace) -> JsonObject:
         """Everything the agent may rely on before it calls its first tool."""

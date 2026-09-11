@@ -18,7 +18,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Protocol, cast
 
 from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError
 from vulnweaver_contracts import (
@@ -52,6 +52,7 @@ CALL_NEIGHBORHOOD_TOOL = "call-neighborhood"
 ARTIFACT_FACTS_TOOL = "artifact-facts"
 STATIC_LEADS_TOOL = "static-leads"
 CRITICAL_LOGIC_TOOL = "critical-logic"
+SYMBOLIC_EXECUTE_TOOL = "symbolic-execute"
 FINDING_REPORT_TOOL = "finding-report"
 
 _MAX_LIST_LIMIT = 200
@@ -62,6 +63,11 @@ _MAX_SOURCE_PATTERN_CHARS = 256
 _MAX_NEIGHBORHOOD_DEPTH = 3
 _MAX_FACTS_ITEMS = 100
 _MAX_REPORTED_FINDINGS = 32
+# Dynamic execution is expensive (the profile re-runs the full binary analysis
+# alongside the targeted symbolic pass) and only ever runs inside the Sandbox
+# Runner. Both limits are enforced here, not in the model's plan.
+_MAX_SYMBOLIC_ADDRESSES = 16
+_MAX_SYMBOLIC_RUNS = 2
 
 _SOURCE_KINDS = (ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY)
 _BINARY_KINDS = (ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED)
@@ -197,6 +203,21 @@ AUDIT_TOOLS: tuple[JsonObject, ...] = (
     ),
     _spec(STATIC_LEADS_TOOL, _object({})),
     _spec(CRITICAL_LOGIC_TOOL, _object({})),
+    _spec(
+        SYMBOLIC_EXECUTE_TOOL,
+        _object(
+            {
+                "addresses": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": _MAX_SYMBOLIC_ADDRESSES,
+                    "items": {"type": "integer", "minimum": 0},
+                },
+                "reason": {"type": "string", "minLength": 1, "maxLength": 1024},
+            },
+            ("addresses",),
+        ),
+    ),
     _spec(
         FINDING_REPORT_TOOL,
         cast(
@@ -355,6 +376,26 @@ class AuditWorkspace:
 
     def function_refs(self) -> tuple[AuditFunctionRef, ...]:
         return tuple(self._functions)
+
+    def function_at_address(self, address: int) -> AuditFunctionRef | None:
+        """Resolve an address onto the immutable index.
+
+        A model-supplied address is only ever a claim; the index decides whether
+        it names a function. The interval rule matches ``PairRepository``.
+        """
+
+        for ref in self._functions:
+            location = ref.function["binary_location"]
+            if location is None:
+                continue
+            start = location["virtual_address"]
+            end = location.get("instruction_end", start + 1)
+            if start <= address < max(start + 1, end):
+                return ref
+        return None
+
+    def version_kind(self, version_id: str) -> ArtifactKind:
+        return self._version_kinds.get(version_id, ArtifactKind.DERIVED)
 
     # -- tools -------------------------------------------------------------
 
@@ -704,12 +745,29 @@ class AuditWorkspace:
             return source.read()
 
 
+class SymbolicRunner(Protocol):
+    """Worker-backed targeted symbolic execution through the Sandbox Runner."""
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, target_addresses: tuple[int, ...]
+    ) -> JsonObject: ...
+
+
 class AuditStepExecutor:
     """Run one approved plan step against the workspace and bound its output."""
 
-    def __init__(self, workspace: AuditWorkspace) -> None:
+    def __init__(
+        self,
+        workspace: AuditWorkspace,
+        *,
+        symbolic_runner: SymbolicRunner | None = None,
+        dynamic_verification_enabled: bool = False,
+    ) -> None:
         self.workspace = workspace
         self.reported: list[ReportedFinding] = []
+        self.symbolic_runner = symbolic_runner
+        self.dynamic_verification_enabled = dynamic_verification_enabled
+        self.symbolic_runs = 0
 
     async def execute(self, call: ScheduledToolCall) -> JsonObject:
         name = call.tool["name"]
@@ -745,11 +803,78 @@ class AuditStepExecutor:
                 return await self.workspace.static_leads()
             if name == CRITICAL_LOGIC_TOOL:
                 return await self.workspace.critical_logic()
+            if name == SYMBOLIC_EXECUTE_TOOL:
+                return await self._symbolic(call)
             if name == FINDING_REPORT_TOOL:
                 return self._report(call)
         except (ArtifactStoreError, OSError, KeyError, ValueError) as error:
             return _failed(f"{name}.tool_error", type(error).__name__)
         return _failed("audit.unknown_tool", name)
+
+    async def _symbolic(self, call: ScheduledToolCall) -> JsonObject:
+        """Run one bounded, PAIR-anchored symbolic pass inside the sandbox.
+
+        The model only supplies addresses. Nothing here trusts them: every
+        address must resolve to an indexed binary function, execution only
+        happens when the project opted into dynamic validation, and the number
+        of runs per attempt is capped independently of what the plan asked for.
+        """
+
+        if self.symbolic_runner is None:
+            return _failed(
+                "symbolic.no_runner_configured", "no sandbox runner is configured"
+            )
+        if not self.dynamic_verification_enabled:
+            return _failed(
+                "symbolic.dynamic_verification_disabled",
+                "the project has not enabled dynamic validation",
+            )
+        if self.symbolic_runs >= _MAX_SYMBOLIC_RUNS:
+            return _failed("symbolic.budget_exhausted", str(_MAX_SYMBOLIC_RUNS))
+        raw = call.arguments.get("addresses")
+        candidates = cast(list[object], raw) if isinstance(raw, list) else []
+        requested = [
+            item for item in candidates if isinstance(item, int) and not isinstance(item, bool)
+        ]
+        anchored: dict[str, list[int]] = {}
+        dropped = 0
+        for address in sorted(set(requested))[:_MAX_SYMBOLIC_ADDRESSES]:
+            ref = self.workspace.function_at_address(address)
+            if ref is None:
+                dropped += 1
+                continue
+            anchored.setdefault(ref.version_id, []).append(address)
+        if not anchored:
+            return _failed(
+                "symbolic.no_anchored_targets",
+                f"{dropped} requested address(es) do not resolve to an indexed function",
+            )
+        observations: list[JsonObject] = []
+        for version_id in sorted(anchored):
+            if self.symbolic_runs >= _MAX_SYMBOLIC_RUNS:
+                break
+            self.symbolic_runs += 1
+            result = await self.symbolic_runner(
+                version_id=version_id,
+                artifact_kind=self.workspace.version_kind(version_id),
+                target_addresses=tuple(anchored[version_id]),
+            )
+            observations.append(
+                {
+                    "artifact_version_id": version_id,
+                    "targets": cast(JsonValue, anchored[version_id]),
+                    "result": result,
+                }
+            )
+        return cast(
+            JsonObject,
+            {
+                "executed": True,
+                "runs": self.symbolic_runs,
+                "dropped_addresses": dropped,
+                "observations": observations,
+            },
+        )
 
     def _report(self, call: ScheduledToolCall) -> JsonObject:
         if len(self.reported) >= _MAX_REPORTED_FINDINGS:
@@ -879,9 +1004,11 @@ __all__ = [
     "FUNCTION_READ_TOOL",
     "IN_PROCESS_DIGEST",
     "STATIC_LEADS_TOOL",
+    "SYMBOLIC_EXECUTE_TOOL",
     "AuditFunctionRef",
     "AuditStepExecutor",
     "AuditWorkspace",
     "AuditWorkspaceLimits",
     "ReportedFinding",
+    "SymbolicRunner",
 ]

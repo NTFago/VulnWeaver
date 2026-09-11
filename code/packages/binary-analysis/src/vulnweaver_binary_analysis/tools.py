@@ -118,13 +118,30 @@ class BinaryFactsAdapter:
         limits: BinaryAnalysisLimits,
         cancellation: asyncio.Event,
     ) -> ToolContribution:
+        del path
+        return await self.analyze_ref(cast(ArtifactKind, metadata.format), limits, cancellation)
+
+    async def analyze_ref(
+        self,
+        artifact_kind: ArtifactKind,
+        limits: BinaryAnalysisLimits,
+        cancellation: asyncio.Event,
+    ) -> ToolContribution:
+        """Analyze the pinned input reference without a locally extracted sample.
+
+        The sandbox branch only ever needed the artifact kind from the local
+        path and metadata, so a caller that holds a CAS reference (the audit
+        agent's symbolic step, for example) can drive the same profile without
+        materialising the file on the worker.
+        """
+
         request = SandboxRequest(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=f"binary-facts:{self._input_ref.removeprefix('cas://sha256/')}",
             tool_name="binary-facts",
             tool_version="1.0.0",
             image_digest=self._image_digest,
-            artifact_kind=cast(ArtifactKind, metadata.format),
+            artifact_kind=artifact_kind,
             input_ref=self._input_ref,
             arguments={
                 "max_functions": limits.max_functions,
