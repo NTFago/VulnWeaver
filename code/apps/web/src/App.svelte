@@ -98,6 +98,14 @@
   function functionPseudocode(fn: PairFunction): string | null {
     const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
     if (typeof value === "string" && value.trim()) return value;
+    // The pair importer stores Ghidra decompilations as a list of
+    // {address, function_name, text, tool_name} entries.
+    if (Array.isArray(value)) {
+      const texts = value
+        .map((item) => String((item as { text?: unknown } | null)?.text ?? ""))
+        .filter((text) => text.trim());
+      return texts.length ? texts.join("\n\n") : null;
+    }
     return null;
   }
 
