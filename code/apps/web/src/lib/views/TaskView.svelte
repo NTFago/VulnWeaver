@@ -32,6 +32,8 @@
     taskResultLabels,
     taskStatusLabels,
   } from "../i18n";
+  import ReportCenter from "../components/ReportCenter.svelte";
+  import { pseudocodeText } from "../report-view";
   import TaskPipeline from "../components/TaskPipeline.svelte";
   import FindingStats from "../components/FindingStats.svelte";
   import AgentPanel from "../components/AgentPanel.svelte";
@@ -99,20 +101,6 @@
     return Array.isArray(value) ? (value as CriticalLogicEntry[]) : [];
   }
 
-  function functionPseudocode(fn: PairFunction): string | null {
-    const value = (fn.attributes as Record<string, unknown> | undefined)?.pseudocode;
-    if (typeof value === "string" && value.trim()) return value;
-    // The pair importer stores Ghidra decompilations as a list of
-    // {address, function_name, text, tool_name} entries.
-    if (Array.isArray(value)) {
-      const texts = value
-        .map((item) => String((item as { text?: unknown } | null)?.text ?? ""))
-        .filter((text) => text.trim());
-      return texts.length ? texts.join("\n\n") : null;
-    }
-    return null;
-  }
-
   function relatedFunctions(direction: "callers" | "callees"): PairFunction[] {
     if (!pairNeighborhood || !selectedFunctionId) return [];
     const nodes = (pairNeighborhood.nodes ?? []) as PairNodeLike[];
@@ -153,27 +141,6 @@
     return [tool, reason, exitCode].filter(Boolean).join(" · ");
   }
 
-  function reportJobs(): Job[] {
-    return jobs.filter((job) => job.kind === "report");
-  }
-
-  function reportStatusText(job: Job): string {
-    const format = typeof job.arguments?.format === "string" ? job.arguments.format.toUpperCase() : "报告";
-    if (job.status === "failed") {
-      const reason = job.failure?.message ?? "未返回具体原因";
-      return `${format} 报告生成失败：${reason}${job.failure?.code ? `（${job.failure.code}）` : ""}`;
-    }
-    if (job.status === "succeeded") return `${format} 报告已生成`;
-    return `${format} 报告生成中…`;
-  }
-
-  function reportFileName(versionId: string): string {
-    const format = artifactVersions.get(versionId)?.generation_config.format;
-    if (format === "pdf") return "vulnweaver-report.pdf";
-    if (format === "sarif") return "vulnweaver-report.sarif";
-    return "vulnweaver-report.md";
-  }
-
   $: failedJobs = jobs.filter((job) => job.status === "failed");
   $: confirmedFindings = findings.filter((finding) => finding.status === "confirmed").length;
   $: activeReportJobs = jobs.filter((job) => job.kind === "report" && ["pending", "queued", "running", "waiting_permission"].includes(job.status));
@@ -202,7 +169,7 @@
 <section class="page-heading task-heading">
   <div>
     <button class="breadcrumb" on:click={onOpenProject}>{project?.name ?? "项目"}</button>
-    <h1>{taskStatusLabels[task.status]}</h1>
+    <span class="task-kicker">{taskType === "source" ? "源码" : taskType === "binary" ? "二进制" : "混合样本"}审计工作台</span><h1>审计任务 · {task.id.split(":").pop()?.slice(0, 8)}</h1>
     {#if task.failure}<p class="task-failure">失败原因：{taskFailureContext()}</p>{/if}
     <p>结果：{displayResult(task.result)} · 更新于 {formatDate(task.updated_at)}</p>
   </div>
@@ -210,16 +177,14 @@
     <span class={`status-badge large ${task.status}`}><i></i>{taskStatusLabels[task.status]}</span>
     {#if failedJobs.length > 0}<button class="secondary" on:click={onRestartTask} disabled={busy}>重新审计</button>{/if}
     {#if !["completed", "failed", "cancelled"].includes(task.status)}<button class="danger" on:click={onCancelTask} disabled={busy}>取消任务</button>{/if}
-    <button class="secondary" on:click={() => onCreateReport("markdown")} disabled={busy}>报告 Markdown</button>
-    <button class="secondary" on:click={() => onCreateReport("sarif")} disabled={busy}>报告 SARIF</button>
-    <button class="secondary" on:click={() => onCreateReport("pdf")} disabled={busy}>报告 PDF</button>
+    <a class="secondary" href="#audit-reports">查看报告 <span aria-hidden="true">↓</span></a>
   </div>
 </section>
-<TaskPipeline {jobs} {taskType} />
+<TaskPipeline {jobs} {taskType} {task} {project} />
 <section class="metric-strip task-metrics" aria-label="任务统计">
-  <div><strong>{findings.length}</strong><span>漏洞总数</span></div>
+  <div><strong>{findings.length}</strong><span>全部发现（含误报）</span></div>
   <div><strong>{confirmedFindings}</strong><span>已确认漏洞</span></div>
-  <div><strong>{failedJobs.length}</strong><span>失败作业</span></div>
+  <div><strong>{project?.exploit_validation_enabled ? "已开启" : "未开启"}</strong><span>自动动态深审</span></div>
   <div><strong>{reportStateText}</strong><span>报告状态</span></div>
 </section>
 <FindingStats {findings} />
@@ -227,14 +192,14 @@
   <div class="task-column">
     <section class="panel table-panel">
   <header class="panel-head">
-    <div><h2>问题与报告</h2><p>候选问题、人工复核与报告导出。</p></div>
+    <div><h2>发现与证据</h2><p>查看候选依据，记录独立复核与人工判断。</p></div>
   </header>
   {#if findings.length === 0}
     <div class="compact-empty">当前任务尚未产生候选问题。</div>
   {:else}
     <div class="finding-list">
       {#each findings as finding (finding.id)}
-        <button class="finding-row" on:click={() => onSelectFinding(finding)}>
+        <button class:selected={selectedFinding?.id === finding.id} class="finding-row" on:click={() => onSelectFinding(finding)}>
           <span class={`status-dot ${finding.status}`}></span>
           <span class="task-cell"><b>{finding.title}</b><small>{severityLabels[finding.severity]} · {findingCategoryLabels[finding.category]} · {finding.cwe_id}</small></span>
           <span class="confidence" title="置信度：{confidenceTierLabels[confidenceTier(finding.confidence)]}">{Math.round(finding.confidence * 100)}%</span>
@@ -246,7 +211,7 @@
     <article class="finding-detail">
       <header><b>{selectedFinding.title}</b><span class={`status-dot ${selectedFinding.status}`}></span></header>
       <p>{selectedFinding.fix_suggestion}</p>
-      <small>位置：{JSON.stringify(selectedFinding.location)} · 证据：{selectedFinding.evidence_ids.length} 条 · 复现记录：{selectedFinding.poc_ids.length} 条</small>
+      <small>位置：{"path" in selectedFinding.location ? `${selectedFinding.location.path}:${selectedFinding.location.start_line}` : `0x${selectedFinding.location.virtual_address.toString(16)}`} · 证据：{selectedFinding.evidence_ids.length} 条 · 复现记录：{selectedFinding.poc_ids.length} 条</small>
       <div class="proof-actions">
         <label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS 对象引用" /></label>
         <label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label>
@@ -273,20 +238,6 @@
       {/if}
     </article>
   {/if}
-  {#if reportJobs().length > 0}
-    <div class="report-statuses" aria-live="polite">
-      {#each reportJobs() as reportJob (reportJob.id)}
-        <small class:failed={reportJob.status === "failed"}>{reportStatusText(reportJob)}</small>
-      {/each}
-    </div>
-  {/if}
-  {#if reportVersionIds.length > 0}
-    <div class="report-links">
-      {#each reportVersionIds as versionId (versionId)}
-        {#if artifactVersions.get(versionId)}<a class="secondary" href={api.artifactContentUrl(artifactVersions.get(versionId)!.artifact_id, versionId)} download={reportFileName(versionId)}>下载报告 · {artifactVersions.get(versionId)!.generation_config.format ?? "文件"}</a>{/if}
-      {/each}
-    </div>
-  {/if}
     </section>
   </div>
   <div class="task-column">
@@ -294,7 +245,7 @@
       <header class="panel-head">
         <div class="tabs" aria-label="任务详情面板">
           <button class:active={rightTab === "agents"} aria-pressed={rightTab === "agents"} on:click={() => (rightTab = "agents")}>智能体协作</button>
-          <button class:active={rightTab === "events"} aria-pressed={rightTab === "events"} on:click={() => (rightTab = "events")}>事件流<span class="live"><i></i>实时</span></button>
+          <button class:active={rightTab === "events"} aria-pressed={rightTab === "events"} on:click={() => (rightTab = "events")}>事件流</button>
           <button class:active={rightTab === "jobs"} aria-pressed={rightTab === "jobs"} on:click={() => (rightTab = "jobs")}>作业列表</button>
         </div>
       </header>
@@ -343,7 +294,7 @@
           {@const selected = pairFunctions.find((fn) => fn.id === selectedFunctionId)}
           {#if selected}
             <div class="function-title-block"><b class="function-title">{selected.name}</b><small>{selected.signature ?? functionLocation(selected)}</small></div>
-            {#if functionPseudocode(selected)}<pre class="code-view">{functionPseudocode(selected)}</pre>{:else}<small class="muted">该函数没有已导出的伪代码。</small>{/if}
+            {#if pseudocodeText(selected)}<pre class="code-view">{pseudocodeText(selected)}</pre>{:else}<small class="muted">该函数没有已导出的伪代码。</small>{/if}
             {#if pairNeighborhood}
               <div class="call-columns">
                 <div><b>调用方</b>{#each relatedFunctions("callers") as caller (caller.id)}<button on:click={() => onSelectFunction(caller)}>{caller.name}</button>{:else}<small class="muted">无</small>{/each}</div>
@@ -357,7 +308,10 @@
   {/if}
 </section>
 
+<ReportCenter {jobs} versions={reportVersionIds.flatMap(id => artifactVersions.has(id) ? [artifactVersions.get(id)!] : [])} {busy} onGenerate={onCreateReport} />
+
 <style>
+  .task-kicker { display: block; color: var(--accent); font-size: 12px; margin: 8px 0; letter-spacing: .08em; }
   .task-columns {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -390,5 +344,4 @@
     background: rgba(201, 244, 59, 0.08);
     border-color: rgba(201, 244, 59, 0.35);
   }
-  .tabs .live { font-size: 10px; }
 </style>

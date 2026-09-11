@@ -261,11 +261,6 @@ export const api = {
       method: "POST",
       headers: writeHeaders(true),
     }),
-  retryJob: (jobId: string) =>
-    request<Job>(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
-      method: "POST",
-      headers: writeHeaders(true),
-    }),
 };
 
 export function taskEventSocket(taskId: string, after: number): WebSocket {
