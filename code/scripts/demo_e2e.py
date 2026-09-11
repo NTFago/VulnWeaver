@@ -25,13 +25,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import zipfile
-import tempfile
 from pathlib import Path
 
 SCHEMA_VERSION = "1.0.0"
@@ -286,14 +286,17 @@ def main() -> None:
             "artifact_id": artifact_id,
             "version_id": version_id,
             "format": fmt})
-        print(f"{fmt} 报告 Job: HTTP {status} {'' if status == 202 else json.dumps(body, ensure_ascii=False)[:300]}")
+        detail = "" if status == 202 else json.dumps(body, ensure_ascii=False)[:300]
+        print(f"{fmt} 报告 Job: HTTP {status} {detail}")
 
     reports = {}
     job = wait_report_job(c, task_id)
     if job and job.get("status") == "succeeded":
         status, reports_list = c.json("GET", f"/api/tasks/{task_id}/jobs")
         entries = reports_list if isinstance(reports_list, list) else reports_list.get("jobs", [])
-        for job in [j for j in entries if str(j.get("kind")) == "report" and j.get("status") == "succeeded"]:
+        report_jobs = [j for j in entries
+                       if str(j.get("kind")) == "report" and j.get("status") == "succeeded"]
+        for job in report_jobs:
             arguments = job.get("arguments") or {}
             report_artifact = arguments.get("artifact_id")
             report_version = arguments.get("version_id")

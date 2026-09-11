@@ -286,7 +286,7 @@ class BinaryImportExecutor:
         metadata: BinaryMetadata,
         cancellation: asyncio.Event,
         produced: list[str],
-        object_ref: str,
+        analyzed_object_ref: str,
     ) -> tuple[int, ...] | None:
         """Run the model planning hook; failures degrade instead of aborting."""
         planning_hook = self._planning_hook
