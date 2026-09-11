@@ -10,7 +10,7 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：RPT-MERGE 已集成 main@2d1393a；台账冲突与报告 ADR 编号已解决，全仓 Python 回归 528 passed / 5 skipped、覆盖率 82.33%，Ruff/Pyright 通过；正在提交、推送报告分支并创建面向 main 的 PR。
+- **当前阶段**：报告分支已集成 main@2d1393a 并推送，已创建 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59) 面向 main；本地全仓 Python 528 passed / 5 skipped、覆盖率 82.33%，Ruff/Pyright/契约检查通过。PR 尚未合并，GitHub Quality Gate 待运行完成。
 - **当前分支**：`feat/report-professional-layout`（`.worktree/task-reports`）。
 - **当前负责人**：Codex（RPT-MERGE）；其他任务沿用各行负责人。
 - **继承的主线进度**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 487 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移（与 origin/main PR #55-#58 合并后复验）；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
@@ -22,7 +22,7 @@
 
 | 模块/任务包 | 状态 | 负责人 | 当前完成内容 | 剩余工作 | 最后更新 |
 |---|---|---|---|---|---|
-| RPT-MERGE 报告主线集成与 PR | 进行中 | Codex | 合并 main@2d1393a，保留主线全部 22 个新提交；报告提议改为 ADR-026，保留 ADR-025；全仓 Python 528 passed / 5 skipped、覆盖率 82.33%，Ruff/Pyright 通过 | 提交集成结果，推送报告分支并创建中文 PR；GitHub CI 负责完整 TypeScript 检查 | 2026-09-11 |
+| RPT-MERGE 报告主线集成与 PR | 已完成 | Codex | 集成提交 `1dec0e6` 保留 main@2d1393a 与报告历史，台账冲突及 ADR-026 编号已解决；全仓 Python 528 passed / 5 skipped、覆盖率 82.33%，Ruff/Pyright/契约检查通过；已推送并创建 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59)，中文正文记录功能、格式范围和验收限制 | 本次交付无剩余工作；合并前等待 PR Quality Gate 与评审，未部署 | 2026-09-11 |
 | RPT-UI 中文专业报告实现 | 已完成 | Codex | 四项摘要卡、中文风险/状态统计、分级详情、源码/反编译代码框与行号、证据索引跳转、完整修复/复核记录、A4 页眉页脚自然分页；任务版本隔离、去壳 PAIR 映射、误报/证据方向修复、常见凭据脱敏、既有报告复用；79 项测试与静态检查通过，四组 PDF 共 13 页逐页检查 | 本任务包无剩余代码工作；部署/浏览器下载归集成验收，快照版本协议与新 Web 面板另行处理 | 2026-09-11 |
 | RPT-DESIGN 中文审计报告模块设计 | 已完成 | Codex | `code/docs/reporting-module-design.md` 完成课程四要素映射、DeepAudit 对照及完整实施/验收设计；现已补充 RPT-UI 实际落地范围，ADR-026 仍为提议 | 跨组件快照与版本方案待协议评审；不能把设计中 A01—A17 全部当作本轮已验收能力 | 2026-09-11 |
 | 架构设计 | 已完成 | 用户/设计阶段 | 系统目标、架构、安全、数据与技术选型已确定 | 实现中持续校验 | 2026-09-07 |
@@ -187,6 +187,7 @@
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-11 | RPT-MERGE 报告主线集成与 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59) | 合并 main@2d1393a，报告 ADR 调整为 026；528 passed / 5 skipped、82.33%，全仓 Ruff/Pyright、契约检查与差异检查通过；集成提交 `1dec0e6` 已推送 | PR Quality Gate 和评审待完成，未合并/部署 |
 | 2026-09-11 | RPT-UI 中文专业报告及设计落地（`feat/report-professional-layout`） | Linux Dev Container：79 passed；Ruff lint、定向格式检查及 Pyright 通过；真实旧扫描报告读取去壳 PAIR 伪代码成功；无发现/源码/长代码 PDF 逐页检查，无页数上限 | 未部署；旧报告工件保留，需新报告请求才使用新版；跨格式快照与 Web 版本管理仍为设计 |
 | 2026-09-11 | T38 报告下载与导出可读性修复（`fix/report-download`） | Docker Linux 临时测试容器内 `uv sync --all-packages --no-editable` 后，Ruff 通过；报告/API 定向测试 **36 passed**（含 PostgreSQL/Redis 集成，1 个 Starlette 弃用警告）；本次 Python 修改文件 Pyright 0 错误；Web `svelte-check` 0 错误 0 警告，Vite build 成功 | 标准 Dev Container 因 Docker Hub 鉴权网络超时未启动；仓库级 Windows Pyright 仅因未安装 `weasyprint` 报既有 `pdf.py` 缺失依赖；更新 API/Web 镜像后需补浏览器下载回归 |
 | 2026-09-11 | T37 Markdown 快速路径 CI 修复（`ci/markdown-gate-move-gate`，PR #53 已合并入 `main`） | 首次实跑暴露（PR #50：`bad object`）与二次实跑暴露（PR #52：无凭据 fetch 失败）均登记于 Q-017；最终修复把 Markdown gate 移入全量克隆的 `change-scope` job，修复 PR 全量门禁通过；收尾 markdown-only PR（本条所属分支）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 |
@@ -196,7 +197,6 @@
 | 2026-09-10 | Q-010~Q-013 修复（`fix/budget-and-orchestration-resilience`，基于 main `0098798`，已合并入 `main` `bf956b6`）：项目预算一致性、Task 失败可见性、队列韧性、proof/fuzz 预算方向 | 见下方验证记录；ADR-023/024 已新增；契约 `--check` 无漂移 | 由用户以浏览器走通「新建项目（默认预算）→ 提交 PE 任务」；已存在项目的预算需重建或修正（无更新端点）；是否推送 / 开 PR 待用户确认 |
 | 2026-09-10 | T35 主分支全链路接线修复（`codex/fix-main-review`） | Linux Dev Container `pnpm run check`：437 passed、5 skipped、覆盖率 82.11%，Ruff/Pyright/TS/Svelte 0 错误；基础 Compose 重建成功，Web 首页与 Web→API 代理均 HTTP 200；新增二进制审计、自动报告、Harness 解包和复核历史回归 | 配置真实模型与固定 AFL/Proof 镜像后执行动态 E2E |
 | 2026-09-10 | T32 自动投递接通（`feat/t32-fuzz-auto`，提交 `4ec38a0`） | `TaskAggregateSettlementHook` 新增 `FuzzDispatchScheduler` 协议与 fuzz 调度参数：复核结算后按 `exploit_validation_enabled` opt-in 对非 FALSE_POSITIVE 的 Finding 调度 fuzz（与 T31 同一门禁，动态执行语义一致）；`FuzzJobScheduler` 新增 `FuzzTargetResolver` 注入点与 `schedule_finding_in_transaction`，`schedule_in_transaction` 改为按 `task["artifact_version_ids"]` 绑定（`Task` 无 `input_refs` 字段，修正了错误的键访问）；analysis-worker 装配 `_fuzz_scheduler` 与 `_fuzz_target` 解析器（仅内存破坏/注入类别、锚定工件须属任务范围、无摘要则关闭）。新增 `test_fuzz_dispatch.py` 3 项（请求绑定新 Job 并通过契约校验、无目标时拒绝、无解析器时拒绝）。全量门禁：435 passed、5 skipped、覆盖率 82.24%，ruff/pyright 0 | 真实镜像 E2E；种子语料已按 D-002 决策维持默认，无剩余设计项 |
-| 2026-09-10 | T32 Runner 摘要接口升级与 harness 编译管线（`feat/t32-fuzz-auto`） | `ToolRegistry.digests()` 由注册表派生摘要；Runner 新增 `GET /v1/tools` 且摘要端点一律由注册表作答，`SandboxRunnerClient` 支持 Bearer 与 `registered_tools()`，worker 经该端点发现 `afl-casr` 摘要；新增 `HarnessSource` 契约（修复原 `output_contract` 未注册导致真实网关 `KeyError`）、`harness-compile` 固定 profile、`HarnessCompiler`/`HarnessPipeline` 与 fuzz-tool `compile_harness`；`FuzzJobScheduler.schedule` 现构造真正合法的 `FuzzRequest`；crash 无法挂接 Finding 时返回结构化失败而非静默成功；修复 `persist_crash_evidence` 未排序时间戳与 `SandboxResult.status` 值比较。全量门禁：432 passed、5 skipped、覆盖率 82.28%，ruff/pyright 0，契约 --check 无漂移 | 契约中尚无 fuzz 目标/种子概念，自动投递需调用方提供 `FuzzTarget`；真实镜像编译+fuzz E2E 待部署 Runner 与登记摘要 |
 
 更早记录见 [本分支继承记录归档](code/docs/progress/2026-09-11-report-design-inherited-history.md)。
 
@@ -246,7 +246,7 @@
 
 ## 10. 下一步
 
-本报告 worktree 的 RPT-UI 已实现并定向验收；入口为 `code/packages/reporting/src/vulnweaver_reporting/`、Worker 的 `report_excerpts.py` 及 `code/tests/reporting/`。集成时纳入本分支并更新 Worker，再使用新报告请求验收下载；已成功生成的旧版本会复用，不会静默覆盖。若继续跨格式快照、报告版本和新 Web 面板，先阅读 [模块设计](code/docs/reporting-module-design.md) 的已落地范围与 [ADR-026（提议）](code/docs/adr/026-report-snapshots-and-revisions.md)，依 D-RPT-01 评审协议。以下是继承的项目级待办，不表示本分支承担其他模块实现。
+本报告 worktree 已推送并提交 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59)；先检查该 PR 的 Quality Gate 和评审结果。RPT-UI 已实现并定向验收；入口为 `code/packages/reporting/src/vulnweaver_reporting/`、Worker 的 `report_excerpts.py` 及 `code/tests/reporting/`。集成时纳入本分支并更新 Worker，再使用新报告请求验收下载；已成功生成的旧版本会复用，不会静默覆盖。若继续跨格式快照、报告版本和新 Web 面板，先阅读 [模块设计](code/docs/reporting-module-design.md) 的已落地范围与 [ADR-026（提议）](code/docs/adr/026-report-snapshots-and-revisions.md)，依 D-RPT-01 评审协议。以下是继承的项目级待办，不表示本分支承担其他模块实现。
 
 1. T32 真实 E2E 前置（按序）：①构建包含 `compile_harness` 的 `vulnweaver-afl-casr:fixed`；②向 sandbox-runner 与 analysis-worker 配置同一 `AFL_CASR_IMAGE_DIGEST` 和令牌；③以授权源码教学样本验证有界源码摘录→Harness 生成/修复→沙箱编译→小型初始种子 Fuzz→崩溃证据挂接，并以 ELF 验证直接 Fuzz 路径。
 2. T34 真实报告 Job 端到端：生成含调用路径的 Markdown/PDF/SARIF 并经 API 下载，SARIF 追加独立 Schema 校验（当前仅项目内 `validate_sarif` 信封校验）。
