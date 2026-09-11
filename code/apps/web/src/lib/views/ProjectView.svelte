@@ -13,7 +13,7 @@
   export let onGoOverview: () => void = () => {};
   export let onOpenTask: (task: Task) => void = () => {};
   export let onUpload: (kind: ArtifactKind, file: File) => Promise<boolean> = async () => false;
-  export let onCreateTask: (versionIds: string[], tokenBudget: number) => Promise<boolean> = async () => false;
+  export let onCreateTask: (versionIds: string[]) => Promise<boolean> = async () => false;
   export let onDeleteTask: (task: Task) => Promise<void> = async () => {};
   export let onShowError: (message: string) => void = () => {};
 
@@ -21,7 +21,6 @@
   let uploadFile: File | null = null;
   let selectedVersionIds: string[] = [];
   let sampleListExpanded = false;
-  let tokenBudget = 200_000;
 
   function confirmDeleteTask(task: Task): void {
     if (window.confirm(`确定删除该任务（${shortId(task.id)}）？其作业、Finding 与证据记录将被一并删除，且不可恢复。`)) {
@@ -57,12 +56,7 @@
       onShowError("请至少选择一个样本");
       return;
     }
-    const budget = Number.parseInt(String(tokenBudget), 10);
-    if (!Number.isFinite(budget) || budget < 0) {
-      onShowError("模型 Token 预算必须是不小于 0 的整数（0 表示不限制）");
-      return;
-    }
-    await onCreateTask([...selectedVersionIds], budget);
+    await onCreateTask([...selectedVersionIds]);
   }
 </script>
 
@@ -105,10 +99,6 @@
           <span>{sampleListExpanded ? "收起样本" : `展开全部 ${artifacts.length} 个样本`}</span><small>已选 {selectedVersionIds.length} 个</small><span class="arrow" aria-hidden="true">⌄</span>
         </button>
       {/if}
-      <label>模型 Token 预算
-        <input type="number" min="0" step="1000" bind:value={tokenBudget} disabled={busy} />
-        <small>智能体分析循环的模型 token 上限，填 0 表示不限制。</small>
-      </label>
       <button class="primary block" on:click={createTask} disabled={busy || selectedVersionIds.length === 0}>投递分析任务{selectedVersionIds.length > 0 ? `（${selectedVersionIds.length}）` : ""}</button>
     {/if}
   </section>
