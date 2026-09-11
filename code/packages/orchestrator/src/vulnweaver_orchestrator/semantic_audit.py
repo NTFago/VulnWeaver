@@ -57,6 +57,12 @@ from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceR
 
 AUDIT_BASELINE = "semantic_function_audit"
 _MAX_FUNCTIONS = 256
+# Audit context budgets: every observation may carry the function body, so the
+# payload is bounded per function and in total. When the total is exceeded the
+# degradation is deterministic: later functions lose their code and keep only
+# metadata, instead of truncating model output mid-report.
+_MAX_CODE_CHARS_PER_FUNCTION = 8_000
+_MAX_AUDIT_PAYLOAD_CHARS = 65_536
 _AUDIT_TOOL = ToolIdentity(name="vulnweaver-semantic-audit", version="1.0.0", image_digest=None)
 
 
@@ -251,9 +257,9 @@ class SemanticAuditor:
                 "start_line": source["start_line"] if source else None,
                 "address": binary["virtual_address"] if binary else None,
             }
-            pseudocode = function["attributes"].get("pseudocode")
-            if isinstance(pseudocode, str) and pseudocode.strip():
-                entry["code"] = pseudocode
+            code = _observation_code(function)
+            if code is not None:
+                entry["code"] = code
             elif source is not None:
                 facts: SourceReviewFacts = await self._fact_loader.load(
                     task_id, cast(JsonObject, source)
@@ -261,7 +267,7 @@ class SemanticAuditor:
                 if facts.available and facts.excerpt is not None:
                     entry["code"] = facts.excerpt.text
             observations.append(entry)
-        return observations
+        return _fit_audit_payload(observations)
 
     async def _store_report(self, run_id: str, task_id: str, report: JsonObject) -> tuple[str, str]:
         content = json.dumps(
@@ -515,6 +521,64 @@ def _messages(observations: list[JsonObject]) -> list[dict[str, str]]:
 
 def _now_from(job: Job) -> str:
     return job["updated_at"]
+
+
+def _observation_code(function: PairFunction) -> str | None:
+    """Return the function body the model can audit, or None.
+
+    Binary PAIR functions carry decompiler output as a list of BinaryPseudocode
+    records in ``attributes['pseudocode']`` (source functions use the string
+    form handled above by the same guard). When no decompilation exists, a
+    bounded disassembly listing from ``attributes['disassembly']`` is used so
+    the audit never has to reason from names and addresses alone.
+    """
+
+    pseudocode = function["attributes"].get("pseudocode")
+    if isinstance(pseudocode, str) and pseudocode.strip():
+        return pseudocode[:_MAX_CODE_CHARS_PER_FUNCTION]
+    if isinstance(pseudocode, list) and pseudocode:
+        texts = [
+            str(item.get("text", ""))
+            for item in pseudocode
+            if isinstance(item, dict) and str(item.get("text", "")).strip()
+        ]
+        if texts:
+            return "\n\n".join(texts)[:_MAX_CODE_CHARS_PER_FUNCTION]
+    disassembly = function["attributes"].get("disassembly")
+    if isinstance(disassembly, list) and disassembly:
+        lines = [
+            f"{item.get('address')}  {item.get('mnemonic')} {item.get('operands')}".rstrip()
+            for item in disassembly
+            if isinstance(item, dict)
+        ]
+        if lines:
+            return "\n".join(lines)[:_MAX_CODE_CHARS_PER_FUNCTION]
+    return None
+
+
+def _payload_size(observations: list[JsonObject]) -> int:
+    return len(json.dumps({"functions": observations}, ensure_ascii=False, sort_keys=True))
+
+
+def _fit_audit_payload(observations: list[JsonObject]) -> list[JsonObject]:
+    """Bound the total audit payload, dropping code from the tail first."""
+
+    if _payload_size(observations) <= _MAX_AUDIT_PAYLOAD_CHARS:
+        return observations
+    fitted = [dict(item) for item in observations]
+    total = _payload_size(fitted)
+    for entry in reversed(fitted):
+        if total <= _MAX_AUDIT_PAYLOAD_CHARS:
+            break
+        if "code" not in entry:
+            continue
+        stripped = {key: value for key, value in entry.items() if key != "code"}
+        total -= len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) - len(
+            json.dumps(stripped, ensure_ascii=False, sort_keys=True)
+        )
+        entry.clear()
+        entry.update(stripped)
+    return fitted
 
 
 def _function_sort_key(function: PairFunction) -> tuple[str, int, str]:

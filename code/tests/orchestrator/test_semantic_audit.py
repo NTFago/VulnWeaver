@@ -30,6 +30,7 @@ from vulnweaver_persistence.models import jobs as jobs_table
 from vulnweaver_source_analysis import SourceExcerpt
 
 from tests.persistence.factories import artifact, artifact_version, job, project, task
+from vulnweaver_orchestrator.semantic_audit import _fit_audit_payload, _observation_code
 
 NOW = datetime(2026, 9, 10, 8, 0, tzinfo=UTC)
 TIMESTAMP = "2026-09-10T08:00:00Z"
@@ -421,3 +422,123 @@ def test_binary_pseudocode_finding_is_anchored_by_address(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def binary_pair_function(identifier: str, version_id: str, attributes: dict) -> PairFunction:
+    return PairFunction(
+        schema_version="1.0.0",
+        id=identifier,
+        artifact_version_id=version_id,
+        name="parse_token",
+        symbol="parse_token",
+        language="x86_64",
+        source_location=None,
+        binary_location=None,
+        signature=None,
+        attributes=attributes,
+    )
+
+
+def test_observation_code_prefers_pseudocode_then_disassembly() -> None:
+    pseudocode_entry = {
+        "function_name": "parse_token",
+        "address": 0x4011D1,
+        "text": "bool parse_token(char *param_1) { strcpy(line, token); }",
+        "tool_name": "ghidra",
+    }
+    with_pseudocode = binary_pair_function(
+        "pair-fn:pseudo",
+        "artifact-version:pseudo",
+        {"pseudocode": [pseudocode_entry]},
+    )
+    assert _observation_code(with_pseudocode) == pseudocode_entry["text"]
+
+    with_disassembly = binary_pair_function(
+        "pair-fn:asm",
+        "artifact-version:asm",
+        {
+            "pseudocode": [],
+            "disassembly": [
+                {"address": "0x4011d1", "mnemonic": "push", "operands": "%rbp"},
+                {"address": "0x4011d2", "mnemonic": "call", "operands": "strcpy@plt"},
+            ],
+        },
+    )
+    code = _observation_code(with_disassembly)
+    assert code is not None
+    assert "strcpy@plt" in code
+    assert _observation_code(binary_pair_function("pair-fn:empty", "artifact-version:e", {})) is None
+
+
+def test_binary_audit_context_carries_pseudocode_body(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """Regression: binary observations must include the decompiled body.
+
+    The audit previously sent names and addresses only, so the model answered
+    'no code was provided' and packed/obfuscated binaries produced no findings.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(database)
+        task_id = f"task:{suffix}"
+        async with database.transaction() as repositories:
+            await repositories.pair.import_graph(
+                [
+                    binary_pair_function(
+                        f"pair-fn:{suffix}",
+                        version_id,
+                        {
+                            "pseudocode": [
+                                {
+                                    "function_name": "parse_token",
+                                    "address": 0x4011D1,
+                                    "text": "bool parse_token(char *s) { strcpy(line, token); }",
+                                    "tool_name": "ghidra",
+                                }
+                            ],
+                            "disassembly": [],
+                        },
+                    )
+                ],
+                [],
+                [],
+                None,
+                created_at=NOW,
+            )
+        model = FakeAuditModel(report([]))
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+        )
+        try:
+            outcome = await auditor.audit(semantic_job(f"job:{suffix}", task_id))
+            assert outcome.finding_ids == ()
+            user_payload = model.messages[0][1]["content"]
+            assert "strcpy(line, token)" in user_payload
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_audit_payload_budget_drops_tail_code_first() -> None:
+    def observation(name: str, code: str) -> dict:
+        return {"function_id": name, "name": name, "code": code}
+
+    observations = [
+        observation(f"fn-{index}", "A" * 8000) for index in range(20)
+    ]
+    fitted = _fit_audit_payload(observations)
+    with_code = [item for item in fitted if "code" in item]
+    assert with_code, "budget must keep at least one code body when it fits"
+    assert len(with_code) < len(observations), "oversized payload must degrade"
+    import json as _json
+
+    assert (
+        len(_json.dumps({"functions": fitted}, ensure_ascii=False, sort_keys=True))
+        <= 66_000
+    )

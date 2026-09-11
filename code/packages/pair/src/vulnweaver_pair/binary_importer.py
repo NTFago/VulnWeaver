@@ -27,6 +27,8 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_persistence import Database
 
+_MAX_DISASSEMBLY_PER_FUNCTION = 512
+
 
 class BinaryPairImportError(ValueError):
     """A normalized binary result cannot be represented as a consistent PAIR graph."""
@@ -138,6 +140,16 @@ def _functions_and_nodes(
     symbolic_by_address = {
         item["function_address"]: cast(JsonObject, dict(item)) for item in result["symbolic_facts"]
     }
+    # Bounded per-function disassembly listing so downstream auditors can work
+    # from instruction text when a function has no decompiler output.
+    instructions_by_name: dict[str, list[JsonObject]] = {}
+    for item in result["instructions"]:
+        name = item.get("function_name")
+        if not isinstance(name, str) or not name:
+            continue
+        bucket = instructions_by_name.setdefault(name, [])
+        if len(bucket) < _MAX_DISASSEMBLY_PER_FUNCTION:
+            bucket.append(cast(JsonObject, dict(item)))
     functions: list[PairFunction] = []
     nodes: list[PairNode] = []
     records: list[_FunctionRecord] = []
@@ -165,6 +177,7 @@ def _functions_and_nodes(
                 "architecture": str(result["architecture"]),
                 "source_attributes": source["attributes"],
                 "pseudocode": pseudocode_by_address.get(source["address"], []),
+                "disassembly": instructions_by_name.get(source["name"], []),
                 "symbolic_fact": symbolic_by_address.get(source["address"]),
             },
         )
