@@ -10,12 +10,13 @@
 
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
-- **当前阶段**：报告 PR #59 与智能体审计 PR #60 均已合入 main@3fcbe1e。本轮完成 WEB-INTEGRATE：保留 main 行为基准，合并 work7 组件化中文界面，接入真实执行进度、审计轨迹与三格式报告中心；已推送并创建 [PR #61](https://github.com/NTFago/VulnWeaver/pull/61)，目标 main；未合并或部署。
-- **当前分支**：`feat/web-audit-integration`（已同步 origin/main@192660d，包含 frontend-zh 的历史与 Terra 后端两个提交）
-- **当前负责人**：Codex 主控/UI；后端只读轨迹由 GPT-5.6 Terra high 子任务完成并集成
-- **当前 worktree**：`.worktree/web-audit-integration`；原 work7 与主工作区未改动
+- **当前阶段**：T42 任务详情双栏对齐已完成。桌面端「发现与证据」与任务详情面板统一标题分隔线、内容起始线和可视高度，长轨迹在面板内滚动；1180px 以下恢复单列自然高度。
+- **当前分支**：`fix/task-panel-alignment`（基于 `dev@17f0d88` / `origin/main@17f0d88`）
+- **当前负责人**：Codex（T42）
+- **当前 worktree**：`.claude/worktrees/t40-agent-audit`；根目录的旧 `main` 与其他工作树未改动
 - **继承的主线进度**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 487 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移（与 origin/main PR #55-#58 合并后复验）；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
 - **最近一次集成全量门禁**：Linux Dev Container 540 passed / 5 skipped，覆盖率 81.71%；Ruff/Pyright/契约检查通过；TypeScript/Svelte 0 错误 0 警告、12 个前端回归通过、Vite 构建通过。跳过项为外部 Proof Runner 回放和 Docker runtime 集成，不代表这些实机路径已验收。
+- **本轮定向门禁**：Linux Dev Container 前端 13 passed，Svelte/TypeScript 0 错误 0 警告，Vite 生产构建成功；合同同形 Mock API 下完成 1600×1000 与 900×900 浏览器回归，未写部署数据库。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
 
@@ -23,6 +24,7 @@
 
 | 模块/任务包 | 状态 | 负责人 | 当前完成内容 | 剩余工作 | 最后更新 |
 |---|---|---|---|---|---|
+| T42 任务详情双栏对齐 | 已完成 | Codex（`fix/task-panel-alignment`） | TaskView 双栏改为同高可视区，标题行固定同一桌面高度，正文统一内边距；长内容独立滚动，1180px 以下取消固定高度并恢复单列自然流；AgentPanel 移除重复顶部外边距 | 无；发布时随 Web 镜像部署 | 2026-09-11 |
 | WEB-MERGE PR #61 冲突处理 | 已完成 | Codex | 同步 main@192660d，保留样本过滤、单套 4 秒轨迹刷新、任务隔离，以及全部主线后端更新；App 六处冲突已解决 | 54 项 Python 定向回归、13 项前端测试、Ruff/Pyright/契约/Svelte/TypeScript/构建通过；PR #61 随本提交更新，未合并部署 | 2026-09-11 |
 | WEB-INTEGRATE 中文审计工作台整合 | 已完成 | Codex 主控/UI | 合并 main@3fcbe1e 与 frontend-zh@f45b248，保留预设/上下文/上传折叠过滤/列表伪代码/复核布局；新增真实阶段、轨迹、失败说明、三格式报告中心、周期刷新与任务隔离；Terra 后端已集成；全量门禁与桌面/390px 模拟数据验收通过 | 本集成包无剩余代码项；发布前完成真实部署 E2E；单 Job 重试和二进制子步骤实时事实未纳入本包，见验收文档 | 2026-09-11 |
 | RPT-MERGE 报告主线集成与 PR | 已完成 | Codex | 集成提交 `1dec0e6` 保留 main@2d1393a 与报告历史，台账冲突及 ADR-026 编号已解决；全仓 Python 528 passed / 5 skipped、覆盖率 82.33%，Ruff/Pyright/契约检查通过；已推送并创建 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59)，中文正文记录功能、格式范围和验收限制 | 本次交付无剩余工作；合并前等待 PR Quality Gate 与评审，未部署 | 2026-09-11 |
@@ -203,6 +205,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-11 | T42 任务详情双栏对齐（`fix/task-panel-alignment`） | Linux Dev Container：前端 13 passed，Svelte/TypeScript 0 错误 0 警告，Vite build 通过；浏览器几何核对确认 1600px 下双栏 top/bottom/headBottom/bodyTop 完全一致（680px），900px 下单列且无横向溢出 | 发布时重建 Web 镜像；真实任务内容仅需部署后冒烟确认 |
 | 2026-09-11 | WEB-INTEGRATE：中文审计工作台与 main 功能整合，Terra 只读审计轨迹接入 | Python 540 passed / 5 skipped、81.71%；前端 12 passed、Svelte/TypeScript 0 错误、Vite build 通过；桌面和 390px 窄屏验收通过 | 已推送并创建 PR #61；未合并/部署，发布前补真实部署 E2E，详细边界见验收文档 |
 | 2026-09-11 | T40 智能体调查式审计（`dev`，提交 `c7d3089`） | 新增 `audit_tools.py`（8 件只读调查工具 + `AuditWorkspace` + `AuditStepExecutor`）与 `code_audit.py`（`CodeAuditAgent`）；`semantic_audit` 改为循环驱动并在降级时回落一次性路径；修复二进制伪代码读取、`AgentRun.prompt_hash` 前缀、策略层自由文本误杀三项缺陷。Linux Dev Container：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **492 passed / 5 skipped**（PostgreSQL/Redis 集成实跑） | 真实模型端到端与动态验证自主权 |
 | 2026-09-11 | T40 真实模型审计端到端（部署栈，未改动运行中的服务） | 以部署栈中已配置的模型（`ROUTES audit/planning/report/review`）对运行库中一个真实任务（102 个 Python 函数的真实开源项目）直接运行 `CodeAuditAgent.audit()`（只读，不落库）：智能体自主完成 **25 次工具调用、8 轮规划**，使用 `code-function-read`/`code-search`/`code-function-list`/`artifact-facts`/`static-leads`/`critical-logic`，并报出它自己读到并确认的 **CWE-78** 定位候选（`check_pi_extension.py:220`，调用方提供的可执行名未校验即执行）。过程中修复：`feedback["last_steps"]` 原为累计步骤列表，每轮重放全部历史致提示词膨胀、收敛指令被淹没——改为只带本轮步骤并给出剩余轮数后即正常产出 | 整条管线（worker → `semantic_audit` Job → 落库 → 复核 → 报告）与浏览器证据链回归仍未执行；二进制侧真实模型验收未执行 |
@@ -212,11 +215,12 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 | 2026-09-11 | RPT-MERGE 报告主线集成与 [PR #59](https://github.com/NTFago/VulnWeaver/pull/59) | 合并 main@2d1393a，报告 ADR 调整为 026；528 passed / 5 skipped、82.33%，全仓 Ruff/Pyright、契约检查与差异检查通过；集成提交 `1dec0e6` 已推送 | PR Quality Gate 和评审待完成，未合并/部署 |
 | 2026-09-11 | RPT-UI 中文专业报告及设计落地（`feat/report-professional-layout`） | Linux Dev Container：79 passed；Ruff lint、定向格式检查及 Pyright 通过；真实旧扫描报告读取去壳 PAIR 伪代码成功；无发现/源码/长代码 PDF 逐页检查，无页数上限 | 未部署；旧报告工件保留，需新报告请求才使用新版；跨格式快照与 Web 版本管理仍为设计 |
 | 2026-09-11 | T38 报告下载与导出可读性修复（`fix/report-download`） | Docker Linux 临时测试容器内 `uv sync --all-packages --no-editable` 后，Ruff 通过；报告/API 定向测试 **36 passed**（含 PostgreSQL/Redis 集成，1 个 Starlette 弃用警告）；本次 Python 修改文件 Pyright 0 错误；Web `svelte-check` 0 错误 0 警告，Vite build 成功 | 标准 Dev Container 因 Docker Hub 鉴权网络超时未启动；仓库级 Windows Pyright 仅因未安装 `weasyprint` 报既有 `pdf.py` 缺失依赖；更新 API/Web 镜像后需补浏览器下载回归 |
-| 2026-09-11 | T37 Markdown 快速路径 CI 修复（`ci/markdown-gate-move-gate`，PR #53 已合并入 `main`） | 首次实跑暴露（PR #50：`bad object`）与二次实跑暴露（PR #52：无凭据 fetch 失败）均登记于 Q-017；最终修复把 Markdown gate 移入全量克隆的 `change-scope` job，修复 PR 全量门禁通过；收尾 markdown-only PR（本条所属分支）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 |
 
 更早记录见 [历史归档](code/docs/progress/2026-09-11-web-integration-history.md)。
 
 ## 9. 验证记录
+
+- 2026-09-11 T42 双栏布局定向验收：`vulnweaver-dev-t40` 内 `pnpm --filter @vulnweaver/web test` 13 passed；`typecheck` 0 错误 0 警告；`build` 134 modules transformed。合同同形 Mock API + Edge Headless 在 1600×1000 下确认两面板 top/bottom/headBottom/bodyTop 完全一致，均高 680px，右侧正文独立滚动；900×900 下为单列自然高度，`document.scrollWidth` 890≤900。未修改或重建当前部署 Web 镜像，真实任务数据和写路径未执行。
 
 - 2026-09-11 PR #61 同步 main@192660d：Linux Dev Container API/智能体循环/审计/逆向规划/语义审计/轨迹持久化定向测试 **54 passed**；前端 **13 passed**，Ruff/Pyright/契约/Svelte/TypeScript 与 Vite build 通过。后端和依赖配置与 main 一致；本次未重跑全量或实机 E2E。临时冲突快照保存在 `tmp/App-pr61-conflict.svelte`，未提交；已知损坏 Codex checkpoint 导致 fetch 返回失败，核实远程 SHA 与下载对象完整后同步远程跟踪引用，未删除检查点。
 
