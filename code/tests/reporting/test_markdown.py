@@ -148,6 +148,12 @@ def test_markdown_without_context_shows_missing_placeholders() -> None:
     assert "未提供" in report
 
 
+def test_markdown_task_result_pending_when_result_not_yet_settled() -> None:
+    context = make_context(task_result=None)
+    report = build_markdown([make_finding()], context=context)  # type: ignore[arg-type]
+    assert "待最终归类" in report
+
+
 def test_markdown_statistics_cover_every_severity_and_status_row() -> None:
     report = build_markdown([make_finding(severity="high", status="confirmed")])
     for label in (

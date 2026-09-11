@@ -532,7 +532,9 @@ def _task_id_text(ctx: ReportContext) -> str:
 def _task_result_text(ctx: ReportContext) -> str:
     result = ctx.get("task_result")
     if not result:
-        return MISSING
+        # 自动报告按 ADR-021 先于任务结算生成，result 归类发生在结算时刻，
+        # 此处显示待归类而非数据缺失，避免读者误以为结果字段丢失。
+        return "待最终归类（任务结算时归类）"
     label = TASK_RESULT_ZH.get(result, result)
     detail = TASK_RESULT_DETAIL_ZH.get(result, "")
     return f"{label}（{result}）：{detail}"
