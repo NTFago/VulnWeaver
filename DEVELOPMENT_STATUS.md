@@ -21,7 +21,7 @@
 | T45-C 循环超时可配置 | 已完成 | Codex / PR #68 | 契约新增 `AgentLoopBudgets`，贯通域解析 → 设置 API → worker → 设置页；`0` 表示沿用部署默认值（解析器对所有预算项一律把非正值读作未设置），支持 `AGENT_*_DEADLINE_SECONDS` | 无 |
 | T45-D 审计候选 ID 冲突 | 已完成 | Codex / PR #71 | 审计按 `(task, cwe_id, location)` 派生 Finding ID，而仓储把 `title`/`dataflow`/`fix_suggestion` 也算身份字段、不一致即抛 `EntityConflict`；同位置同 CWE 的不同候选因此撞 ID，异常无人捕获，整个审计 Job 死于无消息的 `worker.execution_error`。仓储拒绝合并是对的，故改为**逐候选捕获、计为 dropped、继续**。取消轮次上限后审计报出更多候选，才暴露这个组合 | 无 |
 | T45-E worker 异常消息可诊断 | 已完成 | Codex / PR #70 | `worker.execution_error` 只记录 `exception_type`，**丢弃消息与 traceback**，两次线上失败都只能靠容器内手工复现定位。现增加 `exception_message`（截断 500 字符）。**该修复立刻见效**：下一次审计失败直接给出 `EntityConflict` + 原因，T45-D 由此定位 | 无 |
-| T45-F PAIR 行归属被分析的镜像 | 已完成 | Codex / PR #72 | 函数 ID 本就含 `analyzed_artifact_version_id`，但行的 `artifact_version_id` 写的是上传工件，工作台又按工件查——三者不一致，每投一次任务就多一整套函数行（加壳样本累积到 68 行 / 16 个函数）。改法为**保持 ID、把列对齐**（8 处），工作台改为解析任务的被分析镜像（`binary-import` 结果的 `binary-analysis-result` 版本之 parent），并与源码管线的输入版本取并集。**历史数据已回填**：`pair_functions` 68 行、`pair_nodes` 816 行、`pair_edges` 364 行，执行量与 dry-run 逐表吻合 | `pair_raw` 未回填（见下一步） |
+| T45-F PAIR 行归属被分析的镜像 | 已完成 | Codex / PR #72 | 函数 ID 本就含 `analyzed_artifact_version_id`，但行的 `artifact_version_id` 写的是上传工件，工作台又按工件查——三者不一致，每投一次任务就多一整套函数行（加壳样本累积到 68 行 / 16 个函数）。改法为**保持 ID、把列对齐**（8 处），工作台改为解析任务的被分析镜像（`binary-import` 结果的 `binary-analysis-result` 版本之 parent），并与源码管线的输入版本取并集。**历史数据已回填**：`pair_functions` 68 行、`pair_nodes` 816 行、`pair_edges` 364 行、`pair_raw` 5 行 | 无 |
 | T43 删除项目/任务与任务级 token 预算 | 已完成 | ZCode / PR #65 | 删除 API、级联删除、终态任务限制已实现并合并。**部署曾一度返回 405**：`api` 镜像自合并后从未重建，已重建并实测（405 → 401，路由存在） | 无 |
 | T42 任务详情双栏对齐 | 已完成 | Codex / `fix/task-panel-alignment` | 桌面双栏同高，窄屏恢复单列 | 无 |
 | WEB-INTEGRATE 中文审计工作台 | 已完成 | Codex | 工作台、轨迹、失败说明、报告中心和任务隔离已整合 | 发布前做真实部署 E2E |
@@ -40,7 +40,7 @@
 | Q-021 | 待处理 | **部署顺序陷阱**：worker 启动时缓存工具镜像摘要，镜像重建后必须**先重启 sandbox-runner、再重启 worker**；顺序反了不会当场报错，只在下次任务变成无消息的 `worker.execution_error`。 |
 | Q-022 | 已处理 | worker 把执行器异常压成 `{"exception_type": …}`，**丢弃消息与 traceback**。PR #70 增加 `exception_message`（截断 500 字符），下一次失败即给出原因，T45-D 由此定位。 |
 | Q-023 | 待处理 | Windows 工作区新建的脚本为 CRLF；`.gitattributes` 只在 commit/checkout 归一化工作树，容器内 `sh` 读 CRLF 直接报 `Illegal option -`。 |
-| Q-024 | 待处理 | `pair_raw.artifact_version_id` 仍指向上传工件。它无 `location` 可推导，但 `object_ref` 能对上 `binary-analysis-result` 版本，取其 `parent_version_id` 即目标（4 行）。不影响工作台显示，但数据仍不一致。 |
+| Q-024 | 已处理 | `pair_raw.artifact_version_id` 曾指向上传工件。它无 `location` 可推导，但 `object_ref` 能对上 `binary-analysis-result` 版本，取其 `parent_version_id` 即目标。已回填 **5 行**（首次 dry-run 因 `LIMIT 8` 只显示 4 行，我误报为 4）；源码管线的 3 个 raw 未触碰。 |
 
 ## 当前阻碍点
 
@@ -71,11 +71,10 @@
 
 ## 下一步
 
-1. **回填 `pair_raw`**：SQL 已 dry-run 验证（4 行受影响，物料为 `object_ref` → `binary-analysis-result` 版本的 parent）。需用户点名该表后再执行；不执行不影响工作台显示，仅数据内部不一致（Q-024）。
-2. **自定义壳脱壳**：目标明确要求，目前完全未实现，是链路唯一缺口。建议顺序——先做脱壳器（高熵可执行区的 XOR 密钥恢复 + `objcopy` 包装为 ELF），它可独立验证；样本侧再处理入口 ABI（`_start` 需要初始栈与 `%rdx`，stub 必须尾跳而非 `call`）。
-3. **Q-021 部署顺序陷阱**：worker 缓存的工具摘要改为按需解析，消除「先重启 runner 后重启 worker」的隐含要求。
-4. 校准 T45-B 的 deadline 取值（900s/1800s 按观测耗时 16×/20× 取，未在真实负载下验证）。
-5. T43 worktree 完成真实浏览器回归。
-6. 配置真实模型及固定工具镜像，补 T27-T32 的教学样本 E2E。
-7. 在独立部署环境完成 T20/T21/T22/T33 的 Proof→报告→浏览器下载回归。
-8. 远程分支 `origin/feat/t45-binary-unpacking-chain` 已被 rebase 后的后续合并取代，属陈旧分支；删除远程分支改变共享状态，需用户确认。
+1. **自定义壳脱壳**：目标明确要求，目前完全未实现，是链路唯一缺口。建议顺序——先做脱壳器（高熵可执行区的 XOR 密钥恢复 + `objcopy` 包装为 ELF），它可独立验证；样本侧再处理入口 ABI（`_start` 需要初始栈与 `%rdx`，stub 必须尾跳而非 `call`）。
+2. **Q-021 部署顺序陷阱**：worker 缓存的工具摘要改为按需解析，消除「先重启 runner 后重启 worker」的隐含要求。
+3. 校准 T45-B 的 deadline 取值（900s/1800s 按观测耗时 16×/20× 取，未在真实负载下验证）。
+4. T43 worktree 完成真实浏览器回归。
+5. 配置真实模型及固定工具镜像，补 T27-T32 的教学样本 E2E。
+6. 在独立部署环境完成 T20/T21/T22/T33 的 Proof→报告→浏览器下载回归。
+7. 远程分支 `origin/feat/t45-binary-unpacking-chain` 已被 rebase 后的后续合并取代，属陈旧分支；删除远程分支改变共享状态，需用户确认。
