@@ -98,6 +98,11 @@ class AgentLoopBudget:
     max_steps_per_plan: int = 8
     max_observation_chars: int = 8_192
     deadline_seconds: float | None = None
+    # Advisory only, never a hard stop: past this many rounds the feedback tells
+    # the model to converge. It exists because a loop with no round cap will
+    # otherwise investigate until the token budget is gone, even after it has
+    # reported everything it found.
+    soft_round_limit: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_planning_rounds is not None and not 1 <= self.max_planning_rounds <= 32:
@@ -114,6 +119,8 @@ class AgentLoopBudget:
             raise ValueError("max_observation_chars must be between 256 and 1000000")
         if self.deadline_seconds is not None and self.deadline_seconds <= 0:
             raise ValueError("deadline_seconds must be positive when set")
+        if self.soft_round_limit is not None and not 1 <= self.soft_round_limit <= 64:
+            raise ValueError("soft_round_limit must be between 1 and 64 when set")
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,6 +408,13 @@ class AgentLoop:
                 # "rounds remaining" to report.
                 round_feedback["remaining_planning_rounds"] = (
                     budget.max_planning_rounds - round_index
+                )
+            if budget.soft_round_limit is not None and round_index >= budget.soft_round_limit:
+                round_feedback["guidance"] = (
+                    f"You have used {round_index} planning rounds. Unless you have a "
+                    "specific, named lead still to check, stop investigating now: "
+                    "report everything you have substantiated with finding-report and "
+                    "return zero steps. More browsing will not add findings."
                 )
             feedback = round_feedback
             if self._sink is not None:

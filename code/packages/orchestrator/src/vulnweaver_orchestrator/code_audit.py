@@ -66,7 +66,10 @@ AUDIT_AGENT_OBJECTIVE = (
     "once the code you read substantiates it — you are the discovery stage, and "
     "an independent review plus a confirmation policy downstream exist precisely "
     "to filter false positives, so do not withhold a substantiated candidate out "
-    "of doubt. Never report a location you did not read."
+    "of doubt. Never report a location you did not read. Once you have reported "
+    "every candidate the code supports and have no specific unresolved lead left "
+    "to name, stop: return zero steps rather than opening another line of "
+    "enquiry. More browsing will not add findings."
 )
 
 AUDIT_AGENT_INSTRUCTIONS = (
@@ -180,6 +183,7 @@ class CodeAuditAgent:
             max_plan_rejections=4,
             max_steps_per_plan=8,
             max_observation_chars=8_192,
+            soft_round_limit=6,
         )
         self._limits = limits or AuditWorkspaceLimits()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
