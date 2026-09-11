@@ -11,7 +11,7 @@
 - **项目名称**：VulnWeaver（漏洞织鉴）
 - **当前日期**：2026-09-11（Asia/Shanghai）
 - **当前阶段**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 487 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移（与 origin/main PR #55-#58 合并后复验）；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
-- **当前分支**：`dev`（自 `main@c3f571d` 新建，已 rebase 至 `origin/main@0f1df82`，随后整体推送）
+- **当前分支**：`dev`（已推送 `origin/dev`，领先此前 `dff53d8` 共 7 个提交；T40 的 PR 为 #60，base `main`）
 - **当前负责人**：Codex（T40）
 - **当前 worktree**：`.claude/worktrees/t40-agent-audit`（`dev` 分支，T40 全部改动在此）
 - **T40 一句话状态**：审计已由「一次性模型调用」变为「只读调查工具 + 规划-执行-观察循环」，并打通了「证据 → 类别事实 → confirmed → 自动利用」的链路（此前该链路因事实永不建立而完全不可达）；剩余项是智能体在循环内自主发起动态验证，以及真实模型端到端。
@@ -68,7 +68,7 @@
 
 | T38 报告下载与导出可读性修复 | 已完成 | Codex（`fix/report-download`） | 下载响应按报告格式返回安全文件名和媒体类型；Markdown/HTML/SARIF 读取规范源码范围，二进制位置读取 `virtual_address`；前端显示报告生成失败原因并为下载链接提供扩展名 | 部署更新后的 API/Web 镜像后做浏览器点击回归 | 2026-09-11 |
 | T39 任务事件契约兼容与部署镜像一致性修复 | 已完成 | Codex（`fix/task-event-stream`） | 读取历史 `task.status_changed` 事件时对缺失的可空 `failure` 做内存兼容补全；为严格 Pyright 检查补充 `JsonObject` 类型收窄，避免兼容 payload 展开产生未知类型；统一重建 API、Dispatcher、Orchestrator、Worker、Sandbox Runner、Web 镜像；清理开发 Redis DB 0 残留队列；保留 PostgreSQL 任务和工件数据 | 无；用户刷新当前任务页即可确认页面恢复最终状态 | 2026-09-11 |
-| T40 智能体调查式审计与确认链路打通 | 待验证 | Codex（`dev` 分支，worktree `.claude/worktrees/t40-agent-audit`） | ①审计由一次性模型调用改为 `AgentLoop` 驱动的调查循环，新增 8 件只读调查工具（`audit_tools.py`）与 `CodeAuditAgent`（`code_audit.py`），静态扫描器输出降级为线索，候选仍经 PAIR 锚定与既有复核/确认门禁；模型未配置时回落原一次性路径。②修复二进制伪代码读取缺陷（`vulnweaver_pair.pseudocode_text` 成为伪代码形状唯一所有者）。③修复 `AgentLoop` 生成的 `AgentRun.prompt_hash` 缺 `sha256:` 前缀（schema 与 DB CHECK 约束均会拒绝，任何 loop run 都无法落库）。④Policy Engine 不再对自由文本参数做遍历扫描（此前 CWE-22 的 `../` rationale 会导致整个计划被拒）。⑤新增 `derive_established_facts`：类别事实终于可从证据推导；fuzz/proof 结算后对受影响的 Finding 以证据修订 id 重开复核。⑥智能体的 `verification_request`（「这个候选需要动态验证」）不再被丢弃，落为 CONTEXTUAL、weight 0 的溯源证据进入证据链，且结构上不可能满足确认策略。⑦`symbolic-execute`：模型可在循环内指定二进制地址发起定点符号执行，地址经索引校验锚定、未开启动态验证即拒绝、单次审计运行与地址双上限在步执行器内强制；样本仍只在 Sandbox Runner 内执行，产物是观察不是 Finding；`BinaryFactsAdapter` 新增 `analyze_ref` 以支持持有 CAS 引用者驱动 profile；worker 已接线（无 Runner 时该步骤结构化拒绝）。全量门禁 498 passed / 5 skipped（Dev Container 内 PostgreSQL/Redis 集成实跑）、ruff 通过、pyright 0 错误 | 内联符号执行的真实 Sandbox Runner 回放未执行（单元测试用注入的假 runner 覆盖拒绝/锚定/上限三条路径）；**真实模型对智能体本身的端到端已完成**（见验证记录），但整条管线与浏览器证据链回归、二进制侧真实模型验收未执行；`dev` 尚未推送/合并 | 2026-09-11 |
+| T40 智能体调查式审计与确认链路打通 | 待验证 | Codex（`dev` 分支，worktree `.claude/worktrees/t40-agent-audit`） | ①审计由一次性模型调用改为 `AgentLoop` 驱动的调查循环，新增 8 件只读调查工具（`audit_tools.py`）与 `CodeAuditAgent`（`code_audit.py`），静态扫描器输出降级为线索，候选仍经 PAIR 锚定与既有复核/确认门禁；模型未配置时回落原一次性路径。②修复二进制伪代码读取缺陷（`vulnweaver_pair.pseudocode_text` 成为伪代码形状唯一所有者）。③修复 `AgentLoop` 生成的 `AgentRun.prompt_hash` 缺 `sha256:` 前缀（schema 与 DB CHECK 约束均会拒绝，任何 loop run 都无法落库）。④Policy Engine 不再对自由文本参数做遍历扫描（此前 CWE-22 的 `../` rationale 会导致整个计划被拒）。⑤新增 `derive_established_facts`：类别事实终于可从证据推导；fuzz/proof 结算后对受影响的 Finding 以证据修订 id 重开复核。⑥智能体的 `verification_request`（「这个候选需要动态验证」）不再被丢弃，落为 CONTEXTUAL、weight 0 的溯源证据进入证据链，且结构上不可能满足确认策略。⑦`symbolic-execute`：模型可在循环内指定二进制地址发起定点符号执行，地址经索引校验锚定、未开启动态验证即拒绝、单次审计运行与地址双上限在步执行器内强制；样本仍只在 Sandbox Runner 内执行，产物是观察不是 Finding；`BinaryFactsAdapter` 新增 `analyze_ref` 以支持持有 CAS 引用者驱动 profile；worker 已接线（无 Runner 时该步骤结构化拒绝）。全量门禁 498 passed / 5 skipped（Dev Container 内 PostgreSQL/Redis 集成实跑）、ruff 通过、pyright 0 错误 | 内联符号执行的真实 Sandbox Runner 回放未执行（单元测试用注入的假 runner 覆盖拒绝/锚定/上限三条路径）；**真实模型对智能体本身的端到端已完成**（见验证记录），但整条管线与浏览器证据链回归、二进制侧真实模型验收未执行。已推送 `origin/dev` 并开 PR #60（base `main`），实跑 CI 全绿（`Determine change scope` pass、`Python quality gate` pass 2m22s） | 2026-09-11 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
@@ -271,7 +271,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
    - 真实模型验收：**智能体本身已验收**（25 次工具调用/8 轮/产出定位候选，见验证记录）。**剩余**：走完整管线（提交任务 → analysis-worker → `semantic_audit` Job → 落库 → 复核 → 报告），确认任务页「智能体运行轨迹」出现多轮决策、二进制 Finding 的依据来自真实伪代码（Q-020 修复生效）、报告证据链含调查步骤；并对 ELF 教学样本重复一次。
    - 打通自动利用链路：创建/修改项目时开启 `exploit_validation_enabled`，确认得到 confirmed Finding 后 `EXPLOIT` Job 实际投递（Q-021 修复生效）。
    - 智能体内联动态验证：代码与接线已完成（`symbolic-execute` + `SymbolicRunner` + worker 装配）。**剩余**：在部署了 Sandbox Runner 且登记 `binary-facts` 摘要的栈上做一次真实回放，确认「模型给定地址 → 沙箱定点符号执行 → 观察回填」全链；注意该 profile 会连同定点符号执行重跑完整二进制分析，单次开销大，如需提高频次应新增只做定点符号执行的独立沙箱 profile。
-   - 合并前把 `dev` 的 T40 改动并入 `main`（需用户确认推送/PR）。
+   - `dev` 已推送、PR #60 已开且 CI 全绿；合并入 `main` 由你确认后执行（受保护分支）。
 1. T32 真实 E2E 前置（按序）：①构建包含 `compile_harness` 的 `vulnweaver-afl-casr:fixed`；②向 sandbox-runner 与 analysis-worker 配置同一 `AFL_CASR_IMAGE_DIGEST` 和令牌；③以授权源码教学样本验证有界源码摘录→Harness 生成/修复→沙箱编译→小型初始种子 Fuzz→崩溃证据挂接，并以 ELF 验证直接 Fuzz 路径。
 2. T34 真实报告 Job 端到端：生成含调用路径的 Markdown/PDF/SARIF 并经 API 下载，SARIF 追加独立 Schema 校验（当前仅项目内 `validate_sarif` 信封校验）。
 3. 为 T30 在产品设置配置 PLANNING 模型及 `BINARY_TOOLS_IMAGE_DIGEST`，以教学 ELF 运行候选→确认→PAIR API→前端展示的真实 E2E。
