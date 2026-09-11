@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import os
@@ -118,8 +119,22 @@ class BinaryFactsAdapter:
         limits: BinaryAnalysisLimits,
         cancellation: asyncio.Event,
     ) -> ToolContribution:
-        del path
+        # `path` is not sent to the sandbox -- the tool fetches its input by the
+        # CAS reference pinned in `input_ref`.  That makes it possible to hand
+        # this adapter the unpacked image while it keeps analysing the packed
+        # original, which is a silent, plausible-looking wrong answer.  Refuse
+        # the mismatch instead: the two must name the same bytes.
+        self._assert_pinned_input(path)
         return await self.analyze_ref(cast(ArtifactKind, metadata.format), limits, cancellation)
+
+    def _assert_pinned_input(self, path: Path) -> None:
+        # `input_ref` is a `cas://sha256/<hex>` URI; compare its trailing digest
+        # against the artifact actually being analysed.
+        pinned = self._input_ref.rsplit("/", 1)[-1]
+        if hashlib.sha256(path.read_bytes()).hexdigest() != pinned:
+            raise ToolExecutionError(
+                "binary-facts input_ref does not match the artifact being analyzed"
+            )
 
     async def analyze_ref(
         self,

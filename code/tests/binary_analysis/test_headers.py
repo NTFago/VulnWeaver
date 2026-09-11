@@ -10,7 +10,7 @@ from vulnweaver_binary_analysis import (
     inspect_binary,
 )
 
-from tests.binary_analysis.samples import elf64_sample, pe64_sample
+from tests.binary_analysis.samples import elf64_sample, packed_elf64_sample, pe64_sample
 
 
 def test_inspects_x64_elf_sections_and_addresses(tmp_path: Path) -> None:
@@ -34,6 +34,50 @@ def test_detects_upx_section_without_executing_sample(tmp_path: Path) -> None:
     metadata = inspect_binary(sample)
     assert metadata.packed is True
     assert metadata.packer == "UPX"
+
+
+def test_detects_packed_elf_that_names_no_packer(tmp_path: Path) -> None:
+    """The container is rebuilt and the segment is compressed, but nothing is named.
+
+    This is how UPX presents on linux/amd64: the section header table is gone, so
+    the section-name rule has nothing to match on and packing went unreported.
+    """
+    sample = tmp_path / "packed.elf"
+    sample.write_bytes(packed_elf64_sample(alphabet=150))
+    metadata = inspect_binary(sample)
+    assert metadata.sections == ()
+    assert metadata.packed is True
+    assert metadata.packer is None
+
+
+def test_detects_encrypted_segment_behind_intact_sections(tmp_path: Path) -> None:
+    """An encrypted body is flagged on entropy alone, whatever the container looks like."""
+    sample = tmp_path / "encrypted.elf"
+    sample.write_bytes(packed_elf64_sample(keep_sections=True, alphabet=256))
+    metadata = inspect_binary(sample)
+    assert len(metadata.sections) == 2
+    assert metadata.packed is True
+    assert metadata.packer is None
+
+
+def test_does_not_flag_a_normally_linked_elf(tmp_path: Path) -> None:
+    sample = tmp_path / "sample.elf"
+    sample.write_bytes(elf64_sample())
+    metadata = inspect_binary(sample)
+    assert metadata.packed is False
+    assert metadata.packer is None
+
+
+def test_does_not_flag_weakly_compressed_body_with_intact_sections(tmp_path: Path) -> None:
+    """Documents a known limit rather than pretending the heuristic is total.
+
+    A shell that keeps the section table *and* compresses below the entropy floor
+    is not caught here; DIE and the UPX probe are what cover that case.
+    """
+    sample = tmp_path / "quiet.elf"
+    sample.write_bytes(packed_elf64_sample(keep_sections=True, alphabet=150))
+    metadata = inspect_binary(sample)
+    assert metadata.packed is False
 
 
 def test_inspects_x64_pe_and_extracts_strings(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 from pathlib import Path
+from typing import cast
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryAnalysisLimits, BinaryFactsAdapter, inspect_binary
@@ -71,10 +72,15 @@ def test_binary_facts_adapter_converts_cas_output(tmp_path: Path) -> None:
     )
     sandbox = _Sandbox(result)
     target = tmp_path / "sample"
-    target.write_bytes(elf64_sample())
+    sample = elf64_sample()
+    target.write_bytes(sample)
+    pinned = store.put_stream(io.BytesIO(sample), max_bytes=1024 * 1024)
     contribution = asyncio.run(
         BinaryFactsAdapter(
-            sandbox, store, image_digest="sha256:" + "a" * 64, input_ref="cas://sha256/" + "b" * 64
+            sandbox,
+            store,
+            image_digest="sha256:" + "a" * 64,
+            input_ref=pinned.object_ref,
         ).analyze(
             target,
             inspect_binary(target, BinaryAnalysisLimits()),
@@ -84,6 +90,7 @@ def test_binary_facts_adapter_converts_cas_output(tmp_path: Path) -> None:
     )
     assert contribution.compiler == "GCC"
     assert sandbox.request["output_file_names"] == ["binary-facts.json"]
+    assert sandbox.request["input_ref"] == pinned.object_ref
 
 
 def test_binary_facts_adapter_rejects_missing_output(tmp_path: Path) -> None:
@@ -105,12 +112,14 @@ def test_binary_facts_adapter_rejects_missing_output(tmp_path: Path) -> None:
         failure=None,
     )
     target = tmp_path / "sample"
-    target.write_bytes(elf64_sample())
+    sample = elf64_sample()
+    target.write_bytes(sample)
+    pinned = store.put_stream(io.BytesIO(sample), max_bytes=1024 * 1024)
     adapter = BinaryFactsAdapter(
         _Sandbox(result),
         store,
         image_digest="sha256:" + "a" * 64,
-        input_ref="cas://sha256/" + "b" * 64,
+        input_ref=pinned.object_ref,
     )
     try:
         asyncio.run(
@@ -125,3 +134,35 @@ def test_binary_facts_adapter_rejects_missing_output(tmp_path: Path) -> None:
         assert str(error) == "binary-facts output is missing"
     else:
         raise AssertionError("missing binary-facts output was accepted")
+
+
+def test_binary_facts_adapter_refuses_to_analyze_a_different_artifact(tmp_path: Path) -> None:
+    """The sandbox reads its input by CAS reference, never from `path`.
+
+    Handing this adapter the unpacked image while it keeps analysing the packed
+    original produced a wrong answer that looked entirely plausible, so the
+    mismatch has to be an error rather than a silent substitution.
+    """
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    target = tmp_path / "sample"
+    target.write_bytes(elf64_sample())
+    other = store.put_stream(io.BytesIO(b"\x7fELF" + b"\x00" * 64), max_bytes=1024 * 1024)
+    adapter = BinaryFactsAdapter(
+        _Sandbox(cast(SandboxResult, None)),
+        store,
+        image_digest="sha256:" + "a" * 64,
+        input_ref=other.object_ref,
+    )
+    try:
+        asyncio.run(
+            adapter.analyze(
+                target,
+                inspect_binary(target, BinaryAnalysisLimits()),
+                BinaryAnalysisLimits(),
+                asyncio.Event(),
+            )
+        )
+    except RuntimeError as error:
+        assert str(error) == "binary-facts input_ref does not match the artifact being analyzed"
+    else:
+        raise AssertionError("a mismatched input_ref was accepted")

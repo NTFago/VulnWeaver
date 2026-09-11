@@ -286,7 +286,7 @@ class BinaryImportExecutor:
         metadata: BinaryMetadata,
         cancellation: asyncio.Event,
         produced: list[str],
-        object_ref: str,
+        analyzed_object_ref: str,
     ) -> tuple[int, ...] | None:
         """Run the model planning hook; failures degrade instead of aborting."""
         planning_hook = self._planning_hook
@@ -299,7 +299,7 @@ class BinaryImportExecutor:
                     self._sandbox,
                     self._store,
                     image_digest=self._sandbox_image_digest,
-                    input_ref=object_ref,
+                    input_ref=analyzed_object_ref,
                     target_addresses=target_addresses,
                     angr_enabled=True,
                 ).analyze(analyzed_path, metadata, self._limits, cancellation)
@@ -367,6 +367,11 @@ class BinaryImportExecutor:
             aggregate.tool_runs.append(upx_outcome.run)
             analyzed_path = input_path
             analyzed_version_id = parent_version_id
+            # The sandbox tooling consumes the artifact by CAS reference, not by
+            # the local path.  Once unpacking replaces `analyzed_path` with the
+            # unpacked image, this reference must move with it, or every sandbox
+            # analysis silently keeps reading the packed file.
+            analyzed_object_ref = object_ref
             produced: list[str] = []
             metadata = original_metadata
             if upx_outcome.unpacked_path is not None:
@@ -391,6 +396,7 @@ class BinaryImportExecutor:
                 )
                 analyzed_path = upx_outcome.unpacked_path
                 analyzed_version_id = unpacked_version_id
+                analyzed_object_ref = stored_unpacked.object_ref
                 produced.append(unpacked_version_id)
                 aggregate = BinaryAnalysisAggregate(metadata)
                 aggregate.packed = True
@@ -410,7 +416,7 @@ class BinaryImportExecutor:
                         self._sandbox,
                         self._store,
                         image_digest=self._sandbox_image_digest,
-                        input_ref=object_ref,
+                        input_ref=analyzed_object_ref,
                         target_addresses=target_addresses,
                         angr_enabled=(
                             self._angr_adapter.enabled
@@ -447,7 +453,13 @@ class BinaryImportExecutor:
             if planning_active and not cancellation.is_set():
                 assert self._planning_hook is not None
                 planned = await self._plan_with_agent(
-                    job, aggregate, analyzed_path, metadata, cancellation, produced, object_ref
+                    job,
+                    aggregate,
+                    analyzed_path,
+                    metadata,
+                    cancellation,
+                    produced,
+                    analyzed_object_ref,
                 )
                 if planned is None:
                     return _cancelled_result(job["id"], produced)

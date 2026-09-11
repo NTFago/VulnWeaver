@@ -110,6 +110,21 @@ async def main() -> int:
             target, metadata, limits, cancellation, targets
         )
 
+        if objdump.functions:
+            functions = objdump.functions
+            instructions = objdump.instructions
+            basic_blocks = objdump.basic_blocks
+            xrefs = objdump.xrefs
+            imports = objdump.imports
+            normalized_from = "objdump"
+        else:
+            functions = ghidra.functions
+            instructions = ghidra.instructions
+            basic_blocks = ghidra.basic_blocks
+            xrefs = ghidra.xrefs
+            imports = ghidra.imports
+            normalized_from = "ghidra"
+
         facts = {
             "schema_version": SCHEMA_VERSION,
             "metadata": dataclasses.asdict(metadata),
@@ -132,13 +147,21 @@ async def main() -> int:
             # These normalized collections are consumed by the worker-side
             # PAIR importer; tool-specific runs above remain available for
             # provenance and diagnostics.
-            "functions": list(objdump.functions),
-            "instructions": list(objdump.instructions),
-            "basic_blocks": list(objdump.basic_blocks),
-            "xrefs": list(objdump.xrefs),
+            #
+            # objdump recovers function boundaries from the symbol table, so a
+            # stripped image -- which is what every unpacked sample is -- yields
+            # nothing at all from it: no functions, no blocks, and therefore no
+            # input for the flattening assessment.  Ghidra's auto-analysis does
+            # not depend on symbols, so fall back to it rather than reporting an
+            # empty binary.  `normalized_from` records which source was used.
+            "normalized_from": normalized_from,
+            "functions": list(functions),
+            "instructions": list(instructions),
+            "basic_blocks": list(basic_blocks),
+            "xrefs": list(xrefs),
             "pseudocode": list(ghidra.pseudocode),
             "symbolic_facts": list(angr.symbolic_facts),
-            "imports": list(objdump.imports),
+            "imports": list(imports),
             "strings": list(extract_strings(target, metadata, limits)),
             "samples": {
                 "objdump_functions": _sampled(objdump.functions),
