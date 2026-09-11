@@ -216,6 +216,10 @@
               <label>Fuzz 崩溃上限<input bind:value={productSettings.fuzz_budgets.max_crashes} type="number" min="0" max="10000" /></label>
             </div>
             <div class="field-grid">
+              <label>审计智能体超时（秒）<input bind:value={productSettings.agent_loop_budgets.audit_deadline_seconds} type="number" min="0" max="86400" /></label>
+              <label>逆向规划智能体超时（秒）<input bind:value={productSettings.agent_loop_budgets.reverse_planning_deadline_seconds} type="number" min="0" max="86400" /></label>
+            </div>
+            <div class="field-grid">
               <label>Sandbox Runner 超时（秒）<input bind:value={productSettings.sandbox_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
               <label>Fuzz Runner 超时（秒）<input bind:value={productSettings.fuzz_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
             </div>

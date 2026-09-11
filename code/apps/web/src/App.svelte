@@ -184,6 +184,7 @@
         binary: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
       },
       fuzz_budgets: raw.fuzz_budgets ?? { max_executions: 0, max_duration_seconds: 0, max_crashes: 0 },
+      agent_loop_budgets: raw.agent_loop_budgets ?? { audit_deadline_seconds: 0, reverse_planning_deadline_seconds: 0 },
       sandbox_runner_timeout_seconds: raw.sandbox_runner_timeout_seconds ?? 0,
       fuzz_runner_timeout_seconds: raw.fuzz_runner_timeout_seconds ?? 0,
       angr_enabled: raw.angr_enabled ?? null,
