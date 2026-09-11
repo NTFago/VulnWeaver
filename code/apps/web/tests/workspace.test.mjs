@@ -2,8 +2,26 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { aggregatePipelineStages, pipelineProgress } from '../src/lib/pipeline.ts';
 import { findingCounts, pseudocodeText, reportView } from '../src/lib/report-view.ts';
+import { displayRuns, sharedReferences, mergeEvents } from '../src/lib/audit-trail.ts';
+import { tasks, runsFor, trailFor } from './dev-fixtures.mjs';
 const job = (id, kind, status, extra = {}) => ({ id, kind, status, updated_at: '2026-09-11T00:00:00Z', failure: null, ...extra });
 const task = { status: 'analyzing' };
+test('agent roles require exact metadata and never follow model-name guesses', () => {
+  const runs = runsFor(tasks[0]);
+  assert.equal(displayRuns([{ ...runs[0], model: 'review-fuzz-planner' }], null)[0].role, 'unknown');
+  assert.equal(displayRuns(runs, trailFor(tasks[0]))[0].role, 'semantic_audit_agent');
+  assert.equal(displayRuns(runs, trailFor(tasks[1]))[0].job_id, null);
+});
+test('collaboration links require an exact shared artifact reference', () => {
+  const [run] = displayRuns(runsFor(tasks[0]), null);
+  const target = { ...run, id: 'other', input_refs: ['artifact:audit-result'] };
+  assert.equal(sharedReferences([run, target], target).length, 1);
+  assert.equal(sharedReferences([run, { ...target, input_refs: ['artifact:audit-result-extra'] }], { ...target, input_refs: ['artifact:audit-result-extra'] }).length, 0);
+});
+test('event replay merges by event identity and restores sequence order', () => {
+  const a = { event_id: 'a', sequence: 1 }, b = { event_id: 'b', sequence: 2 };
+  assert.deepEqual(mergeEvents([b, a], [b, { event_id: 'c', sequence: 3 }]), [a, b, { event_id: 'c', sequence: 3 }]);
+});
 const project = { exploit_validation_enabled: true };
 const stage = (jobs, key, context = task, config = project) => aggregatePipelineStages(jobs, 'source', context, config).find(s => s.key === key);
 test('each binary analysis job contributes once, even with repeated delivery', () => {

@@ -12,6 +12,7 @@
     Task,
   } from "@vulnweaver/contracts";
   import type { AgentRun } from "@vulnweaver/contracts";
+  import type { AuditTrail } from "../audit-trail";
   import type { FindingEvidenceDetail } from "../api";
   import { api } from "../api";
   import { formatDate } from "../format";
@@ -55,6 +56,9 @@
   export let pocs: Poc[] = [];
   export let reviews: Review[] = [];
   export let agentRuns: AgentRun[] = [];
+  export let trail: AuditTrail | null = null;
+  export let trailError = "";
+  export let streamState: "connecting" | "connected" | "reconnecting" = "connecting";
   export let pairFunctions: PairFunction[] = [];
   export let pairNeighborhood: Record<string, unknown> | null = null;
   export let selectedFunctionId: string | null = null;
@@ -175,12 +179,15 @@
   </div>
   <div class="task-actions">
     <span class={`status-badge large ${task.status}`}><i></i>{taskStatusLabels[task.status]}</span>
-    {#if failedJobs.length > 0}<button class="secondary" on:click={onRestartTask} disabled={busy}>重新审计</button>{/if}
+    {#if (failedJobs.length > 0 || ["completed", "failed", "cancelled"].includes(task.status))}<button class="secondary" on:click={onRestartTask} disabled={busy}>重新审计</button>{/if}
     {#if !["completed", "failed", "cancelled"].includes(task.status)}<button class="danger" on:click={onCancelTask} disabled={busy}>取消任务</button>{/if}
     <a class="secondary" href="#audit-reports">查看报告 <span aria-hidden="true">↓</span></a>
   </div>
 </section>
 <TaskPipeline {jobs} {taskType} {task} {project} />
+{#if trail?.binary_analysis_jobs.length}
+  <details class="panel binary-summary"><summary>二进制处理记录 · {trail.binary_analysis_jobs.length} 个执行单元</summary><p>识别、去壳、反编译与解混淆由二进制处理工具执行。以下仅展示已登记作业和产物，不将未暴露的子步骤标记为完成。</p>{#each trail.binary_analysis_jobs as item}<div><b>{jobStatusLabels[item.status]}</b> · 第 {item.attempt} 次尝试 · {item.output_version_ids.length} 份已登记产物<small>{item.job_id}</small>{#each item.output_version_ids as id}<code>{id}</code>{/each}</div>{/each}</details>
+{/if}
 <section class="metric-strip task-metrics" aria-label="任务统计">
   <div><strong>{findings.length}</strong><span>全部发现（含误报）</span></div>
   <div><strong>{confirmedFindings}</strong><span>已确认漏洞</span></div>
@@ -250,9 +257,9 @@
         </div>
       </header>
       {#if rightTab === "agents"}
-        <AgentPanel {agentRuns} />
+        <AgentPanel {agentRuns} {trail} {trailError} />
       {:else if rightTab === "events"}
-        <EventStream {events} {jobs} />
+        <p class="stream-state">{streamState === "connected" ? "事件连接正常" : streamState === "reconnecting" ? "连接恢复中；已接收事件保留，任务数据定时刷新" : "正在连接事件流"}</p><EventStream {events} {jobs} />
       {:else}
         {#if jobs.length === 0}
           <div class="compact-empty">等待编排服务消费 <code>task.requested</code>。</div>
@@ -311,6 +318,11 @@
 <ReportCenter {jobs} versions={reportVersionIds.flatMap(id => artifactVersions.has(id) ? [artifactVersions.get(id)!] : [])} {busy} onGenerate={onCreateReport} />
 
 <style>
+  .binary-summary { margin: 0 0 24px; font-size: 13px; }
+  .binary-summary summary { cursor: pointer; color: var(--text-2); }
+  .binary-summary p, .binary-summary small { color: var(--muted); font-size: 12px; }
+  .binary-summary small, .binary-summary code { display: block; overflow-wrap: anywhere; }
+  .stream-state { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
   .task-kicker { display: block; color: var(--accent); font-size: 12px; margin: 8px 0; letter-spacing: .08em; }
   .task-columns {
     display: grid;

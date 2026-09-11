@@ -15,6 +15,7 @@
     Task,
   } from "@vulnweaver/contracts";
   import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type ProductSettings, type Session } from "./lib/api";
+  import { mergeEvents, type AuditTrail } from "./lib/audit-trail";
   import AuthView from "./lib/views/AuthView.svelte";
   import SettingsView, { type SettingsSavePayload } from "./lib/views/SettingsView.svelte";
   import ProjectsView, { type NewProjectPayload } from "./lib/views/ProjectsView.svelte";
@@ -43,7 +44,6 @@
   let selectedPocs: Poc[] = [];
   let selectedReviews: Review[] = [];
   let events: QueueEvent[] = [];
-  let observability: Record<string, unknown> = {};
   let socket: WebSocket | null = null;
   let socketGeneration = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -51,6 +51,12 @@
   let pairNeighborhood: Record<string, unknown> | null = null;
   let pairFunctions: PairFunction[] = [];
   let agentRuns: AgentRun[] = [];
+  let trail: AuditTrail | null = null;
+  let trailError = "";
+  let streamState: "connecting" | "connected" | "reconnecting" = "connecting";
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let refreshSequence = 0;
   let selectedFunctionId: string | null = null;
   let reportVersionIds: string[] = [];
 
@@ -166,6 +172,7 @@
     }
     return {
       ...raw,
+      review_model_context_window_tokens: raw.review_model_context_window_tokens ?? 0,
       model_tiers: tiers,
       tier_api_keys_configured: raw.tier_api_keys_configured ?? {},
       tool_image_digests: raw.tool_image_digests ?? { binary_tools: null, proof_tool: null, afl_casr: null },
@@ -269,69 +276,101 @@
     } catch (caught) { busy = false; showError(caught); return false; }
   }
 
+  function isCurrentTask(taskId: string, generation: number): boolean {
+    return generation === socketGeneration && selectedTask?.id === taskId && view === "task";
+  }
+
   async function openTask(task: Task): Promise<void> {
-    begin();
+    begin(); disconnectEvents(); selectedTask = task; view = "task";
+    const generation = socketGeneration;
+    selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
+    selectedFunctionId = null; pairNeighborhood = null; jobs = []; findings = []; events = [];
+    pairFunctions = []; agentRuns = []; trail = null; trailError = ""; reportVersionIds = [];
     try {
-      disconnectEvents(); selectedTask = await api.task(task.id); view = "task";
-      selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
-      [jobs, events, findings, observability, pairFunctions, agentRuns] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id), api.observability(task.id), api.pair(task.id), api.agentRuns(task.id)]);
-      await refreshReportResults();
-      connectEvents(task.id); done();
-    } catch (caught) { busy = false; showError(caught); }
+      await refreshTaskData(task.id, generation);
+      if (!isCurrentTask(task.id, generation)) return;
+      connectEvents(task.id, 0, generation);
+      // AgentRun can change without a task event; refresh the read model periodically.
+      pollTimer = setInterval(() => scheduleRefresh(task.id, generation), 5000);
+      done();
+    } catch (caught) { if (isCurrentTask(task.id, generation)) { busy = false; showError(caught); } }
   }
 
   function disconnectEvents(): void {
-    socketGeneration += 1;
+    socketGeneration += 1; refreshSequence += 1;
     if (reconnectTimer !== null) clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-    socket?.close();
-    socket = null;
+    if (refreshTimer !== null) clearTimeout(refreshTimer);
+    if (pollTimer !== null) clearInterval(pollTimer);
+    reconnectTimer = null; refreshTimer = null; pollTimer = null;
+    socket?.close(); socket = null; streamState = "connecting";
+  }
+
+  function scheduleRefresh(taskId: string, generation: number): void {
+    if (!isCurrentTask(taskId, generation) || refreshTimer !== null) return;
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      void refreshTaskData(taskId, generation).catch(caught => {
+        if (isCurrentTask(taskId, generation)) showError(caught);
+      });
+    }, 180);
+  }
+
+  async function refreshTaskData(taskId: string, generation: number): Promise<void> {
+    const sequence = ++refreshSequence;
+    const [taskData, jobData, findingData, eventData, functions, runs, trailResult] = await Promise.all([
+      api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId), api.pair(taskId), api.agentRuns(taskId),
+      api.auditTrail(taskId).then(value => ({ value, error: "" })).catch(() => ({ value: null, error: "审计关联信息暂不可用" })),
+    ]);
+    if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
+    selectedTask = taskData; jobs = jobData; findings = findingData; pairFunctions = functions; agentRuns = runs;
+    events = mergeEvents(events, eventData); trail = trailResult.value; trailError = trailResult.error;
+    if (selectedFinding) selectedFinding = findings.find(finding => finding.id === selectedFinding?.id) ?? null;
+    if (selectedFunctionId && !functions.some(fn => fn.id === selectedFunctionId)) { selectedFunctionId = null; pairNeighborhood = null; }
+    const inputVersions = await Promise.all(taskData.artifact_version_ids.map(id => api.artifactVersion(id)));
+    if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
+    for (const version of inputVersions) artifactVersions.set(version.id, version);
+    artifactVersions = new Map(artifactVersions);
+    await refreshReportResults(taskId, generation, sequence);
   }
 
   function connectEvents(taskId: string, attempt = 0, generation = socketGeneration): void {
+    if (!isCurrentTask(taskId, generation)) return;
     const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
-    const current = taskEventSocket(taskId, after);
-    socket = current;
-    current.onmessage = async (message) => {
-      const event = JSON.parse(message.data as string) as QueueEvent;
-      if (!events.some((item) => item.event_id === event.event_id)) events = [...events, event];
-      if (event.event_type === "task.status_changed" && selectedTask) {
-        selectedTask = {
-          ...selectedTask, status: event.payload.status,
-          result: event.payload.result, failure: event.payload.failure,
-        };
-      }
-      [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
-      await refreshReportResults();
+    const current = taskEventSocket(taskId, after); socket = current;
+    current.onopen = () => { if (isCurrentTask(taskId, generation)) streamState = "connected"; };
+    current.onmessage = message => {
+      if (!isCurrentTask(taskId, generation)) return;
+      try {
+        const event = JSON.parse(message.data as string) as QueueEvent;
+        if (typeof event.event_id !== "string" || !Number.isInteger(event.sequence)) return;
+        events = mergeEvents(events, [event]);
+        scheduleRefresh(taskId, generation);
+      } catch { scheduleRefresh(taskId, generation); }
     };
     current.onclose = () => {
-      if (generation !== socketGeneration || selectedTask?.id !== taskId || view !== "task") return;
+      if (!isCurrentTask(taskId, generation)) return;
+      streamState = "reconnecting";
       reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
     };
   }
 
   async function recoverEvents(taskId: string, attempt: number, generation: number): Promise<void> {
-    if (generation !== socketGeneration || selectedTask?.id !== taskId || view !== "task") return;
+    if (!isCurrentTask(taskId, generation)) return;
     try {
-      const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
-      const recovered = await api.events(taskId, after);
-      const known = new Set(events.map((event) => event.event_id));
-      events = [...events, ...recovered.filter((event) => !known.has(event.event_id))];
-      [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
-      await refreshReportResults();
-      connectEvents(taskId, 0, generation);
+      await refreshTaskData(taskId, generation);
+      if (isCurrentTask(taskId, generation)) connectEvents(taskId, 0, generation);
     } catch {
-      reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
+      if (isCurrentTask(taskId, generation)) reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
     }
   }
 
-  async function refreshReportResults(): Promise<void> {
-    const results = await Promise.all(jobs
-      .filter((job) => job.kind === "report")
-      .map((job) => api.jobResult(job.id)));
-    reportVersionIds = results.flatMap((result) =>
-      "produced_artifact_version_ids" in result ? result.produced_artifact_version_ids : []);
-    const versions = await Promise.all(reportVersionIds.map((id) => api.artifactVersion(id)));
+  async function refreshReportResults(taskId = selectedTask?.id, generation = socketGeneration, sequence = refreshSequence): Promise<void> {
+    if (!taskId) return;
+    const results = await Promise.all(jobs.filter(job => job.kind === "report" && job.status === "succeeded").map(job => api.jobResult(job.id)));
+    const ids = [...new Set(results.flatMap(result => "produced_artifact_version_ids" in result ? result.produced_artifact_version_ids : []))];
+    const versions = await Promise.all(ids.map(id => api.artifactVersion(id)));
+    if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
+    reportVersionIds = ids;
     for (const version of versions) artifactVersions.set(version.id, version);
     artifactVersions = new Map(artifactVersions);
   }
@@ -356,13 +395,16 @@
   }
 
   async function selectFinding(finding: Finding): Promise<void> {
-    selectedFinding = finding;
+    selectedFinding = finding; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
     try {
-      [selectedEvidence, selectedPocs, selectedReviews] = await Promise.all([
+      const taskId = selectedTask?.id;
+      const [nextEvidence, nextPocs, nextReviews] = await Promise.all([
         api.findingEvidence(finding.id),
         api.findingPocs(finding.id),
         api.findingReviews(finding.id),
       ]);
+      if (selectedTask?.id !== taskId || selectedFinding?.id !== finding.id) return;
+      selectedEvidence = nextEvidence; selectedPocs = nextPocs; selectedReviews = nextReviews;
     } catch (caught) { showError(caught); }
   }
 
@@ -392,7 +434,8 @@
   async function selectFunction(fn: PairFunction): Promise<void> {
     selectedFunctionId = fn.id;
     if (!selectedTask) return;
-    try { pairNeighborhood = await api.pairNeighborhood(selectedTask.id, fn.id); }
+    const taskId = selectedTask.id; pairNeighborhood = null;
+    try { const value = await api.pairNeighborhood(taskId, fn.id); if (selectedTask?.id === taskId && selectedFunctionId === fn.id) pairNeighborhood = value; }
     catch (caught) { showError(caught); }
   }
 
@@ -417,6 +460,7 @@
         format,
       });
       jobs = [job, ...jobs.filter((item) => item.id !== job.id)];
+      scheduleRefresh(selectedTask.id, socketGeneration);
       done(`${format.toUpperCase()} 报告任务已投递`);
     } catch (caught) { busy = false; showError(caught); }
   }
@@ -497,9 +541,9 @@
       {:else if view === "overview"}
         <ProjectsView {projects} {busy} onOpenProject={openProject} onCreateProject={createProject} onShowError={(message) => (error = message)} />
       {:else if view === "project" && selectedProject}
-        <ProjectView project={selectedProject} {artifacts} {artifactVersions} {tasks} {busy} onGoOverview={goOverview} onOpenTask={openTask} onUpload={upload} onCreateTask={createTask} onShowError={(message) => (error = message)} />
+        {#key selectedProject.id}<ProjectView project={selectedProject} {artifacts} {artifactVersions} {tasks} {busy} onGoOverview={goOverview} onOpenTask={openTask} onUpload={upload} onCreateTask={createTask} onShowError={(message) => (error = message)} />{/key}
       {:else if view === "task" && selectedTask}
-        <TaskView
+        {#key selectedTask.id}<TaskView
           task={selectedTask}
           project={selectedProject}
           {jobs}
@@ -510,6 +554,9 @@
           pocs={selectedPocs}
           reviews={selectedReviews}
           {agentRuns}
+          {trail}
+          {trailError}
+          {streamState}
           {pairFunctions}
           {pairNeighborhood}
           {selectedFunctionId}
@@ -526,7 +573,7 @@
           onSubmitReview={submitReview}
           onSubmitAnnotation={submitAnnotation}
           onSelectFunction={(fn) => void selectFunction(fn)}
-        />
+        />{/key}
       {/if}
     </main>
   </div>
