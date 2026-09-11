@@ -55,6 +55,7 @@ from vulnweaver_pair import build_call_path_steps, pseudocode_text
 from vulnweaver_persistence import Database, EntityConflict, Repositories
 
 from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
+from vulnweaver_orchestrator.pair_scopes import pair_version_scope
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
 
 AUDIT_BASELINE = "semantic_function_audit"
@@ -306,14 +307,21 @@ class SemanticAuditor:
             entries: list[tuple[str, PairFunction]] = []
             source_version_id = ""
             binary_version_id = ""
-            for version_id_value in sorted(task["artifact_version_ids"]):
+            for version_id_value in await pair_version_scope(repositories, task):
                 version = await repositories.artifacts.get_version(version_id_value)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
                 kind = artifact["kind"]
                 if kind in {ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY}:
                     source_version_id = source_version_id or version_id_value
                 elif kind in {ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED}:
-                    binary_version_id = binary_version_id or version_id_value
+                    # Packed inputs hold their PAIR graphs on the derived
+                    # analysis version, so a version that actually carries
+                    # functions wins over the uploaded image.
+                    functions = await repositories.pair.list_functions(version_id_value)
+                    if functions or not binary_version_id:
+                        binary_version_id = version_id_value
+                    entries.extend((version_id_value, function) for function in functions)
+                    continue
                 else:
                     continue
                 entries.extend(

@@ -38,6 +38,7 @@ from vulnweaver_persistence import Database, Repositories
 from vulnweaver_source_analysis import SourceExcerptReader, SourceImportError
 from vulnweaver_tool_runtime import ScheduledToolCall
 
+from vulnweaver_orchestrator.pair_scopes import pair_version_scope
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader
 
 # The audit tools are in-process readers: they have no container image. The
@@ -345,14 +346,16 @@ class AuditWorkspace:
 
         async with self.database.transaction() as repositories:
             task = await repositories.tasks.get(self.task_id)
-            for version_id in sorted(task["artifact_version_ids"]):
+            # Binary graphs are stored under the derived analysis version, which
+            # is absent from ``artifact_version_ids`` when the input was packed;
+            # resolve the same scope the single-shot audit reads.
+            for version_id in await pair_version_scope(repositories, task):
                 version = await repositories.artifacts.get_version(version_id)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
                 kind = ArtifactKind(artifact["kind"])
                 self._version_kinds[version_id] = kind
                 self._versions[version_id] = version
-                # Binary graphs are stored under the derived analysis version,
-                # so the functions' own artifact_version_id is authoritative.
+                # The functions' own artifact_version_id is authoritative.
                 for function in await repositories.pair.list_functions(version_id):
                     ref = AuditFunctionRef(
                         version_id=function["artifact_version_id"], function=function
