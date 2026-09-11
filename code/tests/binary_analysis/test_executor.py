@@ -33,6 +33,8 @@ from vulnweaver_contracts import (
     JobKind,
     JobStatus,
     Project,
+    SandboxResult,
+    SandboxStatus,
     ResourceBudget,
     StaticToolStatus,
     Task,
@@ -168,6 +170,73 @@ class _NormalizedAdapter:
                     reason=None,
                 ),
             ),
+        )
+
+
+class _RecordingFactsSandbox:
+    """Serve fixed binary-facts output while recording sandbox requests."""
+
+    def __init__(self, store: LocalContentAddressedStore) -> None:
+        self._store = store
+        self.requests: list[Mapping[str, object]] = []
+
+    async def run(self, request, cancellation: asyncio.Event) -> SandboxResult:
+        del cancellation
+        self.requests.append(dict(request))
+        payload = {
+            "tools": {
+                "objdump": {
+                    "run": {
+                        "tool_name": "binary-facts",
+                        "tool_version": "1.0.0",
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "reason": None,
+                        "raw_output": None,
+                    }
+                },
+                "die": {"compiler": None, "packer": None, "packed": False},
+            },
+            "functions": [
+                {
+                    "name": "save_note",
+                    "address": 0x401200,
+                    "size": 32,
+                    "file_offset": 0x200,
+                    "attributes": {"source": "sandbox-fixture"},
+                }
+            ],
+            "instructions": [],
+            "basic_blocks": [],
+            "xrefs": [],
+            "pseudocode": [],
+            "imports": [],
+        }
+        stored = self._store.put_stream(
+            io.BytesIO(json.dumps(payload).encode()), max_bytes=1024 * 1024
+        )
+        return SandboxResult(
+            schema_version="1.0.0",
+            request_id="request-binary-facts-1",
+            status=SandboxStatus.SUCCEEDED,
+            exit_code=0,
+            stdout_ref=None,
+            stderr_ref=None,
+            outputs=[
+                {
+                    "path": "binary-facts.json",
+                    "object_ref": stored.object_ref,
+                    "digest": stored.digest,
+                    "size_bytes": stored.size_bytes,
+                }
+            ],
+            resource_usage={
+                "duration_millis": 1,
+                "cpu_millis": 1,
+                "memory_bytes": 1,
+                "output_bytes": stored.size_bytes,
+            },
+            failure=None,
         )
 
 
@@ -339,6 +408,135 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             assert invalid["failure"] is not None
             assert invalid["failure"]["code"] == "binary_import.target_outside_executable_section"
             assert invalid["produced_artifact_version_ids"] == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_binary_executor_sends_unpacked_binary_to_sandbox_facts(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    """Regression: sandbox facts must analyze the unpacked derived artifact.
+
+    After the in-worker UPX unpack the binary-facts request referenced the
+    packed upload, so the isolated tool measured the compressed stub
+    (functions=0), PAIR stayed empty and the semantic audit ran as a no-op.
+    """
+
+    async def scenario() -> None:
+        suffix = uuid.uuid4().hex[:12]
+        project_id = f"project:binary-sbx-{suffix}"
+        artifact_id = f"artifact:binary-sbx-{suffix}"
+        version_id = f"artifact-version:binary-sbx-{suffix}"
+        task_id = f"task:binary-sbx-{suffix}"
+        job_id = f"job:binary-sbx-{suffix}"
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "store")
+        stored = store.put_stream(io.BytesIO(elf64_sample(upx_section=True)), max_bytes=1024 * 1024)
+        project = Project(
+            schema_version="1.0.0",
+            id=project_id,
+            name="Binary sandbox project",
+            input_scope=["local://authorized-binary"],
+            permission_mode="request_permission",
+            exploit_validation_enabled=False,
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+        )
+        artifact = Artifact(
+            schema_version="1.0.0",
+            id=artifact_id,
+            project_id=project_id,
+            kind=ArtifactKind.ELF,
+            current_version_id=version_id,
+            created_at=TIMESTAMP,
+        )
+        version = ArtifactVersion(
+            schema_version="1.0.0",
+            id=version_id,
+            artifact_id=artifact_id,
+            digest=stored.digest,
+            object_ref=stored.object_ref,
+            generation_config={},
+            created_at=TIMESTAMP,
+        )
+        task = Task(
+            schema_version="1.0.0",
+            id=task_id,
+            project_id=project_id,
+            artifact_version_ids=[version_id],
+            status=TaskStatus.CREATED,
+            result=None,
+            failure=None,
+            idempotency_key=f"task-binary-sbx-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        job = Job(
+            schema_version="1.0.0",
+            id=job_id,
+            task_id=task_id,
+            kind=JobKind.IMPORT,
+            tool={
+                "name": "binary-import",
+                "version": "1.0.0",
+                "image_digest": "sha256:" + "a" * 64,
+            },
+            arguments={"artifact_version_id": version_id},
+            input_refs=[stored.object_ref],
+            status=JobStatus.RUNNING,
+            idempotency_key=f"job-binary-sbx-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            retry_policy={
+                "max_attempts": 2,
+                "backoff_seconds": 1.0,
+                "retryable_failure_kinds": ["environment"],
+            },
+            attempt=1,
+            lease=None,
+            failure=None,
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project)
+                await repositories.artifacts.add(artifact)
+                await repositories.artifacts.add_version(version)
+                await repositories.tasks.create(task)
+            sandbox = _RecordingFactsSandbox(store)
+            executor = BinaryImportExecutor(
+                database,
+                store,
+                adapters=(),
+                upx=_UnpacksUpx(),
+                pair_importer=BinaryPairImporter(database),
+                scratch_root=tmp_path,
+                sandbox=sandbox,
+                sandbox_image_digest="sha256:" + "a" * 64,
+            )
+            result = await executor.execute(job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED
+            # Sandbox facts supplied no pseudocode, so no readable artifact is derived.
+            unpacked_version_id, result_version_id = result["produced_artifact_version_ids"]
+            assert len(sandbox.requests) == 1
+            async with database.transaction() as repositories:
+                unpacked_version = await repositories.artifacts.get_version(unpacked_version_id)
+            # The request must reference the unpacked derived artifact, not the upload.
+            assert sandbox.requests[0]["input_ref"] == unpacked_version["object_ref"]
+            assert sandbox.requests[0]["input_ref"] != stored.object_ref
+            async with database.transaction() as repositories:
+                pair_functions = await repositories.pair.list_functions(version_id)
+            assert [item["name"] for item in pair_functions] == ["save_note"]
+            async with database.transaction() as repositories:
+                result_version = await repositories.artifacts.get_version(result_version_id)
+            with store.open(result_version["object_ref"]) as stream:
+                document = json.load(stream)
+            validate_contract("BinaryAnalysisResult", document)
+            assert document["functions"][0]["name"] == "save_note"
+            assert document["pseudocode"] == []
         finally:
             await database.dispose()
 
