@@ -217,6 +217,16 @@ export const api = {
       body: JSON.stringify({ schema_version: schemaVersion, ...payload }),
     }),
   task: (taskId: string) => request<Task>(`/api/tasks/${taskId}`),
+  deleteTask: (taskId: string) =>
+    request<void>(`/api/tasks/${encodeURIComponent(taskId)}`, {
+      method: "DELETE",
+      headers: writeHeaders(),
+    }),
+  deleteProject: (projectId: string) =>
+    request<void>(`/api/projects/${encodeURIComponent(projectId)}`, {
+      method: "DELETE",
+      headers: writeHeaders(),
+    }),
   jobs: (taskId: string) => request<Job[]>(`/api/tasks/${taskId}/jobs`),
   jobResult: (jobId: string) => request<WorkerResult | { job_id: string; status: string; result: null }>(`/api/jobs/${jobId}/result`),
   events: (taskId: string, after = -1) =>

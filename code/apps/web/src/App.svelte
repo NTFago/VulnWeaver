@@ -269,17 +269,45 @@
     } catch (caught) { busy = false; showError(caught); return false; }
   }
 
-  async function createTask(versionIds: string[]): Promise<boolean> {
+  async function createTask(versionIds: string[], tokenBudget: number): Promise<boolean> {
     if (!selectedProject) return false;
     begin();
     try {
       const task = await api.createTask(selectedProject.id, {
-        artifact_version_ids: versionIds, resource_budget: selectedProject.resource_budget,
+        artifact_version_ids: versionIds,
+        resource_budget: {
+          ...selectedProject.resource_budget,
+          max_model_tokens: Math.max(0, Math.floor(tokenBudget)),
+        },
       });
       tasks = [task, ...tasks.filter((item) => item.id !== task.id)];
       await openTask(task); done("分析任务已投递");
       return true;
     } catch (caught) { busy = false; showError(caught); return false; }
+  }
+
+  async function deleteTask(task: Task): Promise<void> {
+    begin();
+    try {
+      await api.deleteTask(task.id);
+      tasks = tasks.filter((item) => item.id !== task.id);
+      if (selectedTask?.id === task.id) {
+        disconnectEvents(); selectedTask = null;
+        if (selectedProject) view = "project"; else view = "overview";
+      }
+      done("任务及其执行记录已删除");
+    } catch (caught) { busy = false; showError(caught); }
+  }
+
+  async function deleteProject(project: Project): Promise<void> {
+    begin();
+    try {
+      await api.deleteProject(project.id);
+      projects = projects.filter((item) => item.id !== project.id);
+      if (selectedProject?.id === project.id) { selectedProject = null; selectedTask = null; }
+      if (view !== "overview" && view !== "settings") goOverview();
+      done("项目及其样本、任务已删除");
+    } catch (caught) { busy = false; showError(caught); }
   }
 
   function isCurrentTask(taskId: string, generation: number): boolean {
@@ -515,7 +543,7 @@
 
   async function restartTask(): Promise<void> {
     if (!selectedTask || !selectedProject || busy) return;
-    await createTask([...selectedTask.artifact_version_ids]);
+    await createTask([...selectedTask.artifact_version_ids], selectedTask.resource_budget.max_model_tokens);
   }
 </script>
 
@@ -553,9 +581,9 @@
       {#if view === "settings" && productSettings}
         <SettingsView productSettings={productSettings} {busy} onSave={saveSettings} onUpdatePassword={updatePasswordFromSettings} />
       {:else if view === "overview"}
-        <ProjectsView {projects} {busy} onOpenProject={openProject} onCreateProject={createProject} onShowError={(message) => (error = message)} />
+        <ProjectsView {projects} {busy} onOpenProject={openProject} onCreateProject={createProject} onDeleteProject={deleteProject} onShowError={(message) => (error = message)} />
       {:else if view === "project" && selectedProject}
-        {#key selectedProject.id}<ProjectView project={selectedProject} {artifacts} {artifactVersions} {tasks} {busy} onGoOverview={goOverview} onOpenTask={openTask} onUpload={upload} onCreateTask={createTask} onShowError={(message) => (error = message)} />{/key}
+        {#key selectedProject.id}<ProjectView project={selectedProject} {artifacts} {artifactVersions} {tasks} {busy} onGoOverview={goOverview} onOpenTask={openTask} onUpload={upload} onCreateTask={createTask} onDeleteTask={deleteTask} onShowError={(message) => (error = message)} />{/key}
       {:else if view === "task" && selectedTask}
         {#key selectedTask.id}<TaskView
           task={selectedTask}

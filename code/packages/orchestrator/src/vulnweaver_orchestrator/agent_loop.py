@@ -92,7 +92,9 @@ class AgentLoopBudget:
     # the token budget runs out, an optional deadline passes, or the model
     # degrades. A finite value is still honoured for callers that want it.
     max_planning_rounds: int | None = None
-    max_model_tokens: int = 200_000
+    # None means the model token budget is uncapped; this is how a task-level
+    # budget of 0 ("no limit") from the API reaches the loop.
+    max_model_tokens: int | None = 200_000
     max_plan_rejections: int = 2
     max_consecutive_model_failures: int = 2
     max_steps_per_plan: int = 8
@@ -107,8 +109,8 @@ class AgentLoopBudget:
     def __post_init__(self) -> None:
         if self.max_planning_rounds is not None and not 1 <= self.max_planning_rounds <= 32:
             raise ValueError("max_planning_rounds must be between 1 and 32 when set")
-        if self.max_model_tokens < 1:
-            raise ValueError("max_model_tokens must be positive")
+        if self.max_model_tokens is not None and self.max_model_tokens < 1:
+            raise ValueError("max_model_tokens must be positive when set")
         if not 0 <= self.max_plan_rejections <= 8:
             raise ValueError("max_plan_rejections must be between 0 and 8")
         if not 1 <= self.max_consecutive_model_failures <= 8:
@@ -289,7 +291,10 @@ class AgentLoop:
                 continue
 
             consecutive_failures = 0
-            if usage["input_tokens"] + usage["output_tokens"] > budget.max_model_tokens:
+            if (
+                budget.max_model_tokens is not None
+                and usage["input_tokens"] + usage["output_tokens"] > budget.max_model_tokens
+            ):
                 sequence, _ = _record(
                     decisions,
                     sequence,

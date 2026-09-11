@@ -407,6 +407,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             return await repositories.projects.get(project_id)
 
+    @app.delete("/api/projects/{project_id}", status_code=204)
+    async def delete_project(
+        project_id: str, _: Annotated[str, Depends(require_write)]
+    ) -> Response:
+        async with database.transaction() as repositories:
+            await repositories.deletion.delete_project(project_id)
+        return Response(status_code=204)
+
     @app.get("/api/projects/{project_id}/artifacts")
     async def list_artifacts(
         project_id: str, _: Annotated[str, Depends(require_account)]
@@ -613,6 +621,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     async def get_task(task_id: str, _: Annotated[str, Depends(require_account)]) -> Task:
         async with database.transaction() as repositories:
             return await repositories.tasks.get(task_id)
+
+    @app.delete("/api/tasks/{task_id}", status_code=204)
+    async def delete_task(task_id: str, _: Annotated[str, Depends(require_write)]) -> Response:
+        async with database.transaction() as repositories:
+            await repositories.deletion.delete_task(task_id)
+        return Response(status_code=204)
 
     @app.post("/api/tasks/{task_id}/cancel")
     async def cancel_task(
