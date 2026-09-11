@@ -48,3 +48,14 @@ docker compose -f compose.yaml -f compose.dev.yaml config --quiet
 ```
 
 开发环境只用于编译、普通测试和服务调试。未知样本、Poc 和利用脚本不得直接在开发容器或宿主机执行，必须由后续实现的 Sandbox Runner 在一次性隔离环境中运行。
+
+## 测试用例
+
+演示与分析用的测试样本位于 `code/tests/fixtures/`，包括：
+
+- **加壳闭源样本**（UPX 加壳 ELF）：`packed-overflow-note`（CWE-120）、`packed-command-injection`（CWE-78）
+- **混淆闭源样本**（控制流平坦化等）：`obfuscated-heap-overflow`（CWE-122）、`obfuscated-format-string`（CWE-134）
+- **源码样本**：`py-eval-calculator`（CWE-95）、`py-cmd-backup`（CWE-78）
+- **无害对照**：`benign-checksum`（用于 NO_FINDINGS 路径）
+
+全部为自编无害教学样本（登记来源与授权依据），目录内含构建脚本 `build.sh`（Docker 内幂等构建）、分发二进制 `dist/`（含 SHA-256）与逐样本说明 `README.md`。样例总索引见 `code/tests/fixtures/README.md`。
