@@ -1,3 +1,4 @@
+import type { AuditTrail } from "./audit-trail";
 import type {
   Artifact,
   ArtifactKind,
@@ -11,6 +12,7 @@ import type {
   FindingEvidence,
   Poc,
   Job,
+  AgentRun,
   Project,
   QueueEvent,
   ResourceBudget,
@@ -221,7 +223,8 @@ export const api = {
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
   pair: (taskId: string) => request<PairFunction[]>(`/api/tasks/${encodeURIComponent(taskId)}/pair`),
-  agentRuns: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`),
+  agentRuns: (taskId: string) => request<AgentRun[]>(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`),
+  auditTrail: (taskId: string) => request<AuditTrail>(`/api/tasks/${encodeURIComponent(taskId)}/audit-trail`),
   pairNeighborhood: (taskId: string, functionId: string, depth = 1) =>
     request<Record<string, unknown>>(`/api/tasks/${encodeURIComponent(taskId)}/pair/function/${encodeURIComponent(functionId)}/neighborhood?depth=${depth}`),
   annotations: (taskId: string) => request<Record<string, unknown>[]>(`/api/tasks/${encodeURIComponent(taskId)}/annotations`),
