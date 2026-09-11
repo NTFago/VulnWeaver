@@ -1,0 +1,204 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "id": "job:690464e4a0eb4ce141ad5ada21303f78",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "kind": "semantic_audit",
+    "arguments": {
+      "baseline": "semantic_function_audit"
+    },
+    "input_refs": [
+      "cas://sha256/6863d394dd6cb24ece61bfde48e3e9a4159666adb0071387a425e389eb1374c6"
+    ],
+    "status": "succeeded",
+    "idempotency_key": "semantic-audit:654e121a7d6c6d90d66bca08e8cc7768",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "backoff_seconds": 5.0,
+      "retryable_failure_kinds": [
+        "timeout",
+        "environment",
+        "dependency"
+      ]
+    },
+    "attempt": 1,
+    "lease": null,
+    "failure": null,
+    "created_at": "2026-09-11T02:36:59.662846Z",
+    "updated_at": "2026-09-11T02:39:04.738965Z"
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "job:8924f75c91efe7d3916be9f9f1e51f18",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "kind": "import",
+    "tool": {
+      "name": "binary-import",
+      "version": "1.0.0",
+      "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+    },
+    "arguments": {
+      "artifact_version_id": "artifact-version:73175707664545f8acbfa055fde69b34"
+    },
+    "input_refs": [
+      "cas://sha256/6863d394dd6cb24ece61bfde48e3e9a4159666adb0071387a425e389eb1374c6"
+    ],
+    "status": "succeeded",
+    "idempotency_key": "initial:654e121a7d6c6d90d66bca08e8cc7768",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "backoff_seconds": 5.0,
+      "retryable_failure_kinds": [
+        "timeout",
+        "environment",
+        "dependency"
+      ]
+    },
+    "attempt": 1,
+    "lease": null,
+    "failure": null,
+    "created_at": "2026-09-11T02:37:00.104986Z",
+    "updated_at": "2026-09-11T02:38:28.993218Z"
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "job:f1c80bb176f3d00a5bb70a11fc3cfc2a",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "kind": "review",
+    "arguments": {
+      "finding_id": "finding:dc34b2fe4e846269abdcadc638f08272"
+    },
+    "input_refs": [
+      "cas://sha256/6863d394dd6cb24ece61bfde48e3e9a4159666adb0071387a425e389eb1374c6"
+    ],
+    "status": "succeeded",
+    "idempotency_key": "review:1ce3b2156fdc445ac7a20ba4eb1c9b0c",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "backoff_seconds": 5.0,
+      "retryable_failure_kinds": [
+        "timeout",
+        "environment",
+        "dependency"
+      ]
+    },
+    "attempt": 1,
+    "lease": null,
+    "failure": null,
+    "created_at": "2026-09-11T02:38:29.421178Z",
+    "updated_at": "2026-09-11T02:39:09.190887Z"
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "job:report:task:d894a0baab534b12b18a82f65aeb42c3:markdown",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "kind": "report",
+    "tool": {
+      "name": "vulnweaver-report",
+      "version": "1.0.0",
+      "image_digest": null
+    },
+    "arguments": {
+      "format": "markdown",
+      "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+      "version_id": "artifact-version:report:task:d894a0baab534b12b18a82f65aeb42c3:markdown",
+      "artifact_id": "artifact:report:task:d894a0baab534b12b18a82f65aeb42c3:markdown",
+      "parent_version_id": "artifact-version:73175707664545f8acbfa055fde69b34"
+    },
+    "input_refs": [],
+    "status": "succeeded",
+    "idempotency_key": "report:task:d894a0baab534b12b18a82f65aeb42c3:markdown",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "backoff_seconds": 5.0,
+      "retryable_failure_kinds": [
+        "timeout",
+        "environment"
+      ]
+    },
+    "attempt": 1,
+    "lease": null,
+    "failure": null,
+    "created_at": "2026-09-11T02:39:04.738965Z",
+    "updated_at": "2026-09-11T02:39:09.743218Z"
+  },
+  {
+    "schema_version": "1.0.0",
+    "id": "job:report:task:d894a0baab534b12b18a82f65aeb42c3:pdf",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "kind": "report",
+    "tool": {
+      "name": "vulnweaver-report",
+      "version": "1.0.0",
+      "image_digest": null
+    },
+    "arguments": {
+      "format": "pdf",
+      "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+      "version_id": "artifact-version:report:task:d894a0baab534b12b18a82f65aeb42c3:pdf",
+      "artifact_id": "artifact:report:task:d894a0baab534b12b18a82f65aeb42c3:pdf",
+      "parent_version_id": "artifact-version:73175707664545f8acbfa055fde69b34"
+    },
+    "input_refs": [],
+    "status": "succeeded",
+    "idempotency_key": "report:task:d894a0baab534b12b18a82f65aeb42c3:pdf",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "retry_policy": {
+      "max_attempts": 2,
+      "backoff_seconds": 5.0,
+      "retryable_failure_kinds": [
+        "timeout",
+        "environment"
+      ]
+    },
+    "attempt": 1,
+    "lease": null,
+    "failure": null,
+    "created_at": "2026-09-11T02:39:09.743218Z",
+    "updated_at": "2026-09-11T02:39:12.540112Z"
+  }
+]

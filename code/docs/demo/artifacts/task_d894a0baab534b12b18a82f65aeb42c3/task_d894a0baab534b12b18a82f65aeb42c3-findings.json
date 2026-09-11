@@ -1,0 +1,61 @@
+[
+  {
+    "schema_version": "1.0.0",
+    "id": "finding:dc34b2fe4e846269abdcadc638f08272",
+    "task_id": "task:d894a0baab534b12b18a82f65aeb42c3",
+    "category": "memory_corruption",
+    "cwe_id": "CWE-120",
+    "title": "Unbounded strcpy in save_note can overflow a fixed-size buffer",
+    "severity": "high",
+    "confidence": 0.4,
+    "location": {
+      "artifact_version_id": "artifact-version:143ce81f88ccfcef323a1ea165967278",
+      "image_base": 4194304,
+      "virtual_address": 4198743,
+      "file_offset": 4439,
+      "instruction_end": 4198803
+    },
+    "dataflow": [],
+    "call_path": [
+      {
+        "relation": "target",
+        "function_name": "save_note",
+        "path": null,
+        "line": null,
+        "address": 4198743
+      },
+      {
+        "relation": "caller",
+        "function_name": "main",
+        "path": null,
+        "line": null,
+        "address": 4198803
+      },
+      {
+        "relation": "callee",
+        "function_name": "printf@plt",
+        "path": null,
+        "line": null,
+        "address": 4198480
+      },
+      {
+        "relation": "callee",
+        "function_name": "strcpy@plt",
+        "path": null,
+        "line": null,
+        "address": 4198448
+      }
+    ],
+    "status": "unverifiable",
+    "evidence_ids": [
+      "evidence:8adaa0e1ee71f9b850554227c4f6b776",
+      "evidence:review:0da5ba1b1a1471c444b019b6aae30696cdd0fc466bb5f5de7b31c4ee3e73749c"
+    ],
+    "review_ids": [
+      "review:0da5ba1b1a1471c444b019b6aae30696cdd0fc466bb5f5de7b31c4ee3e73749c"
+    ],
+    "poc_ids": [],
+    "fix_suggestion": "Address the audited pattern associated with CWE-120.",
+    "created_at": "2026-09-11T02:38:29.421178Z"
+  }
+]

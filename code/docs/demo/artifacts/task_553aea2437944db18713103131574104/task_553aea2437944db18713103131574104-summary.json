@@ -1,0 +1,388 @@
+{
+  "project": {
+    "schema_version": "1.0.0",
+    "id": "project:145ec3ff27874fc8ac0016401ee215c1",
+    "name": "演示-混淆堆溢出R2",
+    "input_scope": [
+      "本地自编教学样本（静态审计与容器内动态验证）"
+    ],
+    "permission_mode": "full_access",
+    "exploit_validation_enabled": true,
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:14:57.532390Z"
+  },
+  "task": {
+    "schema_version": "1.0.0",
+    "id": "task:553aea2437944db18713103131574104",
+    "project_id": "project:145ec3ff27874fc8ac0016401ee215c1",
+    "artifact_version_ids": [
+      "artifact-version:dd75079ddf384881818911793b77bbb7"
+    ],
+    "status": "completed",
+    "result": "partial",
+    "failure": null,
+    "idempotency_key": "0d75db36d3f5435098cd69d0825e1fec",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:14:57.592632Z",
+    "updated_at": "2026-09-11T03:34:44.387307Z"
+  },
+  "jobs": [
+    {
+      "schema_version": "1.0.0",
+      "id": "job:95dfd65d94e009bd000601fbd2022d38",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "kind": "semantic_audit",
+      "arguments": {
+        "baseline": "semantic_function_audit"
+      },
+      "input_refs": [
+        "cas://sha256/e9791e200e7be08a366575c0979eeeda8d381854022aaab989555cc6ef8c4548"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "semantic-audit:fce5b3338f5c48b3515c35741811cae9",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:14:57.592632Z",
+      "updated_at": "2026-09-11T03:18:27.006798Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "38aaafb4c9307011bb52c0922390bf18",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "kind": "fuzz",
+      "arguments": {
+        "finding_id": "finding:d411a46d802e8b3bd81da4232d23a009",
+        "fuzz_request": {
+          "id": "fuzz-request:38aaafb4c9307011bb52c0922390bf18",
+          "job_id": "38aaafb4c9307011bb52c0922390bf18",
+          "seed_refs": [
+            "cas://sha256/559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          ],
+          "max_crashes": 16,
+          "max_executions": 10000,
+          "schema_version": "1.0.0",
+          "sandbox_request": {
+            "id": "sandbox-request:38aaafb4c9307011bb52c0922390bf18",
+            "arguments": {},
+            "input_ref": "cas://sha256/e9791e200e7be08a366575c0979eeeda8d381854022aaab989555cc6ef8c4548",
+            "tool_name": "afl-casr",
+            "image_digest": "sha256:6da19e53d46a9ad1f12a83735b39d9a95a9ecf026fe49a8fe0c5dc527efccc5b",
+            "tool_version": "1.0.0",
+            "artifact_kind": "elf",
+            "schema_version": "1.0.0",
+            "resource_budget": {
+              "cpu_millis": 4000,
+              "disk_bytes": 1073741824,
+              "memory_bytes": 3221225472,
+              "timeout_seconds": 600,
+              "max_dynamic_runs": 1,
+              "max_model_tokens": 100000,
+              "max_tool_concurrency": 1
+            },
+            "timeout_seconds": 60,
+            "output_file_names": []
+          },
+          "collect_coverage": true,
+          "artifact_version_id": "artifact-version:dd75079ddf384881818911793b77bbb7",
+          "max_duration_seconds": 60
+        }
+      },
+      "input_refs": [
+        "artifact-version:dd75079ddf384881818911793b77bbb7"
+      ],
+      "status": "failed",
+      "idempotency_key": "ae0433a3ef9b798c9ea134f6ceed30c7",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": {
+        "code": "sandbox.tool_failed",
+        "kind": "tool",
+        "message": "sandbox tool exited unsuccessfully",
+        "retryable": false,
+        "details": {
+          "exit_code": 1
+        }
+      },
+      "created_at": "2026-09-11T03:14:57.592632Z",
+      "updated_at": "2026-09-11T03:34:43.893944Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:db78fc5d0024d2445aba917553333a3c",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "kind": "import",
+      "tool": {
+        "name": "binary-import",
+        "version": "1.0.0",
+        "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+      },
+      "arguments": {
+        "artifact_version_id": "artifact-version:dd75079ddf384881818911793b77bbb7"
+      },
+      "input_refs": [
+        "cas://sha256/e9791e200e7be08a366575c0979eeeda8d381854022aaab989555cc6ef8c4548"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "initial:fce5b3338f5c48b3515c35741811cae9",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:14:57.945212Z",
+      "updated_at": "2026-09-11T03:18:10.325698Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:c0edf8bd2d511c27e95f5b087c82abd3",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:d411a46d802e8b3bd81da4232d23a009"
+      },
+      "input_refs": [
+        "cas://sha256/e9791e200e7be08a366575c0979eeeda8d381854022aaab989555cc6ef8c4548"
+      ],
+      "status": "failed",
+      "idempotency_key": "review:a1f06e077ad45270d74b96a09a5c9c70",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 2,
+      "lease": null,
+      "failure": {
+        "code": "worker.attempts_exhausted",
+        "kind": "tool",
+        "message": "job execution attempts were exhausted",
+        "retryable": false,
+        "details": {
+          "attempt": 2
+        }
+      },
+      "created_at": "2026-09-11T03:18:10.801177Z",
+      "updated_at": "2026-09-11T03:34:36.772133Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:report:task:553aea2437944db18713103131574104:markdown",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "kind": "report",
+      "tool": {
+        "name": "vulnweaver-report",
+        "version": "1.0.0",
+        "image_digest": null
+      },
+      "arguments": {
+        "format": "markdown",
+        "task_id": "task:553aea2437944db18713103131574104",
+        "version_id": "artifact-version:report:task:553aea2437944db18713103131574104:markdown",
+        "artifact_id": "artifact:report:task:553aea2437944db18713103131574104:markdown",
+        "parent_version_id": "artifact-version:dd75079ddf384881818911793b77bbb7"
+      },
+      "input_refs": [],
+      "status": "succeeded",
+      "idempotency_key": "report:task:553aea2437944db18713103131574104:markdown",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:34:36.772133Z",
+      "updated_at": "2026-09-11T03:34:44.387307Z"
+    }
+  ],
+  "findings": [
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:d411a46d802e8b3bd81da4232d23a009",
+      "task_id": "task:553aea2437944db18713103131574104",
+      "category": "memory_corruption",
+      "cwe_id": "CWE-120",
+      "title": "Unbounded strcpy into fixed-size heap buffer in parse_token",
+      "severity": "high",
+      "confidence": 0.4,
+      "location": {
+        "artifact_version_id": "artifact-version:dd75079ddf384881818911793b77bbb7",
+        "image_base": 4194304,
+        "virtual_address": 4198865,
+        "file_offset": 4561,
+        "instruction_end": 4198989
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "parse_token",
+          "path": null,
+          "line": null,
+          "address": 4198865
+        },
+        {
+          "relation": "caller",
+          "function_name": "run_pipeline",
+          "path": null,
+          "line": null,
+          "address": 4198989
+        },
+        {
+          "relation": "callee",
+          "function_name": "decode_banner",
+          "path": null,
+          "line": null,
+          "address": 4198758
+        },
+        {
+          "relation": "callee",
+          "function_name": "free@plt",
+          "path": null,
+          "line": null,
+          "address": 4198448
+        },
+        {
+          "relation": "callee",
+          "function_name": "malloc@plt",
+          "path": null,
+          "line": null,
+          "address": 4198512
+        },
+        {
+          "relation": "callee",
+          "function_name": "printf@plt",
+          "path": null,
+          "line": null,
+          "address": 4198496
+        },
+        {
+          "relation": "callee",
+          "function_name": "puts@plt",
+          "path": null,
+          "line": null,
+          "address": 4198480
+        },
+        {
+          "relation": "callee",
+          "function_name": "strcpy@plt",
+          "path": null,
+          "line": null,
+          "address": 4198464
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:44fc66e3e610a82f10a3f2aab0b5f248",
+        "evidence:review:3815dd0b352c903c91f02e9fc3e28c5d085f027127aafed3afd3ee656d6c22a8",
+        "evidence:review:7877c26a13aeb6df481b03ffcb3a8a37c13b268fea76a655fd135efe3c00bb98"
+      ],
+      "review_ids": [
+        "review:7877c26a13aeb6df481b03ffcb3a8a37c13b268fea76a655fd135efe3c00bb98",
+        "review:3815dd0b352c903c91f02e9fc3e28c5d085f027127aafed3afd3ee656d6c22a8"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Address the audited pattern associated with CWE-120.",
+      "created_at": "2026-09-11T03:18:10.801177Z"
+    }
+  ],
+  "reports": {
+    "markdown": "docs\\demo\\artifacts\\task_553aea2437944db18713103131574104-report.md"
+  },
+  "elapsed_seconds": 1189
+}

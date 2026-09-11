@@ -1,0 +1,753 @@
+{
+  "project": {
+    "schema_version": "1.0.0",
+    "id": "project:df1b40451dde46fe8fcd3362a11a53b4",
+    "name": "演示-eval计算器",
+    "input_scope": [
+      "本地自编教学样本（静态审计与容器内动态验证）"
+    ],
+    "permission_mode": "full_access",
+    "exploit_validation_enabled": true,
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:41:43.011399Z"
+  },
+  "task": {
+    "schema_version": "1.0.0",
+    "id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+    "project_id": "project:df1b40451dde46fe8fcd3362a11a53b4",
+    "artifact_version_ids": [
+      "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+    ],
+    "status": "completed",
+    "result": "partial",
+    "failure": null,
+    "idempotency_key": "139c44f38ddc4b26b466364b7c9f34b7",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:41:43.086731Z",
+    "updated_at": "2026-09-11T03:46:46.334907Z"
+  },
+  "jobs": [
+    {
+      "schema_version": "1.0.0",
+      "id": "5525126f3e02fe58f4a7a3a5e80a8613",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "fuzz",
+      "arguments": {
+        "finding_id": "finding:b53fe6d09fea34b81b6ad4e4a952b386",
+        "fuzz_request": {
+          "id": "fuzz-request:5525126f3e02fe58f4a7a3a5e80a8613",
+          "job_id": "5525126f3e02fe58f4a7a3a5e80a8613",
+          "seed_refs": [
+            "cas://sha256/559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          ],
+          "max_crashes": 16,
+          "max_executions": 10000,
+          "schema_version": "1.0.0",
+          "sandbox_request": {
+            "id": "sandbox-request:5525126f3e02fe58f4a7a3a5e80a8613",
+            "arguments": {},
+            "input_ref": "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6",
+            "tool_name": "afl-casr",
+            "image_digest": "sha256:6da19e53d46a9ad1f12a83735b39d9a95a9ecf026fe49a8fe0c5dc527efccc5b",
+            "tool_version": "1.0.0",
+            "artifact_kind": "elf",
+            "schema_version": "1.0.0",
+            "resource_budget": {
+              "cpu_millis": 4000,
+              "disk_bytes": 1073741824,
+              "memory_bytes": 3221225472,
+              "timeout_seconds": 600,
+              "max_dynamic_runs": 1,
+              "max_model_tokens": 100000,
+              "max_tool_concurrency": 1
+            },
+            "timeout_seconds": 60,
+            "output_file_names": []
+          },
+          "collect_coverage": true,
+          "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+          "max_duration_seconds": 60
+        },
+        "harness_context": {
+          "cwe_id": "CWE-95",
+          "category": "injection",
+          "location": {
+            "path": "calculator.py",
+            "end_line": 32,
+            "end_column": 13,
+            "start_line": 22,
+            "start_column": 1,
+            "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+          },
+          "instruction": "Generate a self-contained C/C++ fuzz harness for this authorized source finding. The executable must read the input file path from argv[1], use no network, and return normally when the input does not trigger the condition.",
+          "finding_title": "Untrusted command-line argument forwarded to eval() sink in main()",
+          "source_excerpt": "\"\"\"\n\nimport sys\n\n\ndef evaluate(expression: str):\n    \"\"\"CWE-95: user-controlled expression is passed to eval().\"\"\"\n    return eval(expression)\n\n\ndef main(argv: list[str]) -> int:\n    if len(argv) < 2:\n        print(\"usage: calculator.py <expression>\")\n        return 1\n    try:\n        result = evaluate(argv[1])\n    except Exception as exc:  # 教学样本：把求值失败转成可读输出\n        print(f\"error: {exc}\")\n        return 1\n    print(result)\n    return 0\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main(sys.argv))\n"
+        },
+        "harness_fixture_refs": []
+      },
+      "input_refs": [
+        "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+      ],
+      "status": "failed",
+      "idempotency_key": "da30ad26d136ad3b6b17d45c11a1e9d2",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": {
+        "code": "fuzz.harness_generation_failed",
+        "kind": "dependency",
+        "message": "bounded fuzz harness generation or compilation failed",
+        "retryable": false,
+        "details": {}
+      },
+      "created_at": "2026-09-11T03:41:43.086731Z",
+      "updated_at": "2026-09-11T03:45:04.738428Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:0245bb538321bf018b87ed10ced973c4",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "semantic_audit",
+      "arguments": {
+        "baseline": "semantic_function_audit"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "semantic-audit:711acb217c2d4dfb11f4924258f4e92a",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:43.086731Z",
+      "updated_at": "2026-09-11T03:41:55.057503Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "389f8f8bfcd6fb59aab33fbacd9b9e96",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "fuzz",
+      "arguments": {
+        "finding_id": "finding:d5db87f48718e4ae553826da7b5180a8",
+        "fuzz_request": {
+          "id": "fuzz-request:389f8f8bfcd6fb59aab33fbacd9b9e96",
+          "job_id": "389f8f8bfcd6fb59aab33fbacd9b9e96",
+          "seed_refs": [
+            "cas://sha256/559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          ],
+          "max_crashes": 16,
+          "max_executions": 10000,
+          "schema_version": "1.0.0",
+          "sandbox_request": {
+            "id": "sandbox-request:389f8f8bfcd6fb59aab33fbacd9b9e96",
+            "arguments": {},
+            "input_ref": "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6",
+            "tool_name": "afl-casr",
+            "image_digest": "sha256:6da19e53d46a9ad1f12a83735b39d9a95a9ecf026fe49a8fe0c5dc527efccc5b",
+            "tool_version": "1.0.0",
+            "artifact_kind": "elf",
+            "schema_version": "1.0.0",
+            "resource_budget": {
+              "cpu_millis": 4000,
+              "disk_bytes": 1073741824,
+              "memory_bytes": 3221225472,
+              "timeout_seconds": 600,
+              "max_dynamic_runs": 1,
+              "max_model_tokens": 100000,
+              "max_tool_concurrency": 1
+            },
+            "timeout_seconds": 60,
+            "output_file_names": []
+          },
+          "collect_coverage": true,
+          "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+          "max_duration_seconds": 60
+        },
+        "harness_context": {
+          "cwe_id": "CWE-95",
+          "category": "injection",
+          "location": {
+            "path": "calculator.py",
+            "end_line": 19,
+            "end_column": 28,
+            "start_line": 19,
+            "start_column": 12,
+            "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+          },
+          "instruction": "Generate a self-contained C/C++ fuzz harness for this authorized source finding. The executable must read the input file path from argv[1], use no network, and return normally when the input does not trigger the condition.",
+          "finding_title": "Static analysis candidate for CWE-95",
+          "source_excerpt": "触发方式：\n    python calculator.py \"2+2\"                                # 正常路径\n    python calculator.py \"__import__('os').system('id')\"      # 注入（无害）\n\"\"\"\n\nimport sys\n\n\ndef evaluate(expression: str):\n    \"\"\"CWE-95: user-controlled expression is passed to eval().\"\"\"\n    return eval(expression)\n\n\ndef main(argv: list[str]) -> int:\n    if len(argv) < 2:\n        print(\"usage: calculator.py <expression>\")\n        return 1\n    try:\n        result = evaluate(argv[1])\n    except Exception as exc:  # 教学样本：把求值失败转成可读输出\n        print(f\"error: {exc}\")\n"
+        },
+        "harness_fixture_refs": []
+      },
+      "input_refs": [
+        "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+      ],
+      "status": "failed",
+      "idempotency_key": "28a763e98e0fe020eb61fe3e244e596a",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": {
+        "code": "worker.execution_error",
+        "kind": "internal",
+        "message": "worker executor raised an unexpected error",
+        "retryable": true,
+        "details": {
+          "exception_type": "AgentRunConflict"
+        }
+      },
+      "created_at": "2026-09-11T03:41:43.086731Z",
+      "updated_at": "2026-09-11T03:43:59.011588Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "377472d3ecd9719760b9d1acf1fd32e3",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "fuzz",
+      "arguments": {
+        "finding_id": "finding:be1b639b6898c26e47ee735e0fbdf15b",
+        "fuzz_request": {
+          "id": "fuzz-request:377472d3ecd9719760b9d1acf1fd32e3",
+          "job_id": "377472d3ecd9719760b9d1acf1fd32e3",
+          "seed_refs": [
+            "cas://sha256/559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd"
+          ],
+          "max_crashes": 16,
+          "max_executions": 10000,
+          "schema_version": "1.0.0",
+          "sandbox_request": {
+            "id": "sandbox-request:377472d3ecd9719760b9d1acf1fd32e3",
+            "arguments": {},
+            "input_ref": "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6",
+            "tool_name": "afl-casr",
+            "image_digest": "sha256:6da19e53d46a9ad1f12a83735b39d9a95a9ecf026fe49a8fe0c5dc527efccc5b",
+            "tool_version": "1.0.0",
+            "artifact_kind": "elf",
+            "schema_version": "1.0.0",
+            "resource_budget": {
+              "cpu_millis": 4000,
+              "disk_bytes": 1073741824,
+              "memory_bytes": 3221225472,
+              "timeout_seconds": 600,
+              "max_dynamic_runs": 1,
+              "max_model_tokens": 100000,
+              "max_tool_concurrency": 1
+            },
+            "timeout_seconds": 60,
+            "output_file_names": []
+          },
+          "collect_coverage": true,
+          "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+          "max_duration_seconds": 60
+        },
+        "harness_context": {
+          "cwe_id": "CWE-95",
+          "category": "injection",
+          "location": {
+            "path": "calculator.py",
+            "end_line": 19,
+            "end_column": 28,
+            "start_line": 17,
+            "start_column": 1,
+            "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+          },
+          "instruction": "Generate a self-contained C/C++ fuzz harness for this authorized source finding. The executable must read the input file path from argv[1], use no network, and return normally when the input does not trigger the condition.",
+          "finding_title": "Arbitrary code execution via eval() on user-controlled expression",
+          "source_excerpt": "\n预期漏洞：evaluate() 直接 eval 用户输入（CWE-95 代码注入）。\n触发方式：\n    python calculator.py \"2+2\"                                # 正常路径\n    python calculator.py \"__import__('os').system('id')\"      # 注入（无害）\n\"\"\"\n\nimport sys\n\n\ndef evaluate(expression: str):\n    \"\"\"CWE-95: user-controlled expression is passed to eval().\"\"\"\n    return eval(expression)\n\n\ndef main(argv: list[str]) -> int:\n    if len(argv) < 2:\n        print(\"usage: calculator.py <expression>\")\n        return 1\n    try:\n        result = evaluate(argv[1])\n    except Exception as exc:  # 教学样本：把求值失败转成可读输出\n        print(f\"error: {exc}\")\n"
+        },
+        "harness_fixture_refs": []
+      },
+      "input_refs": [
+        "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+      ],
+      "status": "failed",
+      "idempotency_key": "48e4e00abe4763da139dc20158f7a82d",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": {
+        "code": "worker.execution_error",
+        "kind": "internal",
+        "message": "worker executor raised an unexpected error",
+        "retryable": true,
+        "details": {
+          "exception_type": "AgentRunConflict"
+        }
+      },
+      "created_at": "2026-09-11T03:41:43.086731Z",
+      "updated_at": "2026-09-11T03:46:45.964320Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:e81f4019fb96a5dbc5564cd9e2a2b85a",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "import",
+      "tool": {
+        "name": "source-import",
+        "version": "1.0.0",
+        "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+      },
+      "arguments": {
+        "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "initial:711acb217c2d4dfb11f4924258f4e92a",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 2.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:43.196525Z",
+      "updated_at": "2026-09-11T03:41:43.764444Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:03d986b132711940085251293c589ad5",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:d5db87f48718e4ae553826da7b5180a8"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "review:d323c80224f1ef939df10f31bd44ad04",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:43.748160Z",
+      "updated_at": "2026-09-11T03:42:02.882413Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:7ed508d6afe04ef837d4af3a462f6c83",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "source_analysis",
+      "tool": {
+        "name": "semgrep",
+        "version": "1.0.0",
+        "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+      },
+      "arguments": {
+        "languages": [
+          "python"
+        ],
+        "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+        "source_index_version_id": "artifact-version:2b88f9be48298fd0b3a36de24ce7f0a6"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "static-analysis:7ed508d6afe04ef837d4af3a462f6c83",
+      "resource_budget": {
+        "max_model_tokens": 0,
+        "cpu_millis": 4000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 536870912,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 0,
+        "timeout_seconds": 300
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:43.748160Z",
+      "updated_at": "2026-09-11T03:41:47.699514Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:c619dfbe60c0c69a9cb2c6c11c56e221",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:be1b639b6898c26e47ee735e0fbdf15b"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "review:21310b03194581616e63161a4898d2d5",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:48.214021Z",
+      "updated_at": "2026-09-11T03:42:15.917518Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:b92e1663f7645dc328f8aed3a0261f68",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:b53fe6d09fea34b81b6ad4e4a952b386"
+      },
+      "input_refs": [
+        "cas://sha256/1ab2bdc6cdea4e959c7b0ce3259d48b60c0b09ec8b3a070a600ccadcf213aea6"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "review:97e1b543097d1d94cad6b9ebaaeddd01",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:41:48.214021Z",
+      "updated_at": "2026-09-11T03:42:09.288123Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:report:task:b6d0bce331bc4596abc985e37e2b16c7:markdown",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "kind": "report",
+      "tool": {
+        "name": "vulnweaver-report",
+        "version": "1.0.0",
+        "image_digest": null
+      },
+      "arguments": {
+        "format": "markdown",
+        "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+        "version_id": "artifact-version:report:task:b6d0bce331bc4596abc985e37e2b16c7:markdown",
+        "artifact_id": "artifact:report:task:b6d0bce331bc4596abc985e37e2b16c7:markdown",
+        "parent_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa"
+      },
+      "input_refs": [],
+      "status": "succeeded",
+      "idempotency_key": "report:task:b6d0bce331bc4596abc985e37e2b16c7:markdown",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:42:15.917518Z",
+      "updated_at": "2026-09-11T03:46:46.334907Z"
+    }
+  ],
+  "findings": [
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:d5db87f48718e4ae553826da7b5180a8",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "category": "injection",
+      "cwe_id": "CWE-95",
+      "title": "Static analysis candidate for CWE-95",
+      "severity": "high",
+      "confidence": 0.6,
+      "location": {
+        "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+        "path": "calculator.py",
+        "start_line": 19,
+        "start_column": 12,
+        "end_line": 19,
+        "end_column": 28
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "evaluate",
+          "path": "calculator.py",
+          "line": 17,
+          "address": null
+        },
+        {
+          "relation": "caller",
+          "function_name": "main",
+          "path": "calculator.py",
+          "line": 22,
+          "address": null
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:ed1fb8fce0f1aa84cc138a7f8ae5501f",
+        "evidence:review:c827651e28333e4f92c4f488c73db9d3811930e05010bdf63e5b9dd92d2de304"
+      ],
+      "review_ids": [
+        "review:c827651e28333e4f92c4f488c73db9d3811930e05010bdf63e5b9dd92d2de304"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Review and remediate the code pattern associated with CWE-95.",
+      "created_at": "2026-09-11T03:41:43.748160Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:b53fe6d09fea34b81b6ad4e4a952b386",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "category": "injection",
+      "cwe_id": "CWE-95",
+      "title": "Untrusted command-line argument forwarded to eval() sink in main()",
+      "severity": "high",
+      "confidence": 0.4,
+      "location": {
+        "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+        "path": "calculator.py",
+        "start_line": 22,
+        "start_column": 1,
+        "end_line": 32,
+        "end_column": 13
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "main",
+          "path": "calculator.py",
+          "line": 22,
+          "address": null
+        },
+        {
+          "relation": "callee",
+          "function_name": "evaluate",
+          "path": "calculator.py",
+          "line": 17,
+          "address": null
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:df68d1890579f5dc6d31dee927fd2f87",
+        "evidence:review:0f7c6b5be04ca6af642053f113032b84b0a1e5d1c775144d9f9ff869d5efd0a2"
+      ],
+      "review_ids": [
+        "review:0f7c6b5be04ca6af642053f113032b84b0a1e5d1c775144d9f9ff869d5efd0a2"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Address the audited pattern associated with CWE-95.",
+      "created_at": "2026-09-11T03:41:48.214021Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:be1b639b6898c26e47ee735e0fbdf15b",
+      "task_id": "task:b6d0bce331bc4596abc985e37e2b16c7",
+      "category": "injection",
+      "cwe_id": "CWE-95",
+      "title": "Arbitrary code execution via eval() on user-controlled expression",
+      "severity": "critical",
+      "confidence": 0.4,
+      "location": {
+        "artifact_version_id": "artifact-version:af03ff5969fe40ecba7607f988dd41aa",
+        "path": "calculator.py",
+        "start_line": 17,
+        "start_column": 1,
+        "end_line": 19,
+        "end_column": 28
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "evaluate",
+          "path": "calculator.py",
+          "line": 17,
+          "address": null
+        },
+        {
+          "relation": "caller",
+          "function_name": "main",
+          "path": "calculator.py",
+          "line": 22,
+          "address": null
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:5cf078d4cda5f0b716951b0dca3d6735",
+        "evidence:review:5811293110124b04f78b89c38bdc03149d3ae71a7dbe9d1e33b603c48669052c"
+      ],
+      "review_ids": [
+        "review:5811293110124b04f78b89c38bdc03149d3ae71a7dbe9d1e33b603c48669052c"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Address the audited pattern associated with CWE-95.",
+      "created_at": "2026-09-11T03:41:48.214021Z"
+    }
+  ],
+  "reports": {
+    "markdown": "docs\\demo\\artifacts\\task_b6d0bce331bc4596abc985e37e2b16c7-report.md"
+  },
+  "elapsed_seconds": 306
+}

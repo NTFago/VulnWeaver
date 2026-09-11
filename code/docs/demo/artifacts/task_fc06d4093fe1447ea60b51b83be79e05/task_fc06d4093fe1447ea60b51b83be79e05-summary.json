@@ -1,0 +1,285 @@
+{
+  "project": {
+    "schema_version": "1.0.0",
+    "id": "project:0c88ccaae1f040c7a935300f43167846",
+    "name": "演示-无害对照",
+    "input_scope": [
+      "本地自编教学样本（静态审计与容器内动态验证）"
+    ],
+    "permission_mode": "full_access",
+    "exploit_validation_enabled": true,
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:47:26.792938Z"
+  },
+  "task": {
+    "schema_version": "1.0.0",
+    "id": "task:fc06d4093fe1447ea60b51b83be79e05",
+    "project_id": "project:0c88ccaae1f040c7a935300f43167846",
+    "artifact_version_ids": [
+      "artifact-version:a73e1cff608f4eb0ab4684cda24cd8cc"
+    ],
+    "status": "completed",
+    "result": "partial",
+    "failure": null,
+    "idempotency_key": "5e79cf369577456b9ca8b156134f8738",
+    "resource_budget": {
+      "max_model_tokens": 100000,
+      "cpu_millis": 4000,
+      "memory_bytes": 3221225472,
+      "disk_bytes": 1073741824,
+      "max_tool_concurrency": 1,
+      "max_dynamic_runs": 1,
+      "timeout_seconds": 600
+    },
+    "created_at": "2026-09-11T03:47:26.913562Z",
+    "updated_at": "2026-09-11T03:51:04.699114Z"
+  },
+  "jobs": [
+    {
+      "schema_version": "1.0.0",
+      "id": "job:f0a92d76450e815200eb2222d5cb957b",
+      "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+      "kind": "semantic_audit",
+      "arguments": {
+        "baseline": "semantic_function_audit"
+      },
+      "input_refs": [
+        "cas://sha256/d868903c5e11e1df0a7b083014fbe9eec4da2dc1bd09883ffacdd6cb34f2449a"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "semantic-audit:a9d5c3faa53088bf1b5a2baf29268a5e",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:47:26.913562Z",
+      "updated_at": "2026-09-11T03:50:59.663721Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:297501244b147ff86b9abcf807c424b8",
+      "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+      "kind": "import",
+      "tool": {
+        "name": "binary-import",
+        "version": "1.0.0",
+        "image_digest": "sha256:ca05166a4e23c43dd6c2289a943c4e45e0f64c4ae177f7a7cd5500a4d73074b2"
+      },
+      "arguments": {
+        "artifact_version_id": "artifact-version:a73e1cff608f4eb0ab4684cda24cd8cc"
+      },
+      "input_refs": [
+        "cas://sha256/d868903c5e11e1df0a7b083014fbe9eec4da2dc1bd09883ffacdd6cb34f2449a"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "initial:a9d5c3faa53088bf1b5a2baf29268a5e",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:47:27.118106Z",
+      "updated_at": "2026-09-11T03:49:27.232887Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:ea15099d16b7f102b3de3ec0015304d6",
+      "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+      "kind": "review",
+      "arguments": {
+        "finding_id": "finding:f9d854445f0d80f9fe22648b0c287166"
+      },
+      "input_refs": [
+        "cas://sha256/d868903c5e11e1df0a7b083014fbe9eec4da2dc1bd09883ffacdd6cb34f2449a"
+      ],
+      "status": "succeeded",
+      "idempotency_key": "review:67ea38a06cbb666219d8bd9b5d1af9e5",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment",
+          "dependency"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:49:27.497015Z",
+      "updated_at": "2026-09-11T03:51:04.333416Z"
+    },
+    {
+      "schema_version": "1.0.0",
+      "id": "job:report:task:fc06d4093fe1447ea60b51b83be79e05:markdown",
+      "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+      "kind": "report",
+      "tool": {
+        "name": "vulnweaver-report",
+        "version": "1.0.0",
+        "image_digest": null
+      },
+      "arguments": {
+        "format": "markdown",
+        "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+        "version_id": "artifact-version:report:task:fc06d4093fe1447ea60b51b83be79e05:markdown",
+        "artifact_id": "artifact:report:task:fc06d4093fe1447ea60b51b83be79e05:markdown",
+        "parent_version_id": "artifact-version:a73e1cff608f4eb0ab4684cda24cd8cc"
+      },
+      "input_refs": [],
+      "status": "succeeded",
+      "idempotency_key": "report:task:fc06d4093fe1447ea60b51b83be79e05:markdown",
+      "resource_budget": {
+        "max_model_tokens": 100000,
+        "cpu_millis": 4000,
+        "memory_bytes": 3221225472,
+        "disk_bytes": 1073741824,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": 600
+      },
+      "retry_policy": {
+        "max_attempts": 2,
+        "backoff_seconds": 5.0,
+        "retryable_failure_kinds": [
+          "timeout",
+          "environment"
+        ]
+      },
+      "attempt": 1,
+      "lease": null,
+      "failure": null,
+      "created_at": "2026-09-11T03:50:59.663721Z",
+      "updated_at": "2026-09-11T03:51:04.699114Z"
+    }
+  ],
+  "findings": [
+    {
+      "schema_version": "1.0.0",
+      "id": "finding:f9d854445f0d80f9fe22648b0c287166",
+      "task_id": "task:fc06d4093fe1447ea60b51b83be79e05",
+      "category": "static_only",
+      "cwe_id": "CWE-252",
+      "title": "Checksum tool reports success and a valid-looking hash when file open or read fails",
+      "severity": "low",
+      "confidence": 0.4,
+      "location": {
+        "artifact_version_id": "artifact-version:a73e1cff608f4eb0ab4684cda24cd8cc",
+        "image_base": 4194304,
+        "virtual_address": 4198528,
+        "file_offset": 4224,
+        "instruction_end": 4198736
+      },
+      "dataflow": [],
+      "call_path": [
+        {
+          "relation": "target",
+          "function_name": "main",
+          "path": null,
+          "line": null,
+          "address": 4198528
+        },
+        {
+          "relation": "callee",
+          "function_name": "fclose@plt",
+          "path": null,
+          "line": null,
+          "address": 4198464
+        },
+        {
+          "relation": "callee",
+          "function_name": "fopen@plt",
+          "path": null,
+          "line": null,
+          "address": 4198512
+        },
+        {
+          "relation": "callee",
+          "function_name": "fprintf@plt",
+          "path": null,
+          "line": null,
+          "address": 4198496
+        },
+        {
+          "relation": "callee",
+          "function_name": "fread@plt",
+          "path": null,
+          "line": null,
+          "address": 4198448
+        },
+        {
+          "relation": "callee",
+          "function_name": "printf@plt",
+          "path": null,
+          "line": null,
+          "address": 4198480
+        }
+      ],
+      "status": "unverifiable",
+      "evidence_ids": [
+        "evidence:a09197f0f14ea4c4f4ecde0cb354c8a4",
+        "evidence:review:2f0a815d6c53d9fbd394c815224e48d6bb8e012aacd611cbeb0a9b560909dcef"
+      ],
+      "review_ids": [
+        "review:2f0a815d6c53d9fbd394c815224e48d6bb8e012aacd611cbeb0a9b560909dcef"
+      ],
+      "poc_ids": [],
+      "fix_suggestion": "Address the audited pattern associated with CWE-252.",
+      "created_at": "2026-09-11T03:49:27.497015Z"
+    }
+  ],
+  "reports": {
+    "markdown": "docs\\demo\\artifacts\\task_fc06d4093fe1447ea60b51b83be79e05-report.md"
+  },
+  "elapsed_seconds": 220
+}
