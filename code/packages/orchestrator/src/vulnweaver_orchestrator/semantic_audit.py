@@ -471,7 +471,7 @@ class SemanticAuditor:
 
     async def _persist_run(self, run: dict[str, object]) -> None:
         async with self._database.transaction() as repositories:
-            await repositories.agent_runs.add(cast(AgentRun, run))
+            await repositories.agent_runs.save_progress(cast(AgentRun, run))
 
 
 def _run_from_response(

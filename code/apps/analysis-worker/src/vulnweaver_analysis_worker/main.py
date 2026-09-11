@@ -461,14 +461,16 @@ def _model_executors(
         database,
         gateway,
         store,
-        # The auditor owns run persistence for both paths, so the agent gets no
-        # sink of its own and one attempt never writes two run records. The
-        # symbolic runner is None when no Sandbox Runner is configured, and the
-        # agent's symbolic step is then refused structurally.
+        # The sink is progress-aware, so the loop can flush a running snapshot
+        # each round and the trajectory is visible while the audit is still in
+        # flight; the auditor's final write advances the same row to terminal.
+        # The symbolic runner is None when no Sandbox Runner is configured, and
+        # the agent's symbolic step is then refused structurally.
         agent=CodeAuditAgent(
             database,
             gateway,
             store,
+            sink=DatabaseAgentRunSink(database),
             symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
         ),
     )

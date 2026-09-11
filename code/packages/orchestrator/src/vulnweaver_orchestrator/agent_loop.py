@@ -403,6 +403,25 @@ class AgentLoop:
                     budget.max_planning_rounds - round_index
                 )
             feedback = round_feedback
+            if self._sink is not None:
+                # Make the investigation observable while it is still running:
+                # an unbounded loop can go for minutes, and without this the
+                # trajectory only appears once it is already over.
+                await self._sink.add(
+                    self._snapshot(
+                        request,
+                        decisions=list(decisions),
+                        usage=TokenUsage(
+                            input_tokens=usage["input_tokens"],
+                            output_tokens=usage["output_tokens"],
+                        ),
+                        artifact_refs=artifact_refs,
+                        model_label=model_label,
+                        started=started,
+                        status=RunStatus.RUNNING,
+                        failure=None,
+                    )
+                )
 
         if status is None:
             sequence, _ = _record(
@@ -431,16 +450,51 @@ class AgentLoop:
                 self._clock,
             )
 
+        run = self._snapshot(
+            request,
+            decisions=decisions,
+            usage=usage,
+            artifact_refs=artifact_refs,
+            model_label=model_label,
+            started=started,
+            status=(
+                RunStatus.SUCCEEDED if status is AgentLoopStatus.COMPLETED else RunStatus.FAILED
+            ),
+            failure=fallback,
+        )
+        if self._sink is not None:
+            await self._sink.add(run)
+        return AgentLoopResult(
+            status=status,
+            agent_run=run,
+            plans=tuple(plans),
+            steps=tuple(steps),
+            fallback=fallback,
+            policy_reason_codes=policy_reason_codes,
+        )
+
+    def _snapshot(
+        self,
+        request: AgentLoopRequest,
+        *,
+        decisions: list[DecisionRecord],
+        usage: TokenUsage,
+        artifact_refs: list[str],
+        model_label: str,
+        started: float,
+        status: RunStatus,
+        failure: StructuredFailure | None,
+    ) -> AgentRun:
+        """Build one run record; called once per round and once at the end."""
+
         now = _timestamp(self._clock)
-        run = cast(
+        return cast(
             AgentRun,
             {
                 "schema_version": "1.0.0",
                 "id": request.run_id,
                 "task_id": request.task_id,
-                "status": (
-                    RunStatus.SUCCEEDED if status is AgentLoopStatus.COMPLETED else RunStatus.FAILED
-                ),
+                "status": status,
                 "model": model_label,
                 "prompt_hash": _digest(
                     json.dumps(
@@ -453,20 +507,10 @@ class AgentLoop:
                 "token_usage": usage,
                 "duration_ms": max(0, int(round((self._monotonic() - started) * 1000))),
                 "result_refs": list(dict.fromkeys(artifact_refs)),
-                "failure": fallback,
+                "failure": failure,
                 "created_at": now,
                 "updated_at": now,
             },
-        )
-        if self._sink is not None:
-            await self._sink.add(run)
-        return AgentLoopResult(
-            status=status,
-            agent_run=run,
-            plans=tuple(plans),
-            steps=tuple(steps),
-            fallback=fallback,
-            policy_reason_codes=policy_reason_codes,
         )
 
     def _tool_catalog(self) -> list[JsonObject]:

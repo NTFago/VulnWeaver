@@ -59,6 +59,7 @@
   let socket: WebSocket | null = null;
   let socketGeneration = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
   let productSettings: ProductSettings | null = null;
   let reviewApiKey = "";
   let clearReviewApiKey = false;
@@ -492,12 +493,30 @@
       selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
       [jobs, events, findings, observability, pairFunctions, agentRuns] = await Promise.all([api.jobs(task.id), api.events(task.id), api.findings(task.id), api.observability(task.id), api.pair(task.id), api.agentRuns(task.id)]);
       await refreshReportResults();
-      connectEvents(task.id); done();
+      connectEvents(task.id); startPolling(task.id); done();
     } catch (caught) { busy = false; showError(caught); }
+  }
+
+  function startPolling(taskId: string): void {
+    if (pollTimer !== null) clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      if (view !== "task" || selectedTask?.id !== taskId) return;
+      const active = jobs.some((job) => job.status === "running" || job.status === "queued");
+      // A running agent loop writes its trajectory round by round and emits no
+      // event while it does, so nothing else would refresh this panel.
+      if (!active) return;
+      void Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId), api.agentRuns(taskId)])
+        .then(([nextJobs, nextFindings, nextObservability, nextRuns]) => {
+          jobs = nextJobs; findings = nextFindings; observability = nextObservability; agentRuns = nextRuns;
+        })
+        .catch(() => { /* transient; the next tick retries */ });
+    }, 4000);
   }
 
   function disconnectEvents(): void {
     socketGeneration += 1;
+    if (pollTimer !== null) clearInterval(pollTimer);
+    pollTimer = null;
     if (reconnectTimer !== null) clearTimeout(reconnectTimer);
     reconnectTimer = null;
     socket?.close();
@@ -517,7 +536,7 @@
           result: event.payload.result, failure: event.payload.failure,
         };
       }
-      [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
+      [jobs, findings, observability, agentRuns] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId), api.agentRuns(taskId)]);
       await refreshReportResults();
     };
     current.onclose = () => {
@@ -533,7 +552,7 @@
       const recovered = await api.events(taskId, after);
       const known = new Set(events.map((event) => event.event_id));
       events = [...events, ...recovered.filter((event) => !known.has(event.event_id))];
-      [jobs, findings, observability] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId)]);
+      [jobs, findings, observability, agentRuns] = await Promise.all([api.jobs(taskId), api.findings(taskId), api.observability(taskId), api.agentRuns(taskId)]);
       await refreshReportResults();
       connectEvents(taskId, 0, generation);
     } catch {
