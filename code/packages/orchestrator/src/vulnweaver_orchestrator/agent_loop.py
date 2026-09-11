@@ -339,20 +339,21 @@ class AgentLoop:
 
             sequence = _accept(decisions, sequence, plan, rationale, self._clock)
 
+            round_steps: list[ExecutedStep] = []
             for call in decision.calls:
                 outcome = await self._executor.execute(call)
-                steps.append(
-                    ExecutedStep(
-                        step_id=call.step_id,
-                        tool_name=call.tool["name"],
-                        tool_version=call.tool["version"],
-                        plan_id=call.plan_id,
-                        succeeded=outcome.succeeded,
-                        output=outcome.output,
-                        artifact_refs=outcome.artifact_refs,
-                        failure_code=outcome.failure_code,
-                    )
+                executed = ExecutedStep(
+                    step_id=call.step_id,
+                    tool_name=call.tool["name"],
+                    tool_version=call.tool["version"],
+                    plan_id=call.plan_id,
+                    succeeded=outcome.succeeded,
+                    output=outcome.output,
+                    artifact_refs=outcome.artifact_refs,
+                    failure_code=outcome.failure_code,
                 )
+                steps.append(executed)
+                round_steps.append(executed)
                 artifact_refs.extend(outcome.artifact_refs)
                 sequence, _ = _record(
                     decisions,
@@ -367,7 +368,18 @@ class AgentLoop:
                 )
 
             feedback = {
-                "last_steps": [_bound_step(step, budget.max_observation_chars) for step in steps]
+                # The model can only pace itself if it can see how much of the
+                # loop is left; without this an investigating agent tends to
+                # spend every round gathering and never report.
+                "planning_round": round_index,
+                "remaining_planning_rounds": budget.max_planning_rounds - round_index,
+                # Only this round's steps. Replaying the whole accumulated
+                # history every round grew the prompt without adding anything the
+                # model had not already been told, and buried the instruction to
+                # converge.
+                "last_steps": [
+                    _bound_step(step, budget.max_observation_chars) for step in round_steps
+                ],
             }
 
         if status is None:

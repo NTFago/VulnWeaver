@@ -58,12 +58,15 @@ from vulnweaver_orchestrator.audit_tools import (
 )
 
 AUDIT_AGENT_OBJECTIVE = (
-    "Audit this task's indexed code for real, location-anchored security defects "
-    "and report each one with the finding-report tool. Work like an investigator: "
-    "start from the leads and the function index, open the functions that matter, "
-    "follow the call chain, search for the sources and sinks involved, and only "
-    "report a defect once the code you actually read supports it. Prefer few "
-    "well-evidenced findings over many guesses."
+    "Audit this task's indexed code for location-anchored security defects. Work "
+    "like an investigator: start from the leads and the function index, open the "
+    "functions that matter, follow the call chain, and search for the sources and "
+    "sinks involved. Reporting is the deliverable, not the searching: an "
+    "investigation that reports nothing has failed this task. Report a candidate "
+    "once the code you read substantiates it — you are the discovery stage, and "
+    "an independent review plus a confirmation policy downstream exist precisely "
+    "to filter false positives, so do not withhold a substantiated candidate out "
+    "of doubt. Never report a location you did not read."
 )
 
 AUDIT_AGENT_INSTRUCTIONS = (
@@ -81,8 +84,13 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "finding on its own. Set verification_request to fuzz only when dynamic "
     "confirmation would settle a memory-safety question you cannot settle by "
     "reading. Arguments must never contain absolute paths or parent-directory "
-    "segments. When you have reported everything you can substantiate, return "
-    "zero steps and explain why."
+    "segments. Report each candidate with finding-report as soon as the code you "
+    "have read substantiates it rather than saving them for the end: your round "
+    "budget is small, and an investigation that never reports is worth nothing. "
+    "Return zero steps as soon as you have reported everything you can "
+    "substantiate and explain why you are finished. Each observation tells you "
+    "how many planning rounds remain: when they run low, report what you have "
+    "instead of opening another line of enquiry."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
@@ -161,7 +169,7 @@ class CodeAuditAgent:
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
         self._budget = budget or AgentLoopBudget(
-            max_planning_rounds=6,
+            max_planning_rounds=8,
             max_plan_rejections=4,
             max_steps_per_plan=8,
             max_observation_chars=8_192,

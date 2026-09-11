@@ -57,12 +57,20 @@
 - 「审计」语义从「一次分类」变为「一次有界调查」，报告的证据链现在能显示调查步骤（工具、参数、观察摘要、决策理由）。
 - 二进制伪代码进入模型输入，意味着更多受样本影响的文本进入带工具目录的循环。系统提示已声明上下文为不可信数据；调查工具全部只读、禁网、不接受宿主路径。
 - 需要同步维护：`vulnweaver_pair.pseudocode_text` 是伪代码形状的唯一所有者，后续任何读取方都必须经它。
-- 沙箱内联动态验证（智能体在循环内主动发起符号执行）本次**未实现**，见下。
+
+### 5. 智能体可在循环内发起有界动态验证
+
+`symbolic-execute` 让模型直接指定二进制函数地址发起定点符号执行。信任边界不变：地址只是主张，执行前必须经 `functions_at_address` 语义的索引校验落到任务已索引的函数上，无法解析的一律丢弃；只有项目开启动态验证时才允许执行；单次审计的运行次数与地址数上限在步执行器内强制，不由计划决定。样本仍只在 Sandbox Runner 内执行——worker 只是等待一次 RPC，与二进制规划钩子既有做法一致；该步骤的产物是**观察**，不是 Finding，因此不进入证据链、不参与确认。
+
+`BinaryFactsAdapter` 因此新增 `analyze_ref`：持有 CAS 引用、没有本地解压样本的调用方（即审计路径）此前无法驱动该 profile，这是唯一的障碍。
+
+`finding-report` 的 `verification_request` 则落为 CONTEXTUAL、weight 0 的溯源证据：确认门禁与事实推导都只读 `SUPPORTS` 关系，因此它在结构上不可能影响确认结论，但报告能显示「审计者认为此处需要动态证明」。
 
 ## 未决
 
-智能体在循环内自主发起动态验证（`symbolic-execute` 经 Sandbox Runner）尚未实现。已就位的部分：`finding-report` 接受 `verification_request` 字段，确认事实推导使动态验证的产物真正能确认 Finding。未就位：内联 Runner 的注入接线、以 PAIR 为准的目标地址校验、以及单次审计的内联动态次数上限。该能力需要先完成上述三项并补真实 Runner 回放，属后续任务。
+- 内联符号执行尚未做真实 Sandbox Runner 回放：单元测试用注入的假 runner 覆盖了拒绝路径、地址锚定与次数上限，但未验证真实镜像下 `binary-facts`+angr profile 的端到端行为与耗时。该 profile 会连同定点符号执行一并重跑完整二进制分析，单次开销较大，这是运行次数上限设为 2 的现实原因；若后续需要更高频的内联动态验证，应新增一个只做定点符号执行的独立沙箱 profile。
+- 真实模型端到端（源码样本与 ELF 样本）未执行。
 
 ## 验证
 
-Linux Dev Container 内：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **496 passed / 5 skipped**（5 项为需 live Sandbox Runner/Docker 的显式 opt-in）。新增测试覆盖：工具注册与只读边界（含遍历路径拒绝与自由文本 rationale 不再误杀）、列表形状伪代码读取回归、智能体「调查→报告→收尾」全链与决策轨迹、幻觉位置丢弃、模型未配置时回落一次性路径、静态线索不自动成为 Finding、崩溃证据确认内存破坏 Finding、模型解释不得贡献事实、崩溃不足以确认注入类、复核修订 id 幂等且与首次复核区分。
+Linux Dev Container 内：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **498 passed / 5 skipped**（5 项为需 live Sandbox Runner/Docker 的显式 opt-in）。新增测试覆盖：工具注册与只读边界（含遍历路径拒绝与自由文本 rationale 不再误杀）、列表形状伪代码读取回归、智能体「调查→报告→收尾」全链与决策轨迹、幻觉位置丢弃、模型未配置时回落一次性路径、静态线索不自动成为 Finding、动态验证意图的溯源证据形状（relation/weight/strength）、崩溃证据确认内存破坏 Finding、模型解释不得贡献事实、崩溃不足以确认注入类、复核修订 id 幂等且与首次复核区分、符号执行在无 runner 与未开启动态验证时被拒且不触发任何沙箱调用、地址锚定与丢弃、单次审计运行次数上限。
