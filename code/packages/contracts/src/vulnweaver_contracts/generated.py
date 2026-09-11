@@ -998,6 +998,7 @@ class ProductSettings(TypedDict):
     clear_tier_api_keys: NotRequired[list[Literal['planning', 'audit', 'review', 'report']]]
     sandbox_budgets: NotRequired[SandboxBudgets]
     fuzz_budgets: NotRequired[FuzzBudgets]
+    agent_loop_budgets: NotRequired[AgentLoopBudgets]
     sandbox_runner_timeout_seconds: NotRequired[int]
     fuzz_runner_timeout_seconds: NotRequired[int]
     angr_enabled: NotRequired[bool | None]
@@ -1022,6 +1023,10 @@ class FuzzBudgets(TypedDict):
     max_executions: NotRequired[int]
     max_duration_seconds: NotRequired[int]
     max_crashes: NotRequired[int]
+
+class AgentLoopBudgets(TypedDict):
+    audit_deadline_seconds: NotRequired[int]
+    reverse_planning_deadline_seconds: NotRequired[int]
 
 class ModelTierSettings(TypedDict):
     planning: NotRequired[TierModelConfig]

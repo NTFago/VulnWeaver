@@ -52,6 +52,7 @@ from vulnweaver_model_gateway import (
     ThinkingConfig,
 )
 from vulnweaver_orchestrator import (
+    AgentLoopBudget,
     CodeAuditAgent,
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
@@ -174,7 +175,11 @@ async def _run() -> None:
             else None
         )
         review_executor, audit_executor, model_gateway = _model_executors(
-            database, store, settings, symbolic_runner=symbolic_runner
+            database,
+            store,
+            settings,
+            symbolic_runner=symbolic_runner,
+            audit_deadline_seconds=config.audit_deadline_seconds,
         )
         proof_executor = _proof_executor(database, store, model_gateway, config)
         fuzz_executor = await _fuzz_executor(
@@ -191,7 +196,12 @@ async def _run() -> None:
         )
         binary_planning_hook = (
             _ReversePlanningHook(
-                ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
+                ReversePlanningAgent(
+                    model_gateway,
+                    database,
+                    sink=DatabaseAgentRunSink(database),
+                    budget=_agent_loop_budget(config.reverse_planning_deadline_seconds),
+                )
             )
             if model_gateway is not None
             else None
@@ -408,12 +418,24 @@ def _environment_bool(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
+def _agent_loop_budget(deadline_seconds: int | None) -> AgentLoopBudget | None:
+    """Budget for one agent loop, or None to keep the agent's own default.
+
+    Only the deadline is configurable; the loops carry no token or round quota.
+    """
+
+    if not deadline_seconds:
+        return None
+    return AgentLoopBudget(deadline_seconds=float(deadline_seconds))
+
+
 def _model_executors(
     database: Database,
     store: LocalContentAddressedStore,
     product_settings: dict[str, object],
     *,
     symbolic_runner: object | None = None,
+    audit_deadline_seconds: int | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
     """Build one gateway with an independent endpoint per configured tier.
 
@@ -472,6 +494,7 @@ def _model_executors(
             store,
             sink=DatabaseAgentRunSink(database),
             symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
+            budget=_agent_loop_budget(audit_deadline_seconds),
         ),
     )
     return (

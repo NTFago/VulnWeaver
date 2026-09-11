@@ -95,3 +95,32 @@ def test_proof_and_binary_env_pairs_resolved() -> None:
     assert config.budgets["binary"].timeout_seconds == 120
     assert config.fuzz_runner_timeout_seconds == 900
     assert config.sandbox_runner_timeout_seconds == 45
+
+
+def test_agent_loop_deadlines_resolve_settings_then_environment() -> None:
+    from_settings = resolve_deployment_config(
+        {"agent_loop_budgets": {"audit_deadline_seconds": 1800}},
+        {
+            "AGENT_AUDIT_DEADLINE_SECONDS": "60",
+            "AGENT_REVERSE_PLANNING_DEADLINE_SECONDS": "900",
+        },
+    )
+    # The setting wins for the field it names; the untouched one takes the env.
+    assert from_settings.audit_deadline_seconds == 1800
+    assert from_settings.reverse_planning_deadline_seconds == 900
+
+
+def test_agent_loop_deadlines_fall_through_when_unset() -> None:
+    config = resolve_deployment_config(
+        # Zero is "unset" here, as it is for every other resolved knob, so the
+        # environment still gets its say.
+        {"agent_loop_budgets": {"audit_deadline_seconds": 0}},
+        {"AGENT_AUDIT_DEADLINE_SECONDS": "120"},
+    )
+    assert config.audit_deadline_seconds == 120
+
+
+def test_agent_loop_deadlines_default_to_none() -> None:
+    config = resolve_deployment_config({}, {})
+    assert config.audit_deadline_seconds is None
+    assert config.reverse_planning_deadline_seconds is None

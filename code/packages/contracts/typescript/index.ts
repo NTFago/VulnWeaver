@@ -933,6 +933,7 @@ export interface ProductSettings {
   clear_tier_api_keys?: Array<"planning" | "audit" | "review" | "report">;
   sandbox_budgets?: SandboxBudgets;
   fuzz_budgets?: FuzzBudgets;
+  agent_loop_budgets?: AgentLoopBudgets;
   sandbox_runner_timeout_seconds?: number;
   fuzz_runner_timeout_seconds?: number;
   angr_enabled?: boolean | null;
@@ -961,6 +962,11 @@ export interface FuzzBudgets {
   max_executions?: number;
   max_duration_seconds?: number;
   max_crashes?: number;
+}
+
+export interface AgentLoopBudgets {
+  audit_deadline_seconds?: number;
+  reverse_planning_deadline_seconds?: number;
 }
 
 export interface ModelTierSettings {

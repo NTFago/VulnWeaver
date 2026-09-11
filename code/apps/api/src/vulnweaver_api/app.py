@@ -1204,6 +1204,7 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         tool_image_digests=parsed.tool_image_digests,
         sandbox_budgets=parsed.sandbox_budgets,
         fuzz_budgets=parsed.fuzz_budgets,
+        agent_loop_budgets=parsed.agent_loop_budgets,
         sandbox_runner_timeout_seconds=parsed.sandbox_runner_timeout_seconds,
         fuzz_runner_timeout_seconds=parsed.fuzz_runner_timeout_seconds,
         angr_enabled=parsed.angr_enabled,

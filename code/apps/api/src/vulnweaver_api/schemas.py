@@ -69,6 +69,17 @@ class FuzzBudgetsModel(StrictModel):
     max_crashes: int = Field(default=0, ge=0, le=10_000)
 
 
+class AgentLoopBudgetsModel(StrictModel):
+    """Wall-clock bounds for the two agent loops, in seconds.
+
+    Zero means "keep the deployment default": the resolver reads a non-positive
+    value as unset, exactly as it does for every other budget here.
+    """
+
+    audit_deadline_seconds: int = Field(default=0, ge=0, le=86_400)
+    reverse_planning_deadline_seconds: int = Field(default=0, ge=0, le=86_400)
+
+
 class ToolImageDigestsModel(StrictModel):
     binary_tools: DigestPattern | None = None
     proof_tool: DigestPattern | None = None
@@ -122,6 +133,7 @@ class ProductSettingsBody(StrictModel):
     tool_image_digests: ToolImageDigestsModel = Field(default_factory=ToolImageDigestsModel)
     sandbox_budgets: SandboxBudgetsModel = Field(default_factory=SandboxBudgetsModel)
     fuzz_budgets: FuzzBudgetsModel = Field(default_factory=FuzzBudgetsModel)
+    agent_loop_budgets: AgentLoopBudgetsModel = Field(default_factory=AgentLoopBudgetsModel)
     sandbox_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     fuzz_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     angr_enabled: bool | None = None
@@ -143,6 +155,7 @@ class ProductSettingsResponse(StrictModel):
     tool_image_digests: ToolImageDigestsModel
     sandbox_budgets: SandboxBudgetsModel
     fuzz_budgets: FuzzBudgetsModel
+    agent_loop_budgets: AgentLoopBudgetsModel
     sandbox_runner_timeout_seconds: int
     fuzz_runner_timeout_seconds: int
     angr_enabled: bool | None

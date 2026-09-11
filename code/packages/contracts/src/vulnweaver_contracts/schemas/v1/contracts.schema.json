@@ -1440,6 +1440,7 @@
         },
         "sandbox_budgets": {"$ref": "#/$defs/SandboxBudgets"},
         "fuzz_budgets": {"$ref": "#/$defs/FuzzBudgets"},
+        "agent_loop_budgets": {"$ref": "#/$defs/AgentLoopBudgets"},
         "sandbox_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "fuzz_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "angr_enabled": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
@@ -1480,6 +1481,14 @@
         "max_executions": {"type": "integer", "minimum": 0, "maximum": 1000000000},
         "max_duration_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "max_crashes": {"type": "integer", "minimum": 0, "maximum": 10000}
+      }
+    },
+    "AgentLoopBudgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audit_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "reverse_planning_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}
       }
     },
     "ModelTierSettings": {

@@ -52,6 +52,11 @@ export interface FuzzBudgets {
   max_crashes: number;
 }
 
+export interface AgentLoopBudgets {
+  audit_deadline_seconds: number;
+  reverse_planning_deadline_seconds: number;
+}
+
 export interface ProductSettings {
   schema_version: "1.0.0";
   review_model_base_url: string;
@@ -69,6 +74,7 @@ export interface ProductSettings {
     binary: SandboxResourceBudget;
   };
   fuzz_budgets: FuzzBudgets;
+  agent_loop_budgets: AgentLoopBudgets;
   sandbox_runner_timeout_seconds: number;
   fuzz_runner_timeout_seconds: number;
   angr_enabled: boolean | null;

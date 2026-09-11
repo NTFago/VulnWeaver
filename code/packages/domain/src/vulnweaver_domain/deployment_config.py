@@ -77,6 +77,11 @@ class ResolvedDeploymentConfig:
     sandbox_runner_timeout_seconds: int | None
     fuzz_runner_timeout_seconds: int | None
     angr_enabled: bool | None
+    # Wall-clock bounds for the two agent loops.  A positive value wins; zero or
+    # absent falls through to the environment and then to the built-in default,
+    # which is how every other resolved knob behaves.
+    audit_deadline_seconds: int | None = None
+    reverse_planning_deadline_seconds: int | None = None
 
 
 def resolve_deployment_config(
@@ -104,6 +109,7 @@ def resolve_deployment_config(
     settings_digests = _mapping(settings.get("tool_image_digests"))
     settings_budgets = _mapping(settings.get("sandbox_budgets"))
     settings_fuzz = _mapping(settings.get("fuzz_budgets"))
+    settings_agent_loop = _mapping(settings.get("agent_loop_budgets"))
 
     digests = ResolvedDigests(
         binary_tools=_first(
@@ -198,6 +204,16 @@ def resolve_deployment_config(
             _int_from_settings(settings.get("fuzz_runner_timeout_seconds")),
             _int_from_env(environ.get("FUZZ_RUNNER_TIMEOUT_SECONDS")),
             base.fuzz_runner_timeout_seconds,
+        ),
+        audit_deadline_seconds=_first(
+            _int_from_settings(settings_agent_loop.get("audit_deadline_seconds")),
+            _int_from_env(environ.get("AGENT_AUDIT_DEADLINE_SECONDS")),
+            base.audit_deadline_seconds,
+        ),
+        reverse_planning_deadline_seconds=_first(
+            _int_from_settings(settings_agent_loop.get("reverse_planning_deadline_seconds")),
+            _int_from_env(environ.get("AGENT_REVERSE_PLANNING_DEADLINE_SECONDS")),
+            base.reverse_planning_deadline_seconds,
         ),
         angr_enabled=_first(
             angr_settings if isinstance(angr_settings, bool) else None,
