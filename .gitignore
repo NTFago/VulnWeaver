@@ -49,3 +49,8 @@ code/tests/fixtures/teaching-samples/build/
 
 # Local agent tooling scratch
 .zcode/
+
+# Fixture dist directories are committed demo binaries (ELF, a few KB),
+# unlike the Python build outputs covered by `dist/` above.
+!code/tests/fixtures/**/dist/
+!code/tests/fixtures/**/dist/**
