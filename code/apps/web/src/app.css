@@ -587,6 +587,7 @@ textarea { resize: vertical; min-height: 44px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 .sample-options { display: grid; gap: 8px; margin: 18px 0 4px; }
+.sample-options:not(.expanded) { max-height: 254px; overflow: hidden; }
 .sample-option {
   display: flex;
   align-items: center;
@@ -603,6 +604,26 @@ textarea { resize: vertical; min-height: 44px; }
 .sample-option span { display: grid; gap: 4px; min-width: 0; }
 .sample-option b { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sample-option small { font: 500 11px/1.4 var(--font-mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sample-list-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s var(--ease), color 0.16s var(--ease), background 0.16s var(--ease);
+}
+.sample-list-toggle:hover { border-color: rgba(201, 244, 59, 0.55); background: rgba(201, 244, 59, 0.04); color: var(--text); }
+.sample-list-toggle small { margin-left: auto; color: var(--muted); font-size: 11px; }
+.sample-list-toggle .arrow { margin-left: auto; color: var(--accent); font-size: 17px; line-height: 0.7; transition: transform 0.2s var(--ease); }
+.sample-list-toggle[aria-expanded="true"] .arrow { transform: rotate(180deg); }
 
 .task-list { display: grid; }
 .task-list button {
