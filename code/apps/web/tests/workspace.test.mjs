@@ -4,6 +4,13 @@ import { aggregatePipelineStages, pipelineProgress } from '../src/lib/pipeline.t
 import { findingCounts, pseudocodeText, reportView } from '../src/lib/report-view.ts';
 import { displayRuns, sharedReferences, mergeEvents } from '../src/lib/audit-trail.ts';
 import { tasks, runsFor, trailFor } from './dev-fixtures.mjs';
+import { sampleArtifacts } from '../src/lib/project.ts';
+test('derived pipeline outputs never become selectable samples', () => {
+  const inputs = ['source_archive', 'source_repository', 'elf', 'pe'].map(kind => ({ id: kind, kind }));
+  const outputs = ['report', 'pair', 'source_index', 'binary_analysis', 'unknown'].map(kind => ({ id: kind, kind }));
+  assert.deepEqual(sampleArtifacts([...inputs, ...outputs]), inputs);
+  assert.equal(sampleArtifacts([...inputs, ...outputs, ...outputs]).length, 4);
+});
 const job = (id, kind, status, extra = {}) => ({ id, kind, status, updated_at: '2026-09-11T00:00:00Z', failure: null, ...extra });
 const task = { status: 'analyzing' };
 test('agent roles require exact metadata and never follow model-name guesses', () => {

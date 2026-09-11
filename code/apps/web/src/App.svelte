@@ -15,6 +15,7 @@
     Task,
   } from "@vulnweaver/contracts";
   import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type ProductSettings, type Session } from "./lib/api";
+  import { sampleArtifacts } from "./lib/project";
   import { mergeEvents, type AuditTrail } from "./lib/audit-trail";
   import AuthView from "./lib/views/AuthView.svelte";
   import SettingsView, { type SettingsSavePayload } from "./lib/views/SettingsView.svelte";
@@ -245,7 +246,8 @@
     try {
       disconnectEvents(); selectedProject = project; selectedTask = null; view = "project";
       const generation = socketGeneration;
-      const [nextArtifacts, nextTasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
+      const [loadedArtifacts, nextTasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
+      const nextArtifacts = sampleArtifacts(loadedArtifacts);
       const details = await Promise.all(nextArtifacts.map((item) => api.artifact(project.id, item.id)));
       if (generation !== socketGeneration || selectedProject?.id !== project.id) return;
       artifacts = nextArtifacts; tasks = nextTasks;
@@ -295,7 +297,7 @@
       if (!isCurrentTask(task.id, generation)) return;
       connectEvents(task.id, 0, generation);
       // AgentRun can change without a task event; refresh the read model periodically.
-      pollTimer = setInterval(() => scheduleRefresh(task.id, generation), 5000);
+      pollTimer = setInterval(() => scheduleRefresh(task.id, generation), 4000);
       done();
     } catch (caught) { if (isCurrentTask(task.id, generation)) { busy = false; showError(caught); } }
   }

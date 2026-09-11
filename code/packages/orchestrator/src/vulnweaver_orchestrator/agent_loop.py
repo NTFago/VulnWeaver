@@ -14,6 +14,7 @@ every transition is recorded as a ``DecisionRecord`` on one aggregated
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import time
 from collections.abc import Callable
@@ -87,17 +88,25 @@ class PlannerGateway(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AgentLoopBudget:
-    max_planning_rounds: int = 4
+    # None means the loop keeps planning until the model stops asking for steps,
+    # the token budget runs out, an optional deadline passes, or the model
+    # degrades. A finite value is still honoured for callers that want it.
+    max_planning_rounds: int | None = None
     max_model_tokens: int = 200_000
     max_plan_rejections: int = 2
     max_consecutive_model_failures: int = 2
     max_steps_per_plan: int = 8
     max_observation_chars: int = 8_192
     deadline_seconds: float | None = None
+    # Advisory only, never a hard stop: past this many rounds the feedback tells
+    # the model to converge. It exists because a loop with no round cap will
+    # otherwise investigate until the token budget is gone, even after it has
+    # reported everything it found.
+    soft_round_limit: int | None = None
 
     def __post_init__(self) -> None:
-        if not 1 <= self.max_planning_rounds <= 32:
-            raise ValueError("max_planning_rounds must be between 1 and 32")
+        if self.max_planning_rounds is not None and not 1 <= self.max_planning_rounds <= 32:
+            raise ValueError("max_planning_rounds must be between 1 and 32 when set")
         if self.max_model_tokens < 1:
             raise ValueError("max_model_tokens must be positive")
         if not 0 <= self.max_plan_rejections <= 8:
@@ -110,6 +119,8 @@ class AgentLoopBudget:
             raise ValueError("max_observation_chars must be between 256 and 1000000")
         if self.deadline_seconds is not None and self.deadline_seconds <= 0:
             raise ValueError("deadline_seconds must be positive when set")
+        if self.soft_round_limit is not None and not 1 <= self.soft_round_limit <= 64:
+            raise ValueError("soft_round_limit must be between 1 and 64 when set")
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,7 +212,23 @@ class AgentLoop:
         fallback: StructuredFailure | None = None
         policy_reason_codes: tuple[str, ...] = ()
 
-        for round_index in range(1, budget.max_planning_rounds + 1):
+        for round_index in itertools.count(1):
+            if budget.max_planning_rounds is not None and round_index > budget.max_planning_rounds:
+                sequence, _ = _record(
+                    decisions,
+                    sequence,
+                    "budget_exhausted",
+                    "planning round budget exhausted before the objective completed",
+                    self._clock,
+                )
+                status = AgentLoopStatus.BUDGET_EXHAUSTED
+                fallback = _failure(
+                    "loop_planning_round_budget_exhausted",
+                    FailureKind.TIMEOUT,
+                    "Agent loop planning round budget was exhausted.",
+                    max_planning_rounds=budget.max_planning_rounds,
+                )
+                break
             deadline = budget.deadline_seconds
             if deadline is not None and self._monotonic() - started >= deadline:
                 sequence, _ = _record(
@@ -367,20 +394,48 @@ class AgentLoop:
                     self._clock,
                 )
 
-            feedback = {
-                # The model can only pace itself if it can see how much of the
-                # loop is left; without this an investigating agent tends to
-                # spend every round gathering and never report.
+            # Only this round's steps. Replaying the whole accumulated history
+            # every round grew the prompt without adding anything the model had
+            # not already been told, and buried the instruction to converge.
+            round_feedback: JsonObject = {
                 "planning_round": round_index,
-                "remaining_planning_rounds": budget.max_planning_rounds - round_index,
-                # Only this round's steps. Replaying the whole accumulated
-                # history every round grew the prompt without adding anything the
-                # model had not already been told, and buried the instruction to
-                # converge.
                 "last_steps": [
                     _bound_step(step, budget.max_observation_chars) for step in round_steps
                 ],
             }
+            if budget.max_planning_rounds is not None:
+                # Only meaningful with a finite budget; an unbounded loop has no
+                # "rounds remaining" to report.
+                round_feedback["remaining_planning_rounds"] = (
+                    budget.max_planning_rounds - round_index
+                )
+            if budget.soft_round_limit is not None and round_index >= budget.soft_round_limit:
+                round_feedback["guidance"] = (
+                    f"You have used {round_index} planning rounds. Unless you have a "
+                    "specific, named lead still to check, stop investigating now: "
+                    "report everything you have substantiated with finding-report and "
+                    "return zero steps. More browsing will not add findings."
+                )
+            feedback = round_feedback
+            if self._sink is not None:
+                # Make the investigation observable while it is still running:
+                # an unbounded loop can go for minutes, and without this the
+                # trajectory only appears once it is already over.
+                await self._sink.add(
+                    self._snapshot(
+                        request,
+                        decisions=list(decisions),
+                        usage=TokenUsage(
+                            input_tokens=usage["input_tokens"],
+                            output_tokens=usage["output_tokens"],
+                        ),
+                        artifact_refs=artifact_refs,
+                        model_label=model_label,
+                        started=started,
+                        status=RunStatus.RUNNING,
+                        failure=None,
+                    )
+                )
 
         if status is None:
             sequence, _ = _record(
@@ -409,16 +464,51 @@ class AgentLoop:
                 self._clock,
             )
 
+        run = self._snapshot(
+            request,
+            decisions=decisions,
+            usage=usage,
+            artifact_refs=artifact_refs,
+            model_label=model_label,
+            started=started,
+            status=(
+                RunStatus.SUCCEEDED if status is AgentLoopStatus.COMPLETED else RunStatus.FAILED
+            ),
+            failure=fallback,
+        )
+        if self._sink is not None:
+            await self._sink.add(run)
+        return AgentLoopResult(
+            status=status,
+            agent_run=run,
+            plans=tuple(plans),
+            steps=tuple(steps),
+            fallback=fallback,
+            policy_reason_codes=policy_reason_codes,
+        )
+
+    def _snapshot(
+        self,
+        request: AgentLoopRequest,
+        *,
+        decisions: list[DecisionRecord],
+        usage: TokenUsage,
+        artifact_refs: list[str],
+        model_label: str,
+        started: float,
+        status: RunStatus,
+        failure: StructuredFailure | None,
+    ) -> AgentRun:
+        """Build one run record; called once per round and once at the end."""
+
         now = _timestamp(self._clock)
-        run = cast(
+        return cast(
             AgentRun,
             {
                 "schema_version": "1.0.0",
                 "id": request.run_id,
                 "task_id": request.task_id,
-                "status": (
-                    RunStatus.SUCCEEDED if status is AgentLoopStatus.COMPLETED else RunStatus.FAILED
-                ),
+                "status": status,
                 "model": model_label,
                 "prompt_hash": _digest(
                     json.dumps(
@@ -431,20 +521,10 @@ class AgentLoop:
                 "token_usage": usage,
                 "duration_ms": max(0, int(round((self._monotonic() - started) * 1000))),
                 "result_refs": list(dict.fromkeys(artifact_refs)),
-                "failure": fallback,
+                "failure": failure,
                 "created_at": now,
                 "updated_at": now,
             },
-        )
-        if self._sink is not None:
-            await self._sink.add(run)
-        return AgentLoopResult(
-            status=status,
-            agent_run=run,
-            plans=tuple(plans),
-            steps=tuple(steps),
-            fallback=fallback,
-            policy_reason_codes=policy_reason_codes,
         )
 
     def _tool_catalog(self) -> list[JsonObject]:

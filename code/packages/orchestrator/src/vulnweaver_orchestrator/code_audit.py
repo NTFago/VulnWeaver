@@ -66,7 +66,10 @@ AUDIT_AGENT_OBJECTIVE = (
     "once the code you read substantiates it — you are the discovery stage, and "
     "an independent review plus a confirmation policy downstream exist precisely "
     "to filter false positives, so do not withhold a substantiated candidate out "
-    "of doubt. Never report a location you did not read."
+    "of doubt. Never report a location you did not read. Once you have reported "
+    "every candidate the code supports and have no specific unresolved lead left "
+    "to name, stop: return zero steps rather than opening another line of "
+    "enquiry. More browsing will not add findings."
 )
 
 AUDIT_AGENT_INSTRUCTIONS = (
@@ -84,13 +87,15 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "finding on its own. Set verification_request to fuzz only when dynamic "
     "confirmation would settle a memory-safety question you cannot settle by "
     "reading. Arguments must never contain absolute paths or parent-directory "
+    "Every step must list input_refs copied verbatim from context.artifact_refs; a "
+    "reference you invent makes the Policy Engine reject the whole plan, which "
+    "wastes a round. Use only the tools named above, and keep step_id unique "
+    "inside one plan. "
     "segments. Report each candidate with finding-report as soon as the code you "
-    "have read substantiates it rather than saving them for the end: your round "
-    "budget is small, and an investigation that never reports is worth nothing. "
-    "Return zero steps as soon as you have reported everything you can "
-    "substantiate and explain why you are finished. Each observation tells you "
-    "how many planning rounds remain: when they run low, report what you have "
-    "instead of opening another line of enquiry."
+    "have read substantiates it rather than saving them for the end: an "
+    "investigation that never reports is worth nothing. Return zero steps as soon "
+    "as you have reported everything you can substantiate and explain why you are "
+    "finished."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
@@ -105,6 +110,10 @@ class CodeAuditOutcome:
     findings: tuple[ReportedFinding, ...]
     steps: tuple[ExecutedStep, ...]
     degraded: bool
+    # False when the loop stopped without the model declaring itself finished
+    # (token budget, deadline). The caller must not read such a run as "the
+    # audit looked and found nothing".
+    completed: bool = True
     fallback_code: str | None = None
 
     @property
@@ -168,11 +177,13 @@ class CodeAuditAgent:
         self._sink = sink
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
+        # No planning-round cap: the investigation ends when the model reports
+        # and stops asking for steps, or when the token budget runs out.
         self._budget = budget or AgentLoopBudget(
-            max_planning_rounds=8,
             max_plan_rejections=4,
             max_steps_per_plan=8,
             max_observation_chars=8_192,
+            soft_round_limit=6,
         )
         self._limits = limits or AuditWorkspaceLimits()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
@@ -227,6 +238,7 @@ class CodeAuditAgent:
             findings=tuple(executor.reported),
             steps=result.steps,
             degraded=result.status is AgentLoopStatus.DEGRADED,
+            completed=result.status is AgentLoopStatus.COMPLETED,
             fallback_code=str(fallback["code"]) if fallback is not None else None,
         )
 

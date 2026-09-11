@@ -35,6 +35,7 @@ from vulnweaver_contracts import (
 from vulnweaver_model_gateway import ModelCallResult
 from vulnweaver_orchestrator import (
     AUDIT_TOOLS,
+    AgentLoopBudget,
     AuditStepExecutor,
     AuditWorkspace,
     AuditWorkspaceLimits,
@@ -719,6 +720,98 @@ def test_symbolic_execute_anchors_addresses_on_the_index_and_caps_runs(
             ).execute(_symbolic_call({"addresses": [0x1]}))
             assert unresolved["reason_code"] == "symbolic.no_anchored_targets"
             assert idle.calls == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class EndlessPlanner:
+    """Never finishes: always proposes one more investigation step."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete_structured(self, **kwargs: object) -> ModelCallResult:
+        self.calls += 1
+        run = cast(
+            AgentRun,
+            {
+                "schema_version": "1.0.0",
+                "id": str(kwargs.get("run_id", "agent-run:stub")),
+                "task_id": str(kwargs.get("task_id", "task:stub")),
+                "status": RunStatus.SUCCEEDED,
+                "model": ENDPOINT,
+                "prompt_hash": "sha256:" + "a" * 64,
+                "input_refs": [],
+                "decisions": [],
+                "token_usage": {"input_tokens": 5, "output_tokens": 5},
+                "failure": None,
+                "created_at": TIMESTAMP,
+                "updated_at": TIMESTAMP,
+            },
+        )
+        return ModelCallResult(
+            proposal(
+                [
+                    step(
+                        "code-function-list",
+                        {"limit": 5},
+                        step_id=f"s{self.calls}",
+                        refs=[],
+                    )
+                ],
+                "keep investigating",
+            ),
+            run,
+            None,
+            "endpoint-1",
+        )
+
+
+def test_an_audit_that_stops_early_never_reports_no_findings(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    """An unfinished investigation must not read as "audited, found nothing"."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        real_path = "src/app.py"
+        suffix, version_id = await seed(
+            database,
+            lambda vid: [source_function(f"pair-fn:{uuid4().hex}", vid, real_path)],
+        )
+        # A finite budget makes the loop stop while the model still wants more.
+        agent = CodeAuditAgent(
+            database,
+            EndlessPlanner(),
+            LocalContentAddressedStore(tmp_path),
+            budget=AgentLoopBudget(max_planning_rounds=2),
+        )
+        auditor = SemanticAuditor(
+            database,
+            EndlessPlanner(),
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            agent=agent,
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        task_id = f"task:{suffix}"
+        try:
+            result = await executor.execute(
+                audit_job(f"job:audit:{suffix}", task_id), asyncio.Event()
+            )
+            assert result["status"] == "failed"
+            assert result["failure"] is not None
+            assert result["failure"]["code"] == "semantic_audit.loop_not_completed"
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+                runs = await repositories.agent_runs.list_for_task(task_id)
+            assert findings == []
+            # The incomplete run is still on record, with its failure code.
+            assert len(runs) == 1
+            assert runs[0]["status"] == "failed"
+            assert runs[0]["failure"]["code"] == "loop_planning_round_budget_exhausted"
         finally:
             await database.dispose()
 

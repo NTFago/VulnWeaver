@@ -62,3 +62,7 @@ GPT-5.6 Terra high 子任务在 `.worktree/web-audit-backend` 完成 `688e2d6`�
 尚未覆盖的原始完整愿景：二进制子步骤实时事实、历史漏洞趋势、报告快照修订及单 Job 重试协议。这些需要进一步持久化/协议设计；本轮界面明确展示现有数据边界。
 
 本 worktree 的 `tmp/main-App.svelte` 与 `tmp/main-app.css` 是整合前的主线备份。`tmp/audit-desktop.png`、`tmp/audit-mobile.png` 为验收截图；其他 tmp 文件是编辑辅助脚本、mock 服务和下载测试产物，均未纳入 Git，可在不再需要复查时删除。依赖缓存、构建 dist 均未提交。
+
+## PR #61 冲突修复复验
+
+同步 main@192660d（PR #62），保留派生产物过滤、运行中轨迹落库、审计收敛及未完成审计失败语义。前端复用现有请求隔离与恢复逻辑，统一为单套 4 秒轮询。新增派生产物不成为样本的回归测试。Linux 验证：Python 定向 54 passed，前端 13 passed；Ruff/Pyright/契约/Svelte/TypeScript/生产构建通过。本次未重跑全量或真实部署 E2E。冲突快照 `tmp/App-pr61-conflict.svelte` 未提交，可在复查后删除。

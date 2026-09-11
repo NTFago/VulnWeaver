@@ -252,7 +252,10 @@ async def _loop_executes_steps_until_empty_plan() -> None:
         "loop_completed",
     ]
     assert result.agent_run["result_refs"] == ["derived:1"]
-    assert [run["id"] for run in sink.runs] == ["agent-run:loop:1"]
+    # The loop may flush a progress snapshot per round; every write is the
+    # same aggregated run, and the last one carries the terminal status.
+    assert {run["id"] for run in sink.runs} == {"agent-run:loop:1"}
+    assert sink.runs[-1]["status"] is RunStatus.SUCCEEDED
     # The next observation carries the bounded result of the executed step.
     second_user = json.loads(planner.messages[1][1]["content"])
     assert second_user["last_feedback"]["last_steps"][0]["output"] == {"findings": 0}

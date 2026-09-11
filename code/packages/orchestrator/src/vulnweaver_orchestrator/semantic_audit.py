@@ -248,6 +248,12 @@ class SemanticAuditor:
             investigation=investigation,
         )
         await self._persist_run(dict(outcome.run))
+        if not outcome.completed:
+            # Whatever the agent did report is already persisted above, but an
+            # audit that stopped early has not covered the code it was asked to
+            # audit. Failing here keeps the task from reporting NO_FINDINGS on
+            # the strength of an investigation that never finished.
+            raise _AuditError("semantic_audit.loop_not_completed", FailureKind.TIMEOUT)
         return SemanticAuditOutcome(run_id, report_ref, finding_ids, evidence_ids, dropped)
 
     async def _single_shot_audit(
@@ -465,7 +471,7 @@ class SemanticAuditor:
 
     async def _persist_run(self, run: dict[str, object]) -> None:
         async with self._database.transaction() as repositories:
-            await repositories.agent_runs.add(cast(AgentRun, run))
+            await repositories.agent_runs.save_progress(cast(AgentRun, run))
 
 
 def _run_from_response(
