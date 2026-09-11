@@ -541,6 +541,70 @@ def test_upload_task_event_and_content_flow(client: TestClient) -> None:
     ]
 
 
+def test_report_job_creation_is_idempotent_per_format(client: TestClient) -> None:
+    """A repeat report request reuses the existing Job instead of erroring.
+
+    Task aggregation auto-schedules the default markdown report on completion,
+    so operator/API requests for the same format must return that Job.
+    """
+
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf)
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={
+            "Content-Type": "application/octet-stream",
+            "X-Artifact-Filename": "sample.zip",
+            "X-CSRF-Token": csrf,
+            "Idempotency-Key": "artifact:report-idem",
+        },
+        content=b"PKharmless",
+    )
+    assert upload.status_code == 201
+    artifact = upload.json()["artifact"]
+    version = upload.json()["versions"][0]
+    task = client.post(
+        f"/api/projects/{project['id']}/tasks",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "task:report-idem"},
+        json={
+            "schema_version": "1.0.0",
+            "artifact_version_ids": [version["id"]],
+            "resource_budget": _budget(),
+        },
+    )
+    assert task.status_code == 201
+    task_id = task.json()["id"]
+
+    def _create_report(fmt: str, key: str):
+        return client.post(
+            f"/api/tasks/{task_id}/reports",
+            headers={"X-CSRF-Token": csrf, "Idempotency-Key": key},
+            json={
+                "schema_version": "1.0.0",
+                "artifact_id": artifact["id"],
+                "version_id": version["id"],
+                "format": fmt,
+            },
+        )
+
+    first = _create_report("markdown", "report:markdown-1")
+    assert first.status_code == 202, first.text
+    repeat = _create_report("markdown", "report:markdown-2")
+    assert repeat.status_code == 202, repeat.text
+    assert repeat.json()["id"] == first.json()["id"]
+
+    pdf = _create_report("pdf", "report:pdf-1")
+    assert pdf.status_code == 202, pdf.text
+    assert pdf.json()["id"] != first.json()["id"]
+
+    listed = client.get(f"/api/tasks/{task_id}/jobs")
+    assert listed.status_code == 200
+    report_jobs = [job for job in listed.json() if job["kind"] == "report"]
+    assert sorted(job["id"] for job in report_jobs) == sorted(
+        [first.json()["id"], pdf.json()["id"]]
+    )
+
+
 def test_task_observability_summarizes_jobs_events_and_findings(client: TestClient) -> None:
     csrf = _login_and_change_password(client)
     project = _create_project(client, csrf)

@@ -800,6 +800,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 )
             report_artifact_id = f"artifact:report:{task_id}:{body.format}"
             report_version_id = f"artifact-version:report:{task_id}:{body.format}"
+            report_job_id = f"job:report:{task_id}:{body.format}"
             report_artifact = Artifact(
                 schema_version=SchemaVersion.VALUE_1_0_0,
                 id=report_artifact_id,
@@ -812,6 +813,13 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 await repositories.artifacts.get(report_artifact_id)
             except EntityNotFound:
                 await repositories.artifacts.add(report_artifact)
+            # Task aggregation auto-schedules the default markdown report, so a
+            # duplicate request for the same format reuses the existing Job
+            # instead of violating the unique job insert.
+            try:
+                return await repositories.jobs.get(report_job_id)
+            except EntityNotFound:
+                pass
             return await scheduler.schedule(
                 repositories,
                 task_id,
