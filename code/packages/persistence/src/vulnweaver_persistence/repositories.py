@@ -2109,23 +2109,29 @@ class DeletionRepository:
         for task_row in task_rows:
             await self._delete_task_rows(task_row["id"])
 
-        artifact_ids = (
-            await self._connection.execute(
-                select(artifacts.c.id).where(artifacts.c.project_id == project_id)
-            )
-        ).scalars().all()
+        artifact_ids = cast(
+            "list[str]",
+            (
+                await self._connection.execute(
+                    select(artifacts.c.id).where(artifacts.c.project_id == project_id)
+                )
+            ).scalars().all(),
+        )
         if not artifact_ids:
             version_rows = []
         else:
-            version_rows = (
-                await self._connection.execute(
-                    select(artifact_versions.c.id)
-                    .where(artifact_versions.c.artifact_id.in_(artifact_ids))
-                    # Children reference parents via parent_version_id with an
-                    # immediate RESTRICT check, so delete newest-first.
-                    .order_by(artifact_versions.c.created_at.desc())
-                )
-            ).scalars().all()
+            version_rows = cast(
+                "list[str]",
+                (
+                    await self._connection.execute(
+                        select(artifact_versions.c.id)
+                        .where(artifact_versions.c.artifact_id.in_(artifact_ids))
+                        # Children reference parents via parent_version_id with an
+                        # immediate RESTRICT check, so delete newest-first.
+                        .order_by(artifact_versions.c.created_at.desc())
+                    )
+                ).scalars().all(),
+            )
         if version_rows:
             await self._connection.execute(
                 delete(pair_raw).where(pair_raw.c.artifact_version_id.in_(version_rows))
@@ -2177,9 +2183,14 @@ class DeletionRepository:
         return task
 
     async def _delete_task_rows(self, task_id: str) -> None:
-        job_ids = (
-            await self._connection.execute(select(jobs.c.id).where(jobs.c.task_id == task_id))
-        ).scalars().all()
+        job_ids = cast(
+            "list[str]",
+            (
+                await self._connection.execute(
+                    select(jobs.c.id).where(jobs.c.task_id == task_id)
+                )
+            ).scalars().all(),
+        )
         if job_ids:
             await self._connection.execute(
                 delete(job_results).where(job_results.c.job_id.in_(job_ids))
@@ -2189,31 +2200,40 @@ class DeletionRepository:
             )
             await self._connection.execute(delete(jobs).where(jobs.c.id.in_(job_ids)))
 
-        finding_ids = (
-            await self._connection.execute(
-                select(findings.c.id).where(findings.c.task_id == task_id)
-            )
-        ).scalars().all()
+        finding_ids = cast(
+            "list[str]",
+            (
+                await self._connection.execute(
+                    select(findings.c.id).where(findings.c.task_id == task_id)
+                )
+            ).scalars().all(),
+        )
         evidence_ids: list[str] = []
         if finding_ids:
-            evidence_ids = (
-                await self._connection.execute(
-                    select(finding_evidence.c.evidence_id).where(
-                        finding_evidence.c.finding_id.in_(finding_ids)
+            evidence_ids = cast(
+                "list[str]",
+                (
+                    await self._connection.execute(
+                        select(finding_evidence.c.evidence_id).where(
+                            finding_evidence.c.finding_id.in_(finding_ids)
+                        )
                     )
-                )
-            ).scalars().all()
+                ).scalars().all(),
+            )
             await self._connection.execute(
                 delete(finding_evidence).where(finding_evidence.c.finding_id.in_(finding_ids))
             )
             # supersedes_review_id is a self-referencing RESTRICT FK: newest first.
-            review_ids = (
-                await self._connection.execute(
-                    select(reviews.c.id)
-                    .where(reviews.c.finding_id.in_(finding_ids))
-                    .order_by(reviews.c.created_at.desc())
-                )
-            ).scalars().all()
+            review_ids = cast(
+                "list[str]",
+                (
+                    await self._connection.execute(
+                        select(reviews.c.id)
+                        .where(reviews.c.finding_id.in_(finding_ids))
+                        .order_by(reviews.c.created_at.desc())
+                    )
+                ).scalars().all(),
+            )
             for review_id in review_ids:
                 await self._connection.execute(delete(reviews).where(reviews.c.id == review_id))
             await self._connection.execute(
@@ -2235,13 +2255,16 @@ class DeletionRepository:
                 )
             )
 
-        annotation_ids = (
-            await self._connection.execute(
-                select(annotations.c.id)
-                .where(annotations.c.task_id == task_id)
-                .order_by(annotations.c.created_at.desc())
-            )
-        ).scalars().all()
+        annotation_ids = cast(
+            "list[str]",
+            (
+                await self._connection.execute(
+                    select(annotations.c.id)
+                    .where(annotations.c.task_id == task_id)
+                    .order_by(annotations.c.created_at.desc())
+                )
+            ).scalars().all(),
+        )
         for annotation_id in annotation_ids:
             await self._connection.execute(
                 delete(annotations).where(annotations.c.id == annotation_id)
