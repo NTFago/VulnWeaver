@@ -197,10 +197,11 @@
 <FindingStats {findings} />
 <div class="task-columns">
   <div class="task-column">
-    <section class="panel table-panel">
-  <header class="panel-head">
+    <section class="panel table-panel task-overview-panel">
+  <header class="panel-head task-panel-head">
     <div><h2>发现与证据</h2><p>查看候选依据，记录独立复核与人工判断。</p></div>
   </header>
+  <div class="task-panel-body" role="region" aria-label="发现与证据内容">
   {#if findings.length === 0}
     <div class="compact-empty">当前任务尚未产生候选问题。</div>
   {:else}
@@ -245,17 +246,19 @@
       {/if}
     </article>
   {/if}
+  </div>
     </section>
   </div>
   <div class="task-column">
-    <section class="panel table-panel">
-      <header class="panel-head">
+    <section class="panel table-panel task-overview-panel">
+      <header class="panel-head task-panel-head">
         <div class="tabs" aria-label="任务详情面板">
           <button class:active={rightTab === "agents"} aria-pressed={rightTab === "agents"} on:click={() => (rightTab = "agents")}>智能体协作</button>
           <button class:active={rightTab === "events"} aria-pressed={rightTab === "events"} on:click={() => (rightTab = "events")}>事件流</button>
           <button class:active={rightTab === "jobs"} aria-pressed={rightTab === "jobs"} on:click={() => (rightTab = "jobs")}>作业列表</button>
         </div>
       </header>
+      <div class="task-panel-body" role="region" aria-label="任务详情面板内容">
       {#if rightTab === "agents"}
         <AgentPanel {agentRuns} {trail} {trailError} />
       {:else if rightTab === "events"}
@@ -276,6 +279,7 @@
           </div>
         {/if}
       {/if}
+      </div>
     </section>
   </div>
 </div>
@@ -325,16 +329,43 @@
   .stream-state { color: var(--muted); font-size: 12px; margin: 12px 0 0; }
   .task-kicker { display: block; color: var(--accent); font-size: 12px; margin: 8px 0; letter-spacing: .08em; }
   .task-columns {
+    --task-panel-height: clamp(540px, 68dvh, 720px);
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
     margin-top: 0;
-    align-items: start;
+    align-items: stretch;
   }
-  .task-column { min-width: 0; display: grid; }
+  .task-column { min-width: 0; min-height: 0; display: grid; }
   .task-column > .table-panel { margin-top: 0; }
+  .task-overview-panel {
+    height: var(--task-panel-height);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+  .task-panel-head {
+    height: 68px;
+    min-height: 68px;
+    align-items: flex-start;
+  }
+  .task-panel-body {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    padding: 16px 4px 4px 0;
+  }
+  .task-panel-body .finding-list,
+  .task-panel-body .job-list,
+  .task-panel-body > .stream-state { margin-top: 0; }
   @media (min-width: 1180px) {
     .task-columns { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+  }
+  @media (max-width: 1179px) {
+    .task-overview-panel { height: auto; overflow: visible; }
+    .task-panel-head { height: auto; min-height: 0; }
+    .task-panel-body { overflow: visible; padding-right: 0; scrollbar-gutter: auto; }
   }
   .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
   .tabs button {

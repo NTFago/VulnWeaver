@@ -63,7 +63,7 @@
   .tool-steps { display: grid; gap: 8px; padding-left: 20px; font-size: 12px; }
   .tool-steps span { color: var(--muted); margin-left: 12px; }
   .handoff { margin: 0; color: var(--accent); font-size: 12px; }
-  .agent-cards { display: grid; gap: 12px; margin-top: 16px; }
+  .agent-cards { display: grid; gap: 12px; margin: 0; }
   .agent-summary { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .agent-summary .badge i { margin: 0; }
   .pulse-dot {
