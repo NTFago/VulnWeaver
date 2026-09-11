@@ -12,7 +12,9 @@
 - **当前日期**：2026-09-11（Asia/Shanghai）
 - **当前阶段**：T38 按项目负责人决策移除全部计算资源限制（ADR-025）、模型网关上下文自动裁剪、DeepSeek/GLM 供应商预设，已合并 origin/main 最新修复（PR #55-#58）；实现与 E2E 驱动的三项链路修复（Ghidra 地址归一化、本地镜像摘要解析、fuzz 派发幂等与 0020 迁移）完成，Dev Container 全量门禁 487 passed / 5 skipped、覆盖率 ≥80%、Ruff/Pyright/tsc/svelte-check 0 错误、契约无漂移（与 origin/main PR #55-#58 合并后复验）；真实模型 E2E：源码链路（静态+语义审计+复核+报告 9/9 Job 成功）、二进制链路（Ghidra 伪代码+逆向规划智能体+可读化）全通；fuzz 链路跑通派发与沙箱编译，最终以结构化 `fuzz.harness_failed`（模型生成 harness 两轮未编译通过，设计内的 PARTIAL 语义）收尾。
 - **当前分支**：`dev`（自 `main@c3f571d` 新建，已 rebase 至 `origin/main@0f1df82`，随后整体推送）
-- **当前负责人**：Codex（T38）
+- **当前负责人**：Codex（T40）
+- **当前 worktree**：`.claude/worktrees/t40-agent-audit`（`dev` 分支，T40 全部改动在此）
+- **T40 一句话状态**：审计已由「一次性模型调用」变为「只读调查工具 + 规划-执行-观察循环」，并打通了「证据 → 类别事实 → confirmed → 自动利用」的链路（此前该链路因事实永不建立而完全不可达）；剩余项是智能体在循环内自主发起动态验证，以及真实模型端到端。
 - **最近一次全量门禁**：T35 worktree 的 Linux Dev Container 内 `pnpm run check` 全绿：437 passed、5 skipped（均为需 live Runner/Docker 的 opt-in 项），覆盖率 82.11%，Ruff/Pyright/TypeScript/Svelte 均 0 错误。基础 Compose 镜像已重建，宿主 `http://127.0.0.1:8080/` 与经 Web 代理的 `/api/auth/installation` 均返回 200。
   - 注意：本工作区使用 `uv sync --no-editable`，依赖包以**副本**装入 `.venv`，修改 `packages/` 源码后必须重跑 `uv sync --all-packages --no-editable`（必要时加 `--reinstall`）才会被测试进程加载，否则测试会静默使用旧代码。
 - **安全边界**：控制面不挂载 Docker Socket；动态样本、模糊测试和 Proof/Exploit 只能经独立 Sandbox Runner，以固定 ToolSpec、禁网、非 root、只读输入、资源预算和输出配额执行。
@@ -66,6 +68,7 @@
 
 | T38 报告下载与导出可读性修复 | 已完成 | Codex（`fix/report-download`） | 下载响应按报告格式返回安全文件名和媒体类型；Markdown/HTML/SARIF 读取规范源码范围，二进制位置读取 `virtual_address`；前端显示报告生成失败原因并为下载链接提供扩展名 | 部署更新后的 API/Web 镜像后做浏览器点击回归 | 2026-09-11 |
 | T39 任务事件契约兼容与部署镜像一致性修复 | 已完成 | Codex（`fix/task-event-stream`） | 读取历史 `task.status_changed` 事件时对缺失的可空 `failure` 做内存兼容补全；为严格 Pyright 检查补充 `JsonObject` 类型收窄，避免兼容 payload 展开产生未知类型；统一重建 API、Dispatcher、Orchestrator、Worker、Sandbox Runner、Web 镜像；清理开发 Redis DB 0 残留队列；保留 PostgreSQL 任务和工件数据 | 无；用户刷新当前任务页即可确认页面恢复最终状态 | 2026-09-11 |
+| T40 智能体调查式审计与确认链路打通 | 待验证 | Codex（`dev` 分支，worktree `.claude/worktrees/t40-agent-audit`） | ①审计由一次性模型调用改为 `AgentLoop` 驱动的调查循环，新增 8 件只读调查工具（`audit_tools.py`）与 `CodeAuditAgent`（`code_audit.py`），静态扫描器输出降级为线索，候选仍经 PAIR 锚定与既有复核/确认门禁；模型未配置时回落原一次性路径。②修复二进制伪代码读取缺陷（`vulnweaver_pair.pseudocode_text` 成为伪代码形状唯一所有者）。③修复 `AgentLoop` 生成的 `AgentRun.prompt_hash` 缺 `sha256:` 前缀（schema 与 DB CHECK 约束均会拒绝，任何 loop run 都无法落库）。④Policy Engine 不再对自由文本参数做遍历扫描（此前 CWE-22 的 `../` rationale 会导致整个计划被拒）。⑤新增 `derive_established_facts`：类别事实终于可从证据推导；fuzz/proof 结算后对受影响的 Finding 以证据修订 id 重开复核。全量门禁 496 passed / 5 skipped（Dev Container 内 PostgreSQL/Redis 集成实跑）、ruff 通过、pyright 0 错误 | 智能体在循环内自主发起动态验证（`symbolic-execute` 经 Sandbox Runner）未实现——缺内联 Runner 注入接线、PAIR 目标地址校验与次数上限，见 ADR-026「未决」；真实模型端到端（源码样本与 ELF 样本）与报告证据链浏览器回归未执行 | 2026-09-11 |
 
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
@@ -144,10 +147,19 @@
 
 | Q-018 | 报告下载接口未返回报告文件名/媒体类型，报告渲染器读取不存在的 `location.line`，二进制位置字段 `virtual_address` 也未被消费 | 浏览器下载得到无扩展名的 `content`；源码位置错误显示为第 1 行，二进制位置显示为 `unknown` | T38 已修复下载响应元数据、Markdown/HTML/PDF/SARIF 的源码范围与二进制地址读取，并补充报告失败状态提示 | 已处理 | Codex |
 | Q-019 | 部署栈的 Orchestrator 镜像未随事件契约更新，且 Redis 保留了不含 `failure` 字段的旧任务状态事件；API 事件流对历史事件响应校验失败 | 任务事实已进入 `completed`，但 `/api/tasks/{id}/events` 返回 500，前端无法收到最终状态；Orchestrator 反复因 `MalformedQueueMessage` 退出 | 已处理：历史事件读取兼容补全，所有应用镜像按当前代码重建，并清理开发 Redis DB 0；数据库任务与工件数据未删除 | 已处理 | Codex |
+| Q-020 | `semantic_audit` 以 `isinstance(pseudocode, str)` 读取 `PairFunction.attributes["pseudocode"]`，而 `binary_importer` 写入的是 `BinaryPseudocode` **列表**（`packages/pair/src/vulnweaver_pair/binary_importer.py:167`） | 判断恒假 → 二进制函数静默退化为「无代码可审」，课设「基于二进制反编译伪代码的漏洞检测」完全落空；此前 T29/T38 记录的「二进制伪代码审计已接入」实际未生效 | 已修复（T40）：新增 `vulnweaver_pair.pseudocode_text` 作为伪代码形状的唯一读取点（按地址排序拼接、有界截断），`semantic_audit` 与调查工具均经它读取；`tests/orchestrator/test_code_audit.py` 以列表形状伪代码做回归 | 已处理 | Codex |
+| Q-021 | `FindingPolicy` 为各 Finding 类别声明了必需事实，但全仓没有任何代码将其从证据推导；`FindingReviewGate` 只合成 `independent_review_agreement`/`independent_tool_evidence`。且已结算的 fuzz/proof Job 不重新触发复核 | 内存破坏/注入/认证类 Finding **永远无法 confirmed**，`evaluate_exploit_eligibility` 恒拒绝——课设「漏洞自动利用模块」没有可达输入（与 T38 E2E 记录「auto-exploit 链路需 confirmed Finding 未在 E2E 触发」一致）；T32 挂接的崩溃证据落在那唯一一次复核之后，实际从未被消费 | 已修复（T40）：新增 `derive_established_facts`（仅从 SUPPORTS + STRONG + 可复现 + 非模型证据推导，映射刻意保守）；结算钩子在 fuzz/proof 确实挂接新证据时，仅对受影响的 Finding 以证据修订 id 重开复核。判据本身未放松 | 已处理 | Codex |
+| Q-022 | `AgentLoop` 生成的 `AgentRun.prompt_hash` 是裸十六进制摘要，而 `AgentRun` schema 与 `agent_runs` 的 `prompt_sha256_digest` CHECK 约束都要求 `sha256:` 前缀 | 任何经 loop 产生的 AgentRun 都无法落库；T27 逆向规划在真实部署中经 `DatabaseAgentRunSink` 持久化时必然失败（既有测试只验证了手工构造的 run，未覆盖 loop 自身产物） | 已修复（T40）：`_digest` 补 `sha256:` 前缀；`test_code_audit.py` 的持久化断言构成回归 | 已处理 | Codex |
+| Q-023 | Policy Engine 的 `_check_paths` 扫描**所有**字符串参数，自由文本 `rationale` 中含 `../` 即触发 `host_path_or_traversal` 并拒绝整个计划 | 审计智能体描述路径遍历类漏洞（CWE-22）时计划被拒，三次后循环降级——对一个漏洞挖掘系统而言是功能性缺陷 | 已修复（T40）：`_FREE_TEXT_KEYS`（rationale/reason/message/title/summary）不做遍历扫描；带路径语义的参数保留完整扫描，绝对路径仍被拒绝（测试覆盖两侧） | 已处理 | Codex |
 
 ## 5. 当前阻碍点
 
-当前无阻碍。T16/T18/T19/T20/T21/T22/T32/T34 的未完成项属于待验证工作或待确认设计（D-002），不应标记为阻碍：
+当前无阻碍。
+
+T40 未完成项说明（属待验证/待实现，不构成阻碍）：
+
+- 智能体在循环内自主发起动态验证（`symbolic-execute` 经 Sandbox Runner）尚未实现。缺三件事：内联 Runner 的注入接线（`_build_assembly` 已有 `binary_sandbox`/`binary_digest` 可直接转交）、以 PAIR `functions_at_address` 为准的目标地址校验、单次审计的内联动态次数上限。需要一并补真实 Runner 回放才能标完成。
+- T40 全部门禁在 Linux 容器内实跑通过，但**真实模型端到端未执行**：需在产品设置配置 AUDIT 档模型后分别跑源码教学样本与 ELF 教学样本，确认任务页出现多轮决策与工具调用序列、二进制 Finding 带真实伪代码依据。T16/T18/T19/T20/T21/T22/T32/T34 的未完成项属于待验证工作或待确认设计（D-002），不应标记为阻碍：
 
 - T32 真实镜像 E2E 需要先构建并登记含 `compile_harness` 的 `vulnweaver-afl-casr` 新摘要、在 Runner 与 worker 两侧配置该摘要与 `SANDBOX_RUNNER_TOKEN`；这些属于部署前置，可在当前环境外完成。自动投递与目标解析已实现，不依赖 D-002。
 
@@ -175,11 +187,15 @@
 | ADR-023 | Task 按 Job 的既有形状携带结构化失败：`tasks.failure` 列与 `Task`/`TaskStatusChangedPayload` 的 required 可空 `failure`，使编排层在没有 Job 时的失败原因可见。 |
 | ADR-024 | 默认项目预算由服务端按已注册 ToolSpec 逐项最大值推导并校验下界；`binary-import` 数值校准到运行时实际值；请求预算统一经 `bounded_resource_budget` 按规格收敛。 |
 | ADR-025 | 移除全部计算资源限制：预算保留为惰性簿记，不再有任何拒绝/收敛路径；沙箱安全隔离属性不变；模型上下文改为网关自动裁剪。（2026-09-11 项目负责人决策） |
+| ADR-026 | 审计由 `AgentLoop` 驱动的只读调查循环完成（模型自主选择审什么、可追问、可跟踪调用链），静态扫描器输出降级为线索；候选仍锚定 PAIR 并走既有复核与确认门禁；类别事实改由证据推导；动态验证的证据可重开复核。扩大发现面，不扩大信任面。（2026-09-11，T40） |
 
 ## 8. 最近完成记录
 
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
+| 2026-09-11 | T40 智能体调查式审计（`dev`，提交 `c7d3089`） | 新增 `audit_tools.py`（8 件只读调查工具 + `AuditWorkspace` + `AuditStepExecutor`）与 `code_audit.py`（`CodeAuditAgent`）；`semantic_audit` 改为循环驱动并在降级时回落一次性路径；修复二进制伪代码读取、`AgentRun.prompt_hash` 前缀、策略层自由文本误杀三项缺陷。Linux Dev Container：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **492 passed / 5 skipped**（PostgreSQL/Redis 集成实跑） | 真实模型端到端与动态验证自主权 |
+| 2026-09-11 | T40 确认链路打通（`dev`，提交 `6686398`） | 新增 `derive_established_facts` 与复核修订机制（`ReviewJobScheduler` 可选 `revision`；结算钩子在 fuzz/proof 挂接新证据时重开受影响 Finding 的复核）。新增 `test_confirmation_facts.py` 4 项：崩溃证据确认内存破坏 Finding、模型解释不得贡献事实、崩溃不足以确认注入类、修订 id 幂等且与首次复核区分。全量门禁 **496 passed / 5 skipped**、ruff 通过、pyright 0 错误 | 同上 |
+
 | 2026-09-11 | T38 报告下载与导出可读性修复（`fix/report-download`） | Docker Linux 临时测试容器内 `uv sync --all-packages --no-editable` 后，Ruff 通过；报告/API 定向测试 **36 passed**（含 PostgreSQL/Redis 集成，1 个 Starlette 弃用警告）；本次 Python 修改文件 Pyright 0 错误；Web `svelte-check` 0 错误 0 警告，Vite build 成功 | 标准 Dev Container 因 Docker Hub 鉴权网络超时未启动；仓库级 Windows Pyright 仅因未安装 `weasyprint` 报既有 `pdf.py` 缺失依赖；更新 API/Web 镜像后需补浏览器下载回归 |
 | 2026-09-11 | T37 Markdown 快速路径 CI 修复（`ci/markdown-gate-move-gate`，PR #53 已合并入 `main`） | 首次实跑暴露（PR #50：`bad object`）与二次实跑暴露（PR #52：无凭据 fetch 失败）均登记于 Q-017；最终修复把 Markdown gate 移入全量克隆的 `change-scope` job，修复 PR 全量门禁通过；收尾 markdown-only PR（本条所属分支）的快速路径 CI 实跑为绿，Q-017 关闭 | 无 |
 | 2026-09-10 | T36 Web 设置默认页与界面现代化改版（`feat/web-settings-first-modernization`，PR #49 已合并入 `main` `50fcbca`） | Dev Container 内 `pnpm --filter @vulnweaver/web typecheck` 0 错误 0 警告、`vite build` 成功；以临时 Mock API（契约同形数据，存系统临时目录不入库）+ 浏览器采集 17 张页面截图（桌面设置/项目/任务/认证三变体 + 移动端两张）经 judge 视觉验收全部通过；CI Python quality gate 通过 | 部署环境重建 Web 镜像后的真实浏览器回归待执行；远程分支 `origin/feat/web-settings-first-modernization` 保留未删（删远程分支需用户确认） |
@@ -208,6 +224,8 @@
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-11 | T40 定向与全量门禁（worktree `.claude/worktrees/t40-agent-audit`，`dev` 分支） | Linux 容器（`vulnweaver-dev` 镜像 + 控制面网络内 PostgreSQL/Redis）内 `uv sync --all-packages --no-editable --reinstall-package …` 后：`ruff check .` **All checks passed**；`./node_modules/.bin/pyright` **0 errors, 0 warnings**；`pytest -q` **496 passed、5 skipped**（5 项均为需 live Sandbox Runner/Docker 的显式 opt-in）。新增测试 9 项：工具注册/只读边界 1、列表形状伪代码回归 1、智能体调查-报告-收尾全链与决策轨迹 1、降级回落一次性路径 1、静态线索不自动成 Finding 1、确认事实与复核修订 4 | 真实模型端到端（源码样本 + ELF 样本，需产品设置配置 AUDIT 模型）；浏览器证据链/轨迹回归；智能体内联动态验证未实现（ADR-026「未决」） |
+
 | 2026-09-11 | T38 真实模型 E2E（DeepSeek，重建全部镜像后） | 源码链路：9/9 Job 成功（import/静态×2/语义审计/复核×4/报告），模型自主发现 2 条固定规则外候选（CWE-95 eval、CWE-121 栈溢出），Markdown 报告含调用路径/证据链/复核引用；二进制链路：Ghidra 伪代码 17/27 函数进 PAIR、逆向规划智能体（planning-model 3 决策）、可读化 model_view_count=4、关键逻辑标定、报告；动态链路：fuzz Job 成功创建并进入沙箱编译修复回路，以结构化 `fuzz.harness_failed` PARTIAL 收尾（模型生成质量依赖，设计内） | auto-exploit（需 confirmed Finding）与 ELF 直接 fuzz 未触发；报告浏览器下载归 T22 里程碑 |
 | 2026-09-11 | PR #57 CI Pyright 修复（`fix/task-event-stream`） | Linux 临时测试容器内持久化仓储定向回归 **16 passed**；目标文件 Pyright **0 errors**；Ruff **All checks passed**；`git diff --check` 通过 | 推送后等待 GitHub Actions 重新执行完整门禁 |
 | 2026-09-11 | T39 任务事件契约兼容与部署镜像一致性修复（`fix/task-event-stream`） | Linux 容器定向回归 **50 passed**（PostgreSQL/Redis 集成实际执行），Ruff 通过；Compose `migrate` exit 0、alembic head 为 `0019_task_failure`、任务记录仍为 1；API `/health/live` 与 `/health/ready` 均 200；Orchestrator/Dispatcher/API/Analysis Worker/Sandbox Runner/Web 均稳定运行；Redis DB 0 已清理旧任务队列；运行中 Orchestrator 已确认包含 `failure` 字段的新版事件生成代码 | 当前 CLI 无可附着的用户浏览器会话，需用户刷新已打开的任务页确认视觉状态；未重新提交耗时分析任务 |
@@ -246,6 +264,11 @@
 
 ## 10. 下一步
 
+0. **T40 收尾（优先）**：
+   - 真实模型验收：在产品设置配置 AUDIT 档模型，分别用源码教学样本与 ELF 教学样本跑任务，确认任务页「智能体运行轨迹」出现**多轮决策与工具调用序列**（而非单条记录）、二进制 Finding 的依据来自真实伪代码（Q-020 修复生效）、报告证据链含调查步骤。
+   - 打通自动利用链路：创建/修改项目时开启 `exploit_validation_enabled`，确认得到 confirmed Finding 后 `EXPLOIT` Job 实际投递（Q-021 修复生效）。
+   - 智能体内联动态验证：实现 `symbolic-execute`（ToolSpec + 步执行器 + 注入 Runner），目标地址经 `pair.functions_at_address` 校验、地址数与调用次数双上限、证据强度不超过 SUPPORTING 且 `reproducible=false`，并补真实 Runner 回放。
+   - 合并前把 `dev` 的 T40 改动并入 `main`（需用户确认推送/PR）。
 1. T32 真实 E2E 前置（按序）：①构建包含 `compile_harness` 的 `vulnweaver-afl-casr:fixed`；②向 sandbox-runner 与 analysis-worker 配置同一 `AFL_CASR_IMAGE_DIGEST` 和令牌；③以授权源码教学样本验证有界源码摘录→Harness 生成/修复→沙箱编译→小型初始种子 Fuzz→崩溃证据挂接，并以 ELF 验证直接 Fuzz 路径。
 2. T34 真实报告 Job 端到端：生成含调用路径的 Markdown/PDF/SARIF 并经 API 下载，SARIF 追加独立 Schema 校验（当前仅项目内 `validate_sarif` 信封校验）。
 3. 为 T30 在产品设置配置 PLANNING 模型及 `BINARY_TOOLS_IMAGE_DIGEST`，以教学 ELF 运行候选→确认→PAIR API→前端展示的真实 E2E。
