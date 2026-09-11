@@ -90,6 +90,7 @@ from vulnweaver_analysis_worker.hot_reload import (
     ReconfigurableAssembly,
 )
 from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
+from vulnweaver_analysis_worker.report_excerpts import ReportSourceExcerptReader
 
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
 
@@ -127,6 +128,7 @@ async def _run() -> None:
     report_executor = ReportJobExecutor(
         database,
         ArtifactRegistrationService(store, database),
+        source_excerpt_reader=ReportSourceExcerptReader(store),
         tool=ToolIdentity(
             name="vulnweaver-report",
             version=os.environ.get("REPORT_TOOL_VERSION", "1.0.0"),
