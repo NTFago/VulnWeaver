@@ -50,7 +50,13 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
-from vulnweaver_persistence import Database, DatabaseSettings, EntityNotFound, IdempotencyConflict
+from vulnweaver_persistence import (
+    Database,
+    DatabaseSettings,
+    EntityNotFound,
+    IdempotencyConflict,
+    Repositories,
+)
 from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
@@ -95,6 +101,35 @@ LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
 _TIER_NAMES = ("planning", "audit", "review", "report")
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
+
+
+async def _pair_scopes(repositories: Repositories, task: Task) -> list[str]:
+    """Return the artifact versions a task's PAIR functions belong to.
+
+    The two pipelines scope differently.  Source functions are keyed to the
+    artifact version the task imported; binary functions are keyed to the image
+    the analysis actually read -- the unpacked one when the input was packed --
+    which is the parent of the task's ``binary-analysis-result`` version, as
+    recorded among the binary-import Job's outputs.  The workbench serves both,
+    so it queries both.
+    """
+
+    resolved: list[str] = list(task["artifact_version_ids"])
+    for job in await repositories.jobs.list_for_task(task["id"]):
+        if (job.get("tool") or {}).get("name") != "binary-import":
+            continue
+        result = await repositories.jobs.get_result(job["id"])
+        if result is None:
+            continue
+        for version_id in result["produced_artifact_version_ids"]:
+            version = await repositories.artifacts.get_version(version_id)
+            config = version.get("generation_config") or {}
+            if config.get("format") != "binary-analysis-result":
+                continue
+            parent = version.get("parent_version_id")
+            if isinstance(parent, str) and parent and parent not in resolved:
+                resolved.append(parent)
+    return resolved
 
 
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
@@ -718,7 +753,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
             functions: list[PairFunction] = []
-            for version_id in task["artifact_version_ids"]:
+            for version_id in await _pair_scopes(repositories, task):
                 functions.extend(await repositories.pair.list_functions(version_id))
             return functions
 
@@ -737,7 +772,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
             functions: list[PairFunction] = []
-            for version_id in task["artifact_version_ids"]:
+            for version_id in await _pair_scopes(repositories, task):
                 functions.extend(await repositories.pair.functions_at_address(version_id, address))
             return functions
 
@@ -755,7 +790,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             )
         async with database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
-            for version_id in task["artifact_version_ids"]:
+            for version_id in await _pair_scopes(repositories, task):
                 functions = await repositories.pair.list_functions(version_id)
                 if any(function["id"] == function_id for function in functions):
                     neighborhood = await repositories.pair.neighborhood(
