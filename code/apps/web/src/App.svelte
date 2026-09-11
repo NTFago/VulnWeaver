@@ -57,6 +57,7 @@
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let refreshSequence = 0;
+  let refreshInFlight: { taskId: string; generation: number; promise: Promise<void> } | null = null;
   let selectedFunctionId: string | null = null;
   let reportVersionIds: string[] = [];
 
@@ -243,8 +244,11 @@
     begin();
     try {
       disconnectEvents(); selectedProject = project; selectedTask = null; view = "project";
-      [artifacts, tasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
-      const details = await Promise.all(artifacts.map((item) => api.artifact(project.id, item.id)));
+      const generation = socketGeneration;
+      const [nextArtifacts, nextTasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
+      const details = await Promise.all(nextArtifacts.map((item) => api.artifact(project.id, item.id)));
+      if (generation !== socketGeneration || selectedProject?.id !== project.id) return;
+      artifacts = nextArtifacts; tasks = nextTasks;
       artifactVersions = new Map(details.flatMap((detail) => detail.versions.map((version) => [version.id, version])));
       done();
     } catch (caught) { busy = false; showError(caught); }
@@ -315,7 +319,15 @@
     }, 180);
   }
 
-  async function refreshTaskData(taskId: string, generation: number): Promise<void> {
+  function refreshTaskData(taskId: string, generation: number): Promise<void> {
+    if (refreshInFlight?.taskId === taskId && refreshInFlight.generation === generation) return refreshInFlight.promise;
+    const pending = { taskId, generation, promise: loadTaskData(taskId, generation) };
+    refreshInFlight = pending;
+    void pending.promise.finally(() => { if (refreshInFlight === pending) refreshInFlight = null; }).catch(() => {});
+    return pending.promise;
+  }
+
+  async function loadTaskData(taskId: string, generation: number): Promise<void> {
     const sequence = ++refreshSequence;
     const [taskData, jobData, findingData, eventData, functions, runs, trailResult] = await Promise.all([
       api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId), api.pair(taskId), api.agentRuns(taskId),
@@ -337,7 +349,7 @@
     if (!isCurrentTask(taskId, generation)) return;
     const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
     const current = taskEventSocket(taskId, after); socket = current;
-    current.onopen = () => { if (isCurrentTask(taskId, generation)) streamState = "connected"; };
+    current.onopen = () => { if (isCurrentTask(taskId, generation)) { streamState = "connected"; attempt = 0; } };
     current.onmessage = message => {
       if (!isCurrentTask(taskId, generation)) return;
       try {
@@ -358,7 +370,7 @@
     if (!isCurrentTask(taskId, generation)) return;
     try {
       await refreshTaskData(taskId, generation);
-      if (isCurrentTask(taskId, generation)) connectEvents(taskId, 0, generation);
+      if (isCurrentTask(taskId, generation)) connectEvents(taskId, attempt, generation);
     } catch {
       if (isCurrentTask(taskId, generation)) reconnectTimer = setTimeout(() => void recoverEvents(taskId, attempt + 1, generation), Math.min(1000 * 2 ** attempt, 15000));
     }
@@ -516,19 +528,19 @@
 {:else}
   <div class="workspace">
     <header class="topbar">
-      <button class="wordmark button-reset" on:click={goHome} title="回到默认页"><span>VW</span>VULNWEAVER</button>
+      <button class="wordmark button-reset" disabled={busy} on:click={goHome} title="回到默认页"><span>VW</span>VULNWEAVER</button>
       <div class="top-actions">
         <span class="system-state"><i></i>控制面在线</span>
         <span class="account">{session.username}</span>
-        <button class="text-button" on:click={logout}>退出</button>
+        <button class="text-button" disabled={busy} on:click={logout}>退出</button>
       </div>
     </header>
     <aside class="sidebar">
       <nav aria-label="主导航">
-        <button class:active={view === "settings"} on:click={() => void openSettings()}>设置</button>
-        <button class:active={view === "overview"} on:click={goOverview}>项目</button>
-        {#if selectedProject}<button class:active={view === "project"} on:click={() => openProject(selectedProject!)}>样本与任务</button>{/if}
-        {#if selectedTask}<button class:active={view === "task"} on:click={() => openTask(selectedTask!)}>执行轨迹</button>{/if}
+        <button disabled={busy} class:active={view === "settings"} on:click={() => void openSettings()}>设置</button>
+        <button disabled={busy} class:active={view === "overview"} on:click={goOverview}>项目</button>
+        {#if selectedProject}<button disabled={busy} class:active={view === "project"} on:click={() => openProject(selectedProject!)}>样本与任务</button>{/if}
+        {#if selectedTask}<button disabled={busy} class:active={view === "task"} on:click={() => openTask(selectedTask!)}>执行轨迹</button>{/if}
       </nav>
       <div class="sidebar-note"><span>安全边界</span><p>动态执行只允许经策略校验后进入一次性沙箱。</p></div>
     </aside>

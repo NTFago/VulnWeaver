@@ -55,7 +55,7 @@
 
 <section class="page-heading">
   <div>
-    <button class="breadcrumb" on:click={onGoOverview}>项目</button>
+    <button class="breadcrumb" disabled={busy} on:click={onGoOverview}>项目</button>
     <h1>{project.name}</h1>
     <p><code class="mono-id">{shortId(project.id)}</code>{project.input_scope.length > 0 ? ` · ${project.input_scope.join(" / ")}` : ""}</p>
   </div>
@@ -103,7 +103,7 @@
   {:else}
     <div class="task-list">
       {#each tasks as task (task.id)}
-        <button on:click={() => onOpenTask(task)}>
+        <button disabled={busy} on:click={() => onOpenTask(task)}>
           <span class={`status-dot ${task.status}`}></span>
           <span class="task-cell"><b>{task.result ? taskResultLabels[task.result] : taskStatusLabels[task.status]}</b><small>{shortId(task.id)} · {task.artifact_version_ids.length} 个输入</small></span>
           <time>{formatDate(task.updated_at)}</time>

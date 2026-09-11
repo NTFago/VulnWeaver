@@ -172,13 +172,13 @@
 
 <section class="page-heading task-heading">
   <div>
-    <button class="breadcrumb" on:click={onOpenProject}>{project?.name ?? "项目"}</button>
+    <button class="breadcrumb" disabled={busy} on:click={onOpenProject}>{project?.name ?? "项目"}</button>
     <span class="task-kicker">{taskType === "source" ? "源码" : taskType === "binary" ? "二进制" : "混合样本"}审计工作台</span><h1>审计任务 · {task.id.split(":").pop()?.slice(0, 8)}</h1>
     {#if task.failure}<p class="task-failure">失败原因：{taskFailureContext()}</p>{/if}
     <p>结果：{displayResult(task.result)} · 更新于 {formatDate(task.updated_at)}</p>
   </div>
   <div class="task-actions">
-    <span class={`status-badge large ${task.status}`}><i></i>{taskStatusLabels[task.status]}</span>
+    <span class={`status-badge large ${task.result === "partial" ? "waiting_permission" : task.status}`}><i></i>{task.result === "partial" ? "部分完成" : taskStatusLabels[task.status]}</span>
     {#if (failedJobs.length > 0 || ["completed", "failed", "cancelled"].includes(task.status))}<button class="secondary" on:click={onRestartTask} disabled={busy}>重新审计</button>{/if}
     {#if !["completed", "failed", "cancelled"].includes(task.status)}<button class="danger" on:click={onCancelTask} disabled={busy}>取消任务</button>{/if}
     <a class="secondary" href="#audit-reports">查看报告 <span aria-hidden="true">↓</span></a>
