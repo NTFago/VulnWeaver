@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -46,9 +47,7 @@ def build_audit_trail(
             "facts_status": "not_exposed",
         }
         for job in job_items
-        if job["kind"] is JobKind.IMPORT
-        and isinstance(job.get("tool"), dict)
-        and job["tool"].get("name") == "binary-import"
+        if _is_binary_import(job)
     ]
     return {
         "schema_version": "1.0.0",
@@ -59,7 +58,7 @@ def build_audit_trail(
 
 
 def _project_run(run: AgentRun, link: _RunLink | None) -> dict[str, Any]:
-    role = link.role if link is not None else _standalone_role(str(run["id"]))
+    role = link.role if link is not None else "unknown"
     association = link.association if link is not None else "unknown"
     job_id = link.job_id if link is not None else None
     job_attempt = link.job_attempt if link is not None else None
@@ -85,7 +84,9 @@ def _project_run(run: AgentRun, link: _RunLink | None) -> dict[str, Any]:
 
 
 class _RunLink:
-    def __init__(self, role: str, job_id: str, job_attempt: int, association: str) -> None:
+    def __init__(
+        self, role: str, job_id: str, job_attempt: int | None, association: str
+    ) -> None:
         self.role = role
         self.job_id = job_id
         self.job_attempt = job_attempt
@@ -97,41 +98,126 @@ def _run_links(jobs: Iterable[Job]) -> dict[str, _RunLink]:
 
     candidates: dict[str, list[_RunLink]] = {}
     for job in jobs:
-        job_id, attempt = str(job["id"]), int(job["attempt"])
-        for run_id, role, association in _producer_run_ids(job_id, attempt):
-            candidates.setdefault(run_id, []).append(_RunLink(role, job_id, attempt, association))
+        job_id = str(job["id"])
+        for run_id, role, job_attempt, association in _producer_run_ids(job):
+            candidates.setdefault(run_id, []).append(
+                _RunLink(role, job_id, job_attempt, association)
+            )
     return {run_id: links[0] for run_id, links in candidates.items() if len(links) == 1}
 
 
-def _producer_run_ids(job_id: str, attempt: int) -> tuple[tuple[str, str, str], ...]:
-    semantic_base = _stable_id("agent-run", "semantic-audit", job_id, str(attempt))
+def _producer_run_ids(job: Job) -> tuple[tuple[str, str, int | None, str], ...]:
+    """Return IDs emitted by producers that this exact Job can execute.
+
+    Rules that encode an attempt bind only the attempt currently stored on the
+    Job; a historic AgentRun cannot be reconstructed after a retry and remains
+    unassociated.  Producers whose IDs omit an attempt still identify the Job,
+    but deliberately report ``job_attempt=None``.
+    """
+
+    job_id, attempt = str(job["id"]), int(job["attempt"])
+    if job["kind"] is JobKind.SEMANTIC_AUDIT:
+        semantic_base = _stable_id("agent-run", "semantic-audit", job_id, str(attempt))
+        return (
+            (semantic_base, "semantic_audit", attempt, "exact_run_id_rule_with_attempt"),
+            (
+                f"{semantic_base}-agent",
+                "semantic_audit_agent",
+                attempt,
+                "exact_run_id_rule_with_attempt",
+            ),
+        )
+    if _is_binary_import(job):
+        return (
+            (
+                f"agent-run:reverse-plan:{job_id}",
+                "reverse_analysis_planner",
+                None,
+                "exact_run_id_rule",
+            ),
+            (
+                f"agent-run:readable-pseudocode:{job_id}:{attempt}",
+                "readable_pseudocode",
+                attempt,
+                "exact_run_id_rule_with_attempt",
+            ),
+            (
+                f"agent-run:key-logic:{hashlib.sha256(job_id.encode()).hexdigest()[:32]}",
+                "critical_logic_analyst",
+                None,
+                "exact_run_id_rule",
+            ),
+        )
+    if job["kind"] is JobKind.FUZZ and _has_harness_context(job):
+        harness_job_id = f"{job_id}:attempt:{attempt}"
+        return (
+            (
+                f"agent-run:harness:{harness_job_id}",
+                "fuzz_harness_generator",
+                attempt,
+                "exact_run_id_rule_with_attempt",
+            ),
+            *(
+                (
+                    f"agent-run:harness:{harness_job_id}:repair:{repair_round}",
+                    "fuzz_harness_generator",
+                    attempt,
+                    "exact_run_id_rule_with_attempt",
+                )
+                for repair_round in range(9)
+            ),
+        )
+    if job["kind"] is JobKind.EXPLOIT and _is_auto_exploit(job):
+        return (
+            (
+                _stable_id("agent-run", "exploit-auto", job_id, str(attempt)),
+                "exploit_generator",
+                attempt,
+                "exact_run_id_rule_with_attempt",
+            ),
+        )
+    if job["kind"] is JobKind.REVIEW:
+        review_run_id = _review_run_id(job_id, attempt, job.get("arguments"))
+        return (
+            (review_run_id, "independent_reviewer", attempt, "exact_run_id_rule_with_attempt"),
+        ) if review_run_id is not None else ()
+    return ()
+
+
+def _is_binary_import(job: Job) -> bool:
+    tool = job.get("tool")
     return (
-        (semantic_base, "semantic_audit", "exact_run_id_rule_with_attempt"),
-        (f"{semantic_base}-agent", "semantic_audit_agent", "exact_run_id_rule_with_attempt"),
-        (f"agent-run:reverse-plan:{job_id}", "reverse_analysis_planner", "exact_run_id_rule"),
-        (
-            f"agent-run:readable-pseudocode:{job_id}:{attempt}",
-            "readable_pseudocode",
-            "exact_run_id_rule_with_attempt",
-        ),
-        (f"agent-run:harness:{job_id}", "fuzz_harness_generator", "exact_run_id_rule"),
-        (
-            f"agent-run:key-logic:{hashlib.sha256(job_id.encode()).hexdigest()[:32]}",
-            "critical_logic_analyst",
-            "exact_run_id_rule",
-        ),
-        (
-            _stable_id("agent-run", "exploit-auto", job_id, str(attempt)),
-            "exploit_generator",
-            "exact_run_id_rule_with_attempt",
-        ),
+        job["kind"] is JobKind.IMPORT
+        and isinstance(tool, Mapping)
+        and tool.get("name") == "binary-import"
     )
 
 
-def _standalone_role(run_id: str) -> str:
-    # Independent-review producers encode their role but do not persist a Job
-    # association in AgentRun.  Expose only that stated role, never a guessed job.
-    return "independent_reviewer" if run_id.startswith("agent-run:review:") else "unknown"
+def _is_auto_exploit(job: Job) -> bool:
+    arguments = job.get("arguments")
+    return isinstance(arguments, Mapping) and isinstance(arguments.get("auto_exploit"), Mapping)
+
+
+def _has_harness_context(job: Job) -> bool:
+    arguments = job.get("arguments")
+    return isinstance(arguments, Mapping) and isinstance(arguments.get("harness_context"), Mapping)
+
+
+def _review_run_id(
+    job_id: str, attempt: int, arguments: Mapping[str, object] | None
+) -> str | None:
+    if arguments is None:
+        return None
+    finding_id = arguments.get("finding_id")
+    if not isinstance(finding_id, str) or not finding_id:
+        return None
+    attempt_key = f"{job_id}:attempt:{attempt}"
+    identity = hashlib.sha256(
+        json.dumps(
+            [finding_id, attempt_key], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"agent-run:review:{identity}"
 
 
 def _tool_steps(run: AgentRun) -> list[dict[str, Any]]:

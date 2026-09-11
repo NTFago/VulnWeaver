@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -631,6 +632,18 @@ def test_audit_trail_uses_exact_run_id_rules_and_never_guesses(client: TestClien
     digest = hashlib.sha256(
         "\0".join(("semantic-audit", audit_job_id, "1")).encode()
     ).hexdigest()[:32]
+    historic_digest = hashlib.sha256(
+        "\0".join(("semantic-audit", audit_job_id, "0")).encode()
+    ).hexdigest()[:32]
+    review_job_id = "job:review-trail"
+    review_identity = hashlib.sha256(
+        json.dumps(
+            ["finding:audit-trail", f"{review_job_id}:attempt:2"],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     agent_run = AgentRun(
         schema_version="1.0.0",
         id=f"agent-run:{digest}-agent",
@@ -703,10 +716,71 @@ def test_audit_trail_uses_exact_run_id_rules_and_never_guesses(client: TestClien
                     updated_at="2026-09-11T00:00:00Z",
                 )
             )
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id="job:fuzz-trail",
+                    task_id=task_id,
+                    kind=JobKind.FUZZ,
+                    arguments={"harness_context": {}},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.SUCCEEDED,
+                    idempotency_key="job:fuzz-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=2,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id=review_job_id,
+                    task_id=task_id,
+                    kind=JobKind.REVIEW,
+                    arguments={"finding_id": "finding:audit-trail"},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.SUCCEEDED,
+                    idempotency_key="job:review-trail",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=2,
+                    lease=None,
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:00:00Z",
+                )
+            )
             await repositories.agent_runs.add(agent_run)
             unknown = dict(agent_run)
             unknown["id"] = "agent-run:unlinked"
             await repositories.agent_runs.add(cast(AgentRun, unknown))
+            historic = dict(agent_run)
+            historic["id"] = f"agent-run:{historic_digest}"
+            await repositories.agent_runs.add(cast(AgentRun, historic))
+            planner = dict(agent_run)
+            planner["id"] = "agent-run:reverse-plan:job:binary-trail"
+            await repositories.agent_runs.add(cast(AgentRun, planner))
+            harness = dict(agent_run)
+            harness["id"] = "agent-run:harness:job:fuzz-trail:attempt:2:repair:1"
+            await repositories.agent_runs.add(cast(AgentRun, harness))
+            review = dict(agent_run)
+            review["id"] = f"agent-run:review:{review_identity}"
+            await repositories.agent_runs.add(cast(AgentRun, review))
+            unlinked_reviewer = dict(agent_run)
+            unlinked_reviewer["id"] = "agent-run:review:unlinked"
+            await repositories.agent_runs.add(cast(AgentRun, unlinked_reviewer))
 
     asyncio.run(seed())
     response = client.get(f"/api/tasks/{task_id}/audit-trail")
@@ -732,6 +806,42 @@ def test_audit_trail_uses_exact_run_id_rules_and_never_guesses(client: TestClien
     assert unknown["role"] == "unknown"
     assert unknown["job_id"] is None
     assert unknown["association"] == "unknown"
+    historic = next(
+        item for item in payload["agent_runs"] if item["id"] == f"agent-run:{historic_digest}"
+    )
+    assert historic["role"] == "unknown"
+    assert historic["job_id"] is None
+    assert historic["job_attempt"] is None
+    planner = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == "agent-run:reverse-plan:job:binary-trail"
+    )
+    assert planner["role"] == "reverse_analysis_planner"
+    assert planner["job_id"] == "job:binary-trail"
+    assert planner["job_attempt"] is None
+    assert planner["association"] == "exact_run_id_rule"
+    harness = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == "agent-run:harness:job:fuzz-trail:attempt:2:repair:1"
+    )
+    assert harness["role"] == "fuzz_harness_generator"
+    assert harness["job_id"] == "job:fuzz-trail"
+    assert harness["job_attempt"] == 2
+    review = next(
+        item
+        for item in payload["agent_runs"]
+        if item["id"] == f"agent-run:review:{review_identity}"
+    )
+    assert review["role"] == "independent_reviewer"
+    assert review["job_id"] == review_job_id
+    assert review["job_attempt"] == 2
+    unlinked_reviewer = next(
+        item for item in payload["agent_runs"] if item["id"] == "agent-run:review:unlinked"
+    )
+    assert unlinked_reviewer["role"] == "unknown"
+    assert unlinked_reviewer["job_id"] is None
     assert payload["binary_analysis_jobs"] == [
         {
             "job_id": "job:binary-trail",
