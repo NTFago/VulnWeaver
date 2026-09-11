@@ -128,7 +128,9 @@ def test_planning_agent_executes_angr_and_collects_targets() -> None:
         assert planned.agent_run["status"] == "succeeded"
         decisions = [record["decision"] for record in planned.agent_run["decisions"]]
         assert decisions == ["plan_accepted", "step_executed", "loop_completed"]
-        assert [run["id"] for run in sink.runs] == ["agent-run:reverse-plan:job:1"]
+        # Progress snapshots share the run id; the last write is terminal.
+        assert {run["id"] for run in sink.runs} == {"agent-run:reverse-plan:job:1"}
+        assert sink.runs[-1]["status"] is RunStatus.SUCCEEDED
 
     asyncio.run(scenario())
 

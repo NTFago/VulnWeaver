@@ -187,14 +187,18 @@ class ReversePlanningAgent:
 
 
 class DatabaseAgentRunSink:
-    """Persist aggregated loop runs into the agent_runs table."""
+    """Persist aggregated loop runs into the agent_runs table.
+
+    Uses the progress-aware write so a loop can flush the run once per round and
+    the trajectory is observable while the loop is still running.
+    """
 
     def __init__(self, database: Database) -> None:
         self._database = database
 
     async def add(self, run: AgentRun) -> None:
         async with self._database.transaction() as repositories:
-            await repositories.agent_runs.add(run)
+            await repositories.agent_runs.save_progress(run)
 
 
 def planning_context(
