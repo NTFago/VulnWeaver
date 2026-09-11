@@ -55,6 +55,7 @@ from vulnweaver_persistence.fingerprints import request_fingerprint
 from vulnweaver_proof import ProofJobScheduler
 from vulnweaver_reporting import ReportJobScheduler
 
+from vulnweaver_api.audit_trail import build_audit_trail
 from vulnweaver_api.auth import (
     SESSION_COOKIE,
     AuthenticationFailed,
@@ -68,6 +69,7 @@ from vulnweaver_api.events import task_cancelled, task_requested
 from vulnweaver_api.middleware import CorrelationIdMiddleware, RequestBodyLimitMiddleware
 from vulnweaver_api.schemas import (
     ArtifactDetail,
+    AuditTrailResponse,
     CreateAnnotationBody,
     CreateProjectBody,
     CreateProofJobBody,
@@ -679,6 +681,21 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         async with database.transaction() as repositories:
             await repositories.tasks.get(task_id)
             return await repositories.agent_runs.list_for_task(task_id)
+
+    @app.get("/api/tasks/{task_id}/audit-trail", response_model=AuditTrailResponse)
+    async def task_audit_trail(
+        task_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> AuditTrailResponse:
+        """Project durable audit facts without changing AgentRun or Job records."""
+
+        async with database.transaction() as repositories:
+            await repositories.tasks.get(task_id)
+            runs = await repositories.agent_runs.list_for_task(task_id)
+            jobs = await repositories.jobs.list_for_task(task_id)
+            results = {job["id"]: await repositories.jobs.get_result(job["id"]) for job in jobs}
+        return AuditTrailResponse.model_validate(
+            build_audit_trail(task_id=task_id, runs=runs, jobs=jobs, results=results)
+        )
 
     @app.get("/api/tasks/{task_id}/pair")
     async def task_pair(
