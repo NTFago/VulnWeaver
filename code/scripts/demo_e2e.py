@@ -39,6 +39,11 @@ TERMINAL_TASK = {"completed", "failed", "cancelled"}
 TERMINAL_JOB = {"succeeded", "failed", "cancelled"}
 
 
+def safe_name(identifier: str) -> str:
+    """Task IDs contain ':' which NTFS treats as an Alternate Data Stream."""
+    return identifier.replace(":", "_")
+
+
 class ApiError(SystemExit):
     pass
 
@@ -297,21 +302,21 @@ def main() -> None:
                                 query={"version_id": report_version})
             if st == 200:
                 ext = {"markdown": "md", "pdf": "pdf", "sarif": "sarif"}.get(fmt, fmt)
-                target = args.out / f"{task_id}-report.{ext}"
+                target = args.out / f"{safe_name(task_id)}-report.{ext}"
                 target.write_bytes(raw)
                 reports[fmt] = str(target)
                 print(f"报告已保存: {target}")
     else:
         print("报告 Job 未成功完成（见上方 job 列表）")
 
-    (args.out / f"{task_id}-summary.json").write_text(
+    (args.out / f"{safe_name(task_id)}-summary.json").write_text(
         json.dumps({"project": project, "task": task, "jobs": job_entries,
                     "findings": items, "reports": reports,
                     "elapsed_seconds": elapsed},
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
     print(f"任务结果: {task.get('status')} / {task.get('result')} （耗时 {elapsed}s）")
-    print(f"汇总已保存: {args.out / (task_id + '-summary.json')}")
+    print(f"汇总已保存: {args.out / (safe_name(task_id) + '-summary.json')}")
 
 
 if __name__ == "__main__":
