@@ -89,12 +89,14 @@ class PlannerGateway(Protocol):
 @dataclass(frozen=True, slots=True)
 class AgentLoopBudget:
     # None means the loop keeps planning until the model stops asking for steps,
-    # the token budget runs out, an optional deadline passes, or the model
-    # degrades. A finite value is still honoured for callers that want it.
+    # an optional deadline passes, or the model degrades. A finite value is still
+    # honoured for callers that want it.
     max_planning_rounds: int | None = None
-    # None means the model token budget is uncapped; this is how a task-level
-    # budget of 0 ("no limit") from the API reaches the loop.
-    max_model_tokens: int | None = 200_000
+    # There is deliberately no model token budget here. Token usage is still
+    # accumulated and reported, but it never stops the loop. A budget counted in
+    # tokens describes one call's context window; reusing that number as a
+    # cumulative lifetime bound for a multi-round investigation conflates two
+    # different quantities and cuts the investigation off mid-thought.
     max_plan_rejections: int = 2
     max_consecutive_model_failures: int = 2
     max_steps_per_plan: int = 8
@@ -102,15 +104,13 @@ class AgentLoopBudget:
     deadline_seconds: float | None = None
     # Advisory only, never a hard stop: past this many rounds the feedback tells
     # the model to converge. It exists because a loop with no round cap will
-    # otherwise investigate until the token budget is gone, even after it has
-    # reported everything it found.
+    # otherwise keep investigating long after it has reported everything it
+    # found, since nothing else ends the run but the model itself.
     soft_round_limit: int | None = None
 
     def __post_init__(self) -> None:
         if self.max_planning_rounds is not None and not 1 <= self.max_planning_rounds <= 32:
             raise ValueError("max_planning_rounds must be between 1 and 32 when set")
-        if self.max_model_tokens is not None and self.max_model_tokens < 1:
-            raise ValueError("max_model_tokens must be positive when set")
         if not 0 <= self.max_plan_rejections <= 8:
             raise ValueError("max_plan_rejections must be between 0 and 8")
         if not 1 <= self.max_consecutive_model_failures <= 8:
@@ -291,25 +291,6 @@ class AgentLoop:
                 continue
 
             consecutive_failures = 0
-            if (
-                budget.max_model_tokens is not None
-                and usage["input_tokens"] + usage["output_tokens"] > budget.max_model_tokens
-            ):
-                sequence, _ = _record(
-                    decisions,
-                    sequence,
-                    "budget_exhausted",
-                    "model token budget exhausted",
-                    self._clock,
-                )
-                status = AgentLoopStatus.BUDGET_EXHAUSTED
-                fallback = _failure(
-                    "loop_model_token_budget_exhausted",
-                    FailureKind.TIMEOUT,
-                    "Agent loop model token budget was exhausted.",
-                    used_tokens=usage["input_tokens"] + usage["output_tokens"],
-                )
-                break
             plan, rationale = _authoritative_plan(
                 response.output, request, round_index, self._clock
             )

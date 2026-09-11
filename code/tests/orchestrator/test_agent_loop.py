@@ -350,30 +350,14 @@ async def _planning_round_budget_exhaustion() -> None:
     assert len(planner.messages) == 2
 
 
-def test_model_token_budget_exhaustion() -> None:
-    asyncio.run(_model_token_budget_exhaustion())
+def test_model_token_usage_never_stops_the_loop() -> None:
+    asyncio.run(_model_token_usage_never_stops_the_loop())
 
 
-async def _model_token_budget_exhaustion() -> None:
-    planner = FakePlanner(
-        [ModelCallResult(model_proposal([]), run_stub(tokens=(900, 900)), None, "endpoint-1")]
-    )
-    budget = AgentLoopBudget(max_model_tokens=1_000)
-
-    result = await build_loop(planner, RecordingExecutor([]), budget=budget).run(loop_request())
-
-    assert result.status is AgentLoopStatus.BUDGET_EXHAUSTED
-    assert result.fallback is not None
-    assert result.fallback["code"] == "loop_model_token_budget_exhausted"
-
-
-def test_model_token_budget_none_is_uncapped() -> None:
-    asyncio.run(_model_token_budget_none_is_uncapped())
-
-
-async def _model_token_budget_none_is_uncapped() -> None:
-    # Usage far beyond the default 200k stays fine when the budget is None,
-    # which is how a task-level budget of 0 ("no limit") reaches the loop.
+async def _model_token_usage_never_stops_the_loop() -> None:
+    # Token usage is recorded and reported, but it is not a budget. A lifetime
+    # bound counted in tokens describes one call's context window, and stopping a
+    # multi-round investigation on it cuts the work off part-way through.
     planner = FakePlanner(
         [
             ModelCallResult(
@@ -381,12 +365,12 @@ async def _model_token_budget_none_is_uncapped() -> None:
             )
         ]
     )
-    budget = AgentLoopBudget(max_model_tokens=None)
 
-    result = await build_loop(planner, RecordingExecutor([]), budget=budget).run(loop_request())
+    result = await build_loop(planner, RecordingExecutor([])).run(loop_request())
 
     assert result.status is AgentLoopStatus.COMPLETED
     assert result.fallback is None
+    assert result.agent_run["token_usage"]["input_tokens"] == 900_000
 
 
 def test_unconfigured_model_degrades_immediately() -> None:

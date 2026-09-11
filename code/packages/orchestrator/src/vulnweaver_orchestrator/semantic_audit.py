@@ -177,7 +177,8 @@ class SemanticAuditor:
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
         run_id = _stable_id("agent-run", "semantic-audit", job["id"], str(job["attempt"]))
-        # max_model_tokens 0 means uncapped; compute-resource budgets no longer gate jobs.
+        # A per-call output cap for the single-shot path, not a loop budget:
+        # the job's 0 means "no limit", and the audit loop is not token-gated.
         max_tokens = job["resource_budget"]["max_model_tokens"] or None
         entries, source_version_id, binary_version_id = await self._auditable_functions(task_id)
         if not entries:
@@ -186,7 +187,7 @@ class SemanticAuditor:
             return SemanticAuditOutcome(run_id, None, (), (), 0)
         if self._agent is not None:
             agent_outcome = await self._run_agent(
-                job, run_id, source_version_id, binary_version_id, max_tokens
+                job, run_id, source_version_id, binary_version_id
             )
             if agent_outcome is not None:
                 return agent_outcome
@@ -200,7 +201,6 @@ class SemanticAuditor:
         run_id: str,
         source_version_id: str,
         binary_version_id: str,
-        max_model_tokens: int | None,
     ) -> SemanticAuditOutcome | None:
         """Investigate with the audit agent; ``None`` means "fall back".
 
@@ -217,7 +217,6 @@ class SemanticAuditor:
             attempt=int(job["attempt"]),
             run_id=f"{run_id}-agent",
             input_refs=tuple(job["input_refs"]),
-            max_model_tokens=max_model_tokens,
         )
         if outcome.degraded:
             # The degraded run is still worth keeping: it records why the job
