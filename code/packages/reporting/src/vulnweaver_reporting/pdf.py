@@ -30,6 +30,11 @@ def render_pdf(
     destination.parent.mkdir(parents=True, exist_ok=True)
     HTML(  # pyright: ignore[reportUnknownMemberType]
         string=build_html(findings, pocs, evidence, context),
-        base_url=str(destination.parent),
+        url_fetcher=_deny_external_resource,
     ).write_pdf(destination)
     return destination
+
+
+def _deny_external_resource(url: str, *args: object, **kwargs: object) -> dict[str, object]:
+    """Reports use installed fonts and inline CSS; no file or network fetching."""
+    raise ValueError("report resources must be embedded by the renderer")

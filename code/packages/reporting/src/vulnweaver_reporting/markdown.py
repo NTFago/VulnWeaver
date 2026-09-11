@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
+from html import escape
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
 from vulnweaver_reporting.content import (
     Block,
     BulletList,
+    CodeBlock,
     DataTable,
     KeyValueTable,
     Marker,
@@ -41,12 +44,16 @@ def render_markdown(model: ReportModel) -> str:
 
 
 def _render_section(section: Section, lines: list[str]) -> None:
-    lines += [f"{'#' * section.level} {section.title}", ""]
+    if section.anchor:
+        lines += [f'<a id="{escape(section.anchor, quote=True)}"></a>', ""]
+    lines += [f"{'#' * section.level} {_line(section.title)}", ""]
     for block in section.blocks:
         if isinstance(block, Section):
             _render_section(block, lines)
         else:
             _render_block(block, lines)
+    if section.reference:
+        lines += [f"[查看完整证据与工件来源](#{section.reference})", ""]
 
 
 def _render_block(block: Block, lines: list[str]) -> None:
@@ -61,15 +68,25 @@ def _render_block(block: Block, lines: list[str]) -> None:
             "| " + " | ".join(_cell(header) for header in block.headers) + " |",
             "| " + " | ".join("---" for _ in block.headers) + " |",
         ]
-        lines += [
-            "| " + " | ".join(_cell(cell) for cell in row) + " |" for row in block.rows
-        ]
+        lines += ["| " + " | ".join(_cell(cell) for cell in row) + " |" for row in block.rows]
     elif isinstance(block, BulletList):
         lines += [f"- {_line(item)}" for item in block.items]
     elif isinstance(block, Paragraph):
         lines += [_line(block.text)]
     elif isinstance(block, Marker):
-        lines += [f"> {block.text}"]
+        lines += [f"> {_line(block.text)}"]
+    elif isinstance(block, CodeBlock):
+        excerpt = block.excerpt
+        runs = re.findall(r"`+", excerpt["text"])
+        fence = "`" * max(3, max((len(run) + 1 for run in runs), default=3))
+        lines += [
+            f"**{_line(excerpt['label'])}** · {_line(excerpt['source'])}",
+            fence,
+            excerpt["text"],
+            fence,
+        ]
+        if excerpt["truncated"]:
+            lines += ["摘录已截断，完整内容请查看来源工件。"]
     else:  # pragma: no cover - the union above is exhaustive
         raise TypeError(f"unsupported report block: {type(block).__name__}")
     lines.append("")
@@ -82,4 +99,8 @@ def _cell(value: str) -> str:
 
 def _line(value: str) -> str:
     """Collapse line breaks so a value stays on one report line."""
-    return value.replace("\r", " ").replace("\n", " ").strip()
+    return (
+        escape(value.replace("\r", " ").replace("\n", " ").strip(), quote=False)
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )

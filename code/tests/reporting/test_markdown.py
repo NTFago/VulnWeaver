@@ -131,7 +131,7 @@ def test_markdown_summary_renders_sample_and_task_metadata() -> None:
     assert "task:demo" in report
     assert "部分成功（partial）" in report
     assert "vulnweaver-report@1.0.0" in report
-    assert "发现漏洞总数 | 1（最高严重等级：高危（high））" in report
+    assert "扫描发现总数（含误报） | 1（最高严重等级：高危（high））" in report
 
 
 def test_markdown_summary_renders_failure_and_limitations() -> None:
@@ -312,9 +312,7 @@ def test_markdown_states_the_missing_call_path_explicitly() -> None:
 def test_markdown_marks_model_only_findings_for_human_confirmation() -> None:
     finding = make_finding(status="candidate")
     evidence = {
-        "finding:1": [
-            make_evidence(type="model_explanation", strength="contextual", tool=None)
-        ]
+        "finding:1": [make_evidence(type="model_explanation", strength="contextual", tool=None)]
     }
     report = build_markdown([finding], evidence=evidence)  # type: ignore[arg-type]
     assert MODEL_INFERRED_MARK in report

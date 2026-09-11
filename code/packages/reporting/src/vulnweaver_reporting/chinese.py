@@ -198,13 +198,9 @@ def finding_has_strong_evidence(finding_evidence: Sequence[Evidence]) -> bool:
 
 
 def finding_is_model_inferred(finding_evidence: Sequence[Evidence]) -> bool:
-    """Return True when every linked evidence item is a model explanation.
-
-    A finding without any evidence at all also counts as model inferred: its
-    conclusions then rest solely on the analysing model and must be marked.
-    """
+    """Return True only when actual supporting records are all model explanations."""
     if not finding_evidence:
-        return True
+        return False
     return all(raw_value(item["type"]) == "model_explanation" for item in finding_evidence)
 
 
@@ -217,7 +213,9 @@ def finding_confirmation_reasons(
     if status in _STATUSES_NEEDING_CONFIRMATION:
         label = zh_with_original(FINDING_STATUS_ZH, finding["status"])
         reasons.append(f"当前状态为{label}，尚未确认为真实漏洞。")
-    if finding_is_model_inferred(finding_evidence):
+    if not finding_evidence:
+        reasons.append("缺少已解析的支持证据，无法判断发现依据，需补充证据后复核。")
+    elif finding_is_model_inferred(finding_evidence):
         reasons.append("关联证据均为模型推断说明，缺少工具输出、崩溃记录或运行结果等客观证据。")
     elif not finding_has_strong_evidence(finding_evidence):
         reasons.append("现有证据中不含强证据，结论强度有限。")
@@ -226,32 +224,29 @@ def finding_confirmation_reasons(
 
 def impact_text(finding: Finding) -> str:
     """Compose the category-specific Chinese impact template with finding facts."""
-    severity = enum_zh(SEVERITY_ZH, finding["severity"])
+    return "（类别风险说明，不代表本次已验证影响）" + _category_impact(finding)
+
+
+def _category_impact(finding: Finding) -> str:
     category = raw_value(finding["category"])
     if category == "memory_corruption":
         return (
-            "该问题属于内存破坏类缺陷：受影响位置附近的内存访问缺乏足够的边界约束，"
-            f"若攻击者能控制相关输入的长度或内容，可能导致进程崩溃、信息泄露或任意代码执行。"
-            f"当前评估等级为{severity}，可信度 {finding['confidence']:.2f}"
-            f"（{confidence_band(finding['confidence'])}）。"
+            "内存破坏类问题在输入可控且缺少边界约束时，可能导致进程崩溃、"
+            "信息泄露或代码执行；具体影响取决于可达性、内存布局与运行时保护。"
         )
     if category == "injection":
         return (
-            "该问题属于注入类缺陷：外部可控数据未经充分校验即进入敏感执行环节，"
-            f"可能造成命令注入、代码注入或查询注入。当前评估等级为{severity}，"
-            f"可信度 {finding['confidence']:.2f}（{confidence_band(finding['confidence'])}）。"
+            "注入类问题在外部输入进入敏感执行环节时，可能造成命令、代码或查询注入；"
+            "实际影响需核查输入约束、执行权限与数据访问范围。"
         )
     if category == "auth_or_business_logic":
         return (
-            "该问题属于鉴权或业务逻辑类缺陷：相关检查可能被绕过或未在服务端强制执行，"
-            f"可导致越权访问、业务状态异常或权限提升。当前评估等级为{severity}，"
-            f"可信度 {finding['confidence']:.2f}（{confidence_band(finding['confidence'])}）。"
+            "鉴权或业务逻辑检查若可被绕过，可能导致越权访问、业务状态异常或权限提升；"
+            "应结合实际身份、权限边界与状态变化确认。"
         )
     return (
-        "该问题目前仅有静态分析证据支持，实际可利用性尚未经动态验证："
-        f"可能为真实缺陷，也可能受编译器、运行环境等因素影响而不成立。"
-        f"当前评估等级为{severity}，可信度 {finding['confidence']:.2f}"
-        f"（{confidence_band(finding['confidence'])}）。"
+        "该类别的实际影响需要结合工具证据与验证结果判断："
+        "可能为真实缺陷，也可能受编译器、运行环境等因素影响而不成立。"
     )
 
 
@@ -317,7 +312,7 @@ LABEL_COUNT: Final[str] = "数量"
 LABEL_SAMPLE: Final[str] = "被测样本"
 LABEL_TASK_ID: Final[str] = "任务编号"
 LABEL_TASK_RESULT: Final[str] = "任务结论"
-LABEL_FINDING_TOTAL: Final[str] = "发现漏洞总数"
+LABEL_FINDING_TOTAL: Final[str] = "扫描发现总数（含误报）"
 LABEL_STATUS_SUMMARY: Final[str] = "确认状态"
 LABEL_OVERALL_RISK: Final[str] = "总体风险结论"
 LABEL_FINDING_ID: Final[str] = "漏洞编号"
@@ -352,9 +347,7 @@ TEXT_LIMIT_BLOCKED_POCS: Final[str] = (
     "次动态验证未取得有效结论（工具错误、环境错误、超时、策略拒绝或结果不确定），"
     "相关发现的动态可信度受限。"
 )
-TEXT_LIMIT_MODEL_ONLY: Final[str] = (
-    "个发现的证据仅为模型推断说明，已在对应章节标注「需人工确认」。"
-)
+TEXT_LIMIT_MODEL_ONLY: Final[str] = "个发现的证据仅为模型推断说明，已在对应章节标注「需人工确认」。"
 TEXT_NO_CALL_PATH: Final[str] = "静态分析未能固化调用路径。"
 TEXT_DATAFLOW: Final[str] = "数据流："
 TEXT_EVIDENCE_REFS: Final[str] = "证据引用"
@@ -363,24 +356,19 @@ TEXT_NO_RESOLVED_EVIDENCE: Final[str] = "本发现没有已解析的证据记录
 TEXT_CRASH_STACK: Final[str] = "崩溃栈哈希"
 TEXT_EXIT_CODE: Final[str] = "工具退出码"
 TEXT_EVIDENCE_DIGEST: Final[str] = "内容摘要"
-TEXT_NO_DYNAMIC_VERIFICATION: Final[str] = (
-    "未执行动态验证：该发现没有关联的 Poc 执行记录。"
-)
+TEXT_NO_DYNAMIC_VERIFICATION: Final[str] = "未执行动态验证：该发现没有关联的 Poc 执行记录。"
 TEXT_POC_PENDING: Final[str] = "未提供（执行未完成）"
 TEXT_RUN_LOG: Final[str] = "运行日志"
 TEXT_NO_CONFIRMATION: Final[str] = "无。"
 TEXT_NO_FAILURES: Final[str] = "本次任务没有失败记录。"
-TEXT_PARTIAL_NO_FAILURE: Final[str] = (
-    "任务结论为部分成功（partial），但未记录结构化失败原因。"
-)
+TEXT_PARTIAL_NO_FAILURE: Final[str] = "任务结论为部分成功（partial），但未记录结构化失败原因。"
 TEXT_REVIEW_OUTCOME: Final[str] = "结论"
 TEXT_REVIEW_MODEL: Final[str] = "复核模型"
 TEXT_REVIEW_RATIONALE: Final[str] = "理由"
 TEXT_REVIEW_TIME: Final[str] = "时间"
 TEXT_NO_REVIEWS: Final[str] = "本次任务没有已登记的复核记录。"
 TEXT_NOTE_IMMUTABLE: Final[str] = (
-    "原始工具输出与运行日志以不可变工件引用保存，本报告仅嵌入引用，不复制原始内容。"
+    "原始工具输出与运行日志以不可变工件引用保存；代码摘录标注版本与来源，"
+    "常见凭据赋值在展示时脱敏，截断内容另行标明。"
 )
-TEXT_NOTE_TRACEABLE: Final[str] = (
-    "全部结论均可追溯到扫描结果字段；字段缺失时显示「未提供」。"
-)
+TEXT_NOTE_TRACEABLE: Final[str] = "全部结论均可追溯到扫描结果字段；字段缺失时显示「未提供」。"
