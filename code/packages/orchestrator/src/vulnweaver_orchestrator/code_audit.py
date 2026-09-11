@@ -85,12 +85,10 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "confirmation would settle a memory-safety question you cannot settle by "
     "reading. Arguments must never contain absolute paths or parent-directory "
     "segments. Report each candidate with finding-report as soon as the code you "
-    "have read substantiates it rather than saving them for the end: your round "
-    "budget is small, and an investigation that never reports is worth nothing. "
-    "Return zero steps as soon as you have reported everything you can "
-    "substantiate and explain why you are finished. Each observation tells you "
-    "how many planning rounds remain: when they run low, report what you have "
-    "instead of opening another line of enquiry."
+    "have read substantiates it rather than saving them for the end: an "
+    "investigation that never reports is worth nothing. Return zero steps as soon "
+    "as you have reported everything you can substantiate and explain why you are "
+    "finished."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
@@ -168,8 +166,9 @@ class CodeAuditAgent:
         self._sink = sink
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
+        # No planning-round cap: the investigation ends when the model reports
+        # and stops asking for steps, or when the token budget runs out.
         self._budget = budget or AgentLoopBudget(
-            max_planning_rounds=8,
             max_plan_rejections=4,
             max_steps_per_plan=8,
             max_observation_chars=8_192,

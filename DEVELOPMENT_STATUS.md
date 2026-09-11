@@ -193,7 +193,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 | ADR-023 | Task 按 Job 的既有形状携带结构化失败：`tasks.failure` 列与 `Task`/`TaskStatusChangedPayload` 的 required 可空 `failure`，使编排层在没有 Job 时的失败原因可见。 |
 | ADR-024 | 默认项目预算由服务端按已注册 ToolSpec 逐项最大值推导并校验下界；`binary-import` 数值校准到运行时实际值；请求预算统一经 `bounded_resource_budget` 按规格收敛。 |
 | ADR-025 | 移除全部计算资源限制：预算保留为惰性簿记，不再有任何拒绝/收敛路径；沙箱安全隔离属性不变；模型上下文改为网关自动裁剪。（2026-09-11 项目负责人决策） |
-| ADR-027 | 审计由 `AgentLoop` 驱动的只读调查循环完成（模型自主选择审什么、可追问、可跟踪调用链），静态扫描器输出降级为线索；候选仍锚定 PAIR 并走既有复核与确认门禁；类别事实改由证据推导；动态验证的证据可重开复核。扩大发现面，不扩大信任面。（2026-09-11，T40） |
+| ADR-027 | 审计由 `AgentLoop` 驱动的只读调查循环完成（`max_planning_rounds` 默认不设上限）（模型自主选择审什么、可追问、可跟踪调用链），静态扫描器输出降级为线索；候选仍锚定 PAIR 并走既有复核与确认门禁；类别事实改由证据推导；动态验证的证据可重开复核。扩大发现面，不扩大信任面。（2026-09-11，T40） |
 
 ## 8. 最近完成记录
 
@@ -221,6 +221,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 
 | 日期 | 验证项 | 结果 | 未覆盖范围 |
 |---|---|---|---|
+| 2026-09-11 | T40 移除审计的规划轮次上限 | `AgentLoopBudget.max_planning_rounds` 默认由 4 改为 **None（不设上限）**：循环在模型返回空计划、token 预算耗尽、截止时间或降级时结束；有限值仍被支持（T27 逆向规划显式设 2）。审计智能体不再设轮次上限。保留的护栏：每轮步数、计划被拒次数、连续模型失败次数、token 预算。全量门禁 **539 passed / 5 skipped**、ruff 通过、pyright 0 错误；已重建并重启 analysis-worker/api/orchestrator，容器内确认 `AgentLoopBudget().max_planning_rounds is None` | 不设轮次上限后单次审计的时长与模型成本上界改由 token 预算决定，真实任务的耗时需在端到端中观察 |
 | 2026-09-11 | T40 并入 `origin/main@8c48ab3` 后的合并验证（worktree `.claude/worktrees/t40-agent-audit`，`dev` 分支） | 报告分支已在 `main`（PR #59）。合并仅 `DEVELOPMENT_STATUS.md` 冲突（新增行，双方意图均保留）；`apps/analysis-worker/.../main.py` 自动合并成功。**编号冲突**：两分支各自新增 `026-*` ADR，按最小改动将本分支的审计 ADR 重编为 `027-agent-driven-audit.md` 并同步全部引用（报告分支的 `026-report-snapshots-and-revisions.md` 为提议、被 D-RPT-01 与设计文档引用，保持 026）。合并后强制重装 workspace 包（`uv sync --all-packages --no-editable --reinstall`，`--no-editable` 下不重装会静默使用旧代码）再复跑：`ruff` 通过、`pyright` **0 errors**、`pytest --cov --cov-fail-under=80 -q` **539 passed / 5 skipped / 81.63%** | 前端 `svelte-check` 与 Vite 构建未在本容器执行（本分支未改前端，报告分支的前端改动来自 `main`）；真实模型/动态样本未重跑 |
 | 2026-09-11 | T40 定向与全量门禁（worktree `.claude/worktrees/t40-agent-audit`，`dev` 分支） | Linux 容器（`vulnweaver-dev` 镜像 + 控制面网络内 PostgreSQL/Redis）内 `uv sync --all-packages --no-editable --reinstall-package …` 后：`ruff check .` **All checks passed**；`./node_modules/.bin/pyright` **0 errors, 0 warnings**；`pytest -q` **498 passed、5 skipped**（5 项均为需 live Sandbox Runner/Docker 的显式 opt-in）。新增测试 11 项：工具注册/只读边界 1、列表形状伪代码回归 1、智能体调查-报告-收尾全链与决策轨迹 1、降级回落一次性路径 1、静态线索不自动成 Finding 1、确认事实与复核修订 4 | 真实模型端到端（源码样本 + ELF 样本，需产品设置配置 AUDIT 模型）；浏览器证据链/轨迹回归；智能体内联动态验证未实现（ADR-027「未决」） |
 | 2026-09-11 | RPT-MERGE 主线集成验收 | Linux Dev Container 加载本 worktree 全部 apps/packages 的 src（显式验证 contracts/reporting/Worker/persistence 导入路径）；`python -m ruff check .`、全仓 Pyright（`--pythonpath` 指定复用运行时）0 错误；`python -m pytest --cov --cov-report=term --cov-fail-under=80 -q --tb=short`：**528 passed、5 skipped、82.33%**，PostgreSQL 临时测试库与 Redis 集成实际执行；契约生成 `--check` 通过；文档相对链接、ADR 引用、冲突标记和 `git diff --check` 通过。对抗性复核保留任务版本隔离、同地址跨版本拒绝、反驳证据、误报风险、注入与幂等断言 | 5 个跳过为显式 opt-in 的 4 个 Proof HTTP 回放及 1 个 Docker runtime；未运行真实模型/动态样本或部署；本地未另装前端依赖，TypeScript 完整检查由 PR CI 执行。临时检查脚本在忽略的 `tmp/check_report_integration.sh`；标准 fetch 受本地损坏 Codex checkpoint ref 影响，已核实远程 SHA 与下载对象完整性后同步 origin/main，未删除该检查点 |

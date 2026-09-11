@@ -14,6 +14,7 @@ every transition is recorded as a ``DecisionRecord`` on one aggregated
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import time
 from collections.abc import Callable
@@ -87,7 +88,10 @@ class PlannerGateway(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AgentLoopBudget:
-    max_planning_rounds: int = 4
+    # None means the loop keeps planning until the model stops asking for steps,
+    # the token budget runs out, an optional deadline passes, or the model
+    # degrades. A finite value is still honoured for callers that want it.
+    max_planning_rounds: int | None = None
     max_model_tokens: int = 200_000
     max_plan_rejections: int = 2
     max_consecutive_model_failures: int = 2
@@ -96,8 +100,8 @@ class AgentLoopBudget:
     deadline_seconds: float | None = None
 
     def __post_init__(self) -> None:
-        if not 1 <= self.max_planning_rounds <= 32:
-            raise ValueError("max_planning_rounds must be between 1 and 32")
+        if self.max_planning_rounds is not None and not 1 <= self.max_planning_rounds <= 32:
+            raise ValueError("max_planning_rounds must be between 1 and 32 when set")
         if self.max_model_tokens < 1:
             raise ValueError("max_model_tokens must be positive")
         if not 0 <= self.max_plan_rejections <= 8:
@@ -201,7 +205,23 @@ class AgentLoop:
         fallback: StructuredFailure | None = None
         policy_reason_codes: tuple[str, ...] = ()
 
-        for round_index in range(1, budget.max_planning_rounds + 1):
+        for round_index in itertools.count(1):
+            if budget.max_planning_rounds is not None and round_index > budget.max_planning_rounds:
+                sequence, _ = _record(
+                    decisions,
+                    sequence,
+                    "budget_exhausted",
+                    "planning round budget exhausted before the objective completed",
+                    self._clock,
+                )
+                status = AgentLoopStatus.BUDGET_EXHAUSTED
+                fallback = _failure(
+                    "loop_planning_round_budget_exhausted",
+                    FailureKind.TIMEOUT,
+                    "Agent loop planning round budget was exhausted.",
+                    max_planning_rounds=budget.max_planning_rounds,
+                )
+                break
             deadline = budget.deadline_seconds
             if deadline is not None and self._monotonic() - started >= deadline:
                 sequence, _ = _record(
@@ -367,20 +387,22 @@ class AgentLoop:
                     self._clock,
                 )
 
-            feedback = {
-                # The model can only pace itself if it can see how much of the
-                # loop is left; without this an investigating agent tends to
-                # spend every round gathering and never report.
+            # Only this round's steps. Replaying the whole accumulated history
+            # every round grew the prompt without adding anything the model had
+            # not already been told, and buried the instruction to converge.
+            round_feedback: JsonObject = {
                 "planning_round": round_index,
-                "remaining_planning_rounds": budget.max_planning_rounds - round_index,
-                # Only this round's steps. Replaying the whole accumulated
-                # history every round grew the prompt without adding anything the
-                # model had not already been told, and buried the instruction to
-                # converge.
                 "last_steps": [
                     _bound_step(step, budget.max_observation_chars) for step in round_steps
                 ],
             }
+            if budget.max_planning_rounds is not None:
+                # Only meaningful with a finite budget; an unbounded loop has no
+                # "rounds remaining" to report.
+                round_feedback["remaining_planning_rounds"] = (
+                    budget.max_planning_rounds - round_index
+                )
+            feedback = round_feedback
 
         if status is None:
             sequence, _ = _record(
