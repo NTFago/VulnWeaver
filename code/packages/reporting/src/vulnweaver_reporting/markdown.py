@@ -1,104 +1,106 @@
-"""Bounded Markdown report rendering."""
+"""Bounded Markdown report rendering driven by the shared Chinese report model."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Sequence
+from html import escape
 
 from vulnweaver_contracts import Evidence, Finding, Poc
 
-from vulnweaver_reporting.locations import location_text
+from vulnweaver_reporting.content import (
+    Block,
+    BulletList,
+    CodeBlock,
+    DataTable,
+    KeyValueTable,
+    Marker,
+    Paragraph,
+    ReportModel,
+    Section,
+    build_report_model,
+)
+from vulnweaver_reporting.context import ReportContext
 
 
 def build_markdown(
     findings: Sequence[Finding],
     pocs: Sequence[Poc] = (),
     evidence: dict[str, list[Evidence]] | None = None,
+    context: ReportContext | None = None,
 ) -> str:
-    """Render a reviewable report while keeping raw evidence out of the document."""
-    poc_by_finding: dict[str, list[Poc]] = {}
-    for poc in pocs:
-        poc_by_finding.setdefault(poc["finding_id"], []).append(poc)
-    lines = ["# VulnWeaver Report", "", f"Findings: {len(findings)}", ""]
-    if not findings:
-        return "\n".join(lines + ["No findings were reported.", ""])
-    for finding in findings:
-        finding_evidence = (evidence or {}).get(finding["id"], [])
-        location = finding["location"]
-        finding_location = location_text(location)
-        lines.extend(
-            [
-                f"## {finding['title'][:256]}",
-                "",
-                f"- ID: `{finding['id']}`",
-                f"- CWE: `{finding['cwe_id']}`",
-                f"- Severity: `{_value(finding['severity'])}`",
-                f"- Status: `{_value(finding['status'])}`",
-                f"- Confidence: `{finding['confidence']:.2f}`",
-                f"- Location: `{finding_location}`",
-                f"- Evidence: {len(finding['evidence_ids'])} referenced artifact(s)",
-                f"- Reviews: {len(finding['review_ids'])}",
-                f"- Proof runs: {len(poc_by_finding.get(finding['id'], []))}",
-                "",
-                "### Remediation",
-                "",
-                finding["fix_suggestion"][:4096],
-                "",
-            ]
-        )
-        call_path = finding["call_path"]
-        if call_path:
-            lines.extend(["### Call path", ""])
-            lines.extend(f"- {_call_path_step(step)}" for step in call_path)
-            lines.append("")
-        lines.extend(
-            [
-                "### Evidence chain",
-                "",
-                f"- Evidence references: "
-                f"{', '.join(f'`{item}`' for item in finding['evidence_ids']) or 'none'}",
-                f"- Review references: "
-                f"{', '.join(f'`{item}`' for item in finding['review_ids']) or 'none'}",
-                "",
-            ]
-        )
-        for item in finding_evidence:
-            recipe = item["replay_recipe"]
-            lines.append(
-                f"- `{item['id']}`: `{_value(item['type'])}`, artifact `{item['artifact_ref']}`, "
-                f"digest `{item['digest']}`"
-            )
-            if "stack_hash" in recipe:
-                lines.append(f"  - Crash stack: `{recipe['stack_hash']}`")
-        for poc in poc_by_finding.get(finding["id"], []):
-            lines.append(
-                f"- POC `{poc['id']}`: `{_value(poc['status'])}` / "
-                f"`{_value(poc['result']) if poc['result'] is not None else 'pending'}`"
-            )
-        lines.append("")
-    lines.extend(
-        [
-            "### Limitations",
-            "",
-            "Raw tool output and logs are retained as artifact references.",
-            "",
-        ]
+    """Render the Chinese audit report while keeping raw evidence out of the document."""
+    return render_markdown(
+        build_report_model(findings, pocs, evidence, context),
     )
+
+
+def render_markdown(model: ReportModel) -> str:
+    """Render a report model as bounded Markdown text."""
+    lines: list[str] = [f"# {model.title}", ""]
+    for section in model.sections:
+        _render_section(section, lines)
     return "\n".join(lines)
 
 
-def _value(value: object) -> str:
-    member = getattr(value, "value", value)
-    return member if isinstance(member, str) else str(member)
+def _render_section(section: Section, lines: list[str]) -> None:
+    if section.anchor:
+        lines += [f'<a id="{escape(section.anchor, quote=True)}"></a>', ""]
+    lines += [f"{'#' * section.level} {_line(section.title)}", ""]
+    for block in section.blocks:
+        if isinstance(block, Section):
+            _render_section(block, lines)
+        else:
+            _render_block(block, lines)
+    if section.reference:
+        lines += [f"[查看完整证据与工件来源](#{section.reference})", ""]
 
 
-def _call_path_step(step: Mapping[str, object]) -> str:
-    relation = _value(step["relation"])
-    name = str(step["function_name"])[:2048]
-    path = step.get("path")
-    line = step.get("line")
-    if isinstance(path, str) and path:
-        where = f"{path[:4096]}:{line if isinstance(line, int) else 1}"
-    else:
-        address = step.get("address")
-        where = f"0x{address:x}" if isinstance(address, int) else "unknown"
-    return f"`{relation}` {name} (`{where}`)"
+def _render_block(block: Block, lines: list[str]) -> None:
+    if isinstance(block, KeyValueTable):
+        lines += [
+            "| " + " | ".join(_cell(header) for header in block.headers) + " |",
+            "| " + " | ".join("---" for _ in block.headers) + " |",
+        ]
+        lines += [f"| {_cell(label)} | {_cell(value)} |" for label, value in block.rows]
+    elif isinstance(block, DataTable):
+        lines += [
+            "| " + " | ".join(_cell(header) for header in block.headers) + " |",
+            "| " + " | ".join("---" for _ in block.headers) + " |",
+        ]
+        lines += ["| " + " | ".join(_cell(cell) for cell in row) + " |" for row in block.rows]
+    elif isinstance(block, BulletList):
+        lines += [f"- {_line(item)}" for item in block.items]
+    elif isinstance(block, Paragraph):
+        lines += [_line(block.text)]
+    elif isinstance(block, Marker):
+        lines += [f"> {_line(block.text)}"]
+    elif isinstance(block, CodeBlock):
+        excerpt = block.excerpt
+        runs = re.findall(r"`+", excerpt["text"])
+        fence = "`" * max(3, max((len(run) + 1 for run in runs), default=3))
+        lines += [
+            f"**{_line(excerpt['label'])}** · {_line(excerpt['source'])}",
+            fence,
+            excerpt["text"],
+            fence,
+        ]
+        if excerpt["truncated"]:
+            lines += ["摘录已截断，完整内容请查看来源工件。"]
+    else:  # pragma: no cover - the union above is exhaustive
+        raise TypeError(f"unsupported report block: {type(block).__name__}")
+    lines.append("")
+
+
+def _cell(value: str) -> str:
+    """Keep a value inside one Markdown table cell."""
+    return _line(value).replace("|", "\\|")
+
+
+def _line(value: str) -> str:
+    """Collapse line breaks so a value stays on one report line."""
+    return (
+        escape(value.replace("\r", " ").replace("\n", " ").strip(), quote=False)
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+    )

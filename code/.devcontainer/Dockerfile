@@ -33,6 +33,7 @@ RUN sed -i \
         libpangoft2-1.0-0 \
         shared-mime-info \
         fonts-dejavu \
+        fonts-noto-cjk \
         openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global "pnpm@${PNPM_VERSION}" --registry="${NPM_REGISTRY}" \

@@ -120,6 +120,7 @@ def _result(
         "codeFlows": _code_flows(finding),
         "properties": {
             "findingId": finding["id"],
+            "category": _enum_value(finding["category"]),
             "status": _enum_value(finding["status"]),
             "confidence": finding["confidence"],
             "evidenceIds": list(finding["evidence_ids"]),
