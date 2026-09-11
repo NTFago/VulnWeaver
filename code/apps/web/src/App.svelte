@@ -233,6 +233,10 @@
   }
 
   // 与 API 的内容嗅探（_matches_declared_format）一致的扩展名提示；ELF 无通用扩展名，不限制。
+  // Artifact kinds a task can actually be created from; everything else the
+  // pipeline produces is a result, not a sample.
+  const SAMPLE_KINDS = new Set<ArtifactKind>(["source_archive", "source_repository", "elf", "pe"]);
+
   const uploadAccept: Partial<Record<ArtifactKind, string>> = {
     source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz",
     pe: ".exe,.dll,.sys",
@@ -445,7 +449,12 @@
     begin();
     try {
       disconnectEvents(); selectedProject = project; selectedTask = null; view = "project";
-      [artifacts, tasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
+      const [loaded, project_tasks] = await Promise.all([api.artifacts(project.id), api.tasks(project.id)]);
+      // Only importable inputs are samples. Every finished task also registers
+      // derived artifacts (reports, PAIR and index documents), and listing those
+      // made the sample picker grow by one or two entries per run.
+      artifacts = loaded.filter((item) => SAMPLE_KINDS.has(item.kind));
+      tasks = project_tasks;
       const details = await Promise.all(artifacts.map((item) => api.artifact(project.id, item.id)));
       artifactVersions = new Map(details.flatMap((detail) => detail.versions.map((version) => [version.id, version])));
       selectedVersionIds = []; done();
