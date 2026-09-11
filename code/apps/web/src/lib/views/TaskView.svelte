@@ -210,7 +210,7 @@
     <button class="secondary" on:click={() => onCreateReport("pdf")} disabled={busy}>报告 PDF</button>
   </div>
 </section>
-<TaskPipeline {jobs} {taskType} {busy} onRetryStage={(jobIds) => void onRetryJobs(jobIds)} />
+<TaskPipeline {jobs} {taskType} taskStatus={task?.status} {busy} onRetryStage={(jobIds) => void onRetryJobs(jobIds)} />
 <section class="metric-strip task-metrics" aria-label="任务统计">
   <div><strong>{findings.length}</strong><span>漏洞总数</span></div>
   <div><strong>{confirmedFindings}</strong><span>已确认漏洞</span></div>

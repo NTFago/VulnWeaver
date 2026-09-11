@@ -7,6 +7,9 @@ import { failureCodeText } from "./i18n";
  * 阶段 2/3 依赖任务输入类型选择 JobKind；后端的结构解析与逆向/静态扫描
  * 在同一类分析作业内执行，因此同类型任务的两个阶段聚合同一 JobKind，
  * 以标签区分语义（源码任务阶段 3 显示「静态扫描」）。
+ * 二进制任务的格式识别、脱壳与 Ghidra 反编译目前在 import 作业内完成
+ * （无独立 binary_analysis 作业），故二进制任务的阶段 2/3 同时聚合
+ * import 作业，保证导入作业执行时阶段状态如实联动。
  */
 
 export type PipelineTaskType = "source" | "binary";
@@ -22,8 +25,8 @@ type StageDef = {
 
 const stages: StageDef[] = [
   { key: "ingest", icon: "▤", name: { source: "样本导入", binary: "样本导入" }, kinds: { source: ["validate", "import"], binary: ["validate", "import"] } },
-  { key: "structure", icon: "⛁", name: { source: "结构解析", binary: "结构解析" }, kinds: { source: ["source_analysis"], binary: ["binary_analysis"] } },
-  { key: "reverse", icon: "⚙", name: { source: "静态扫描", binary: "逆向还原" }, kinds: { source: ["source_analysis"], binary: ["binary_analysis"] } },
+  { key: "structure", icon: "⛁", name: { source: "结构解析", binary: "结构解析" }, kinds: { source: ["source_analysis"], binary: ["binary_analysis", "import"] } },
+  { key: "reverse", icon: "⚙", name: { source: "静态扫描", binary: "逆向还原" }, kinds: { source: ["source_analysis"], binary: ["binary_analysis", "import"] } },
   { key: "audit", icon: "⌕", name: { source: "语义审计", binary: "语义审计" }, kinds: { source: ["semantic_audit"], binary: ["semantic_audit"] } },
   { key: "review", icon: "⛨", name: { source: "独立复核", binary: "独立复核" }, kinds: { source: ["review"], binary: ["review"] } },
   { key: "fuzz", icon: "⚡", name: { source: "模糊测试", binary: "模糊测试" }, kinds: { source: ["fuzz"], binary: ["fuzz"] } },
@@ -53,7 +56,14 @@ export type StageView = {
   durationText: string;
 };
 
-function aggregateStage(def: StageDef, jobs: Job[], taskType: PipelineTaskType): StageView {
+const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+function aggregateStage(
+  def: StageDef,
+  jobs: Job[],
+  taskType: PipelineTaskType,
+  taskTerminal: boolean,
+): StageView {
   const kinds = def.kinds[taskType];
   const stageJobs = jobs.filter((job) => kinds.includes(job.kind));
   const base: StageView = {
@@ -61,8 +71,10 @@ function aggregateStage(def: StageDef, jobs: Job[], taskType: PipelineTaskType):
     status: "pending", done: 0, total: stageJobs.length, failedIds: [], failureText: "", durationText: "",
   };
   if (stageJobs.length === 0) {
-    // 源码任务不会创建模糊测试作业：该阶段按「未启用」展示。
-    base.status = def.key === "fuzz" && taskType === "source" ? "skipped" : "pending";
+    // 没有对应作业：源码任务不会创建模糊测试作业，按「未启用」展示；
+    // 任务已进入终态但仍无作业的阶段（如未派发的动态链路）同样视为未启用，
+    // 避免完成后长期停留在「等待」。
+    base.status = def.key === "fuzz" && taskType === "source" || taskTerminal ? "skipped" : "pending";
     return base;
   }
   const running = stageJobs.filter((job) => job.status === "running" || job.status === "waiting_permission");
@@ -93,8 +105,13 @@ function aggregateStage(def: StageDef, jobs: Job[], taskType: PipelineTaskType):
   return base;
 }
 
-export function aggregatePipelineStages(jobs: Job[], taskType: PipelineTaskType): StageView[] {
-  return stages.map((def) => aggregateStage(def, jobs, taskType));
+export function aggregatePipelineStages(
+  jobs: Job[],
+  taskType: PipelineTaskType,
+  taskStatus?: string,
+): StageView[] {
+  const taskTerminal = taskStatus !== undefined && TERMINAL_TASK_STATUSES.has(taskStatus);
+  return stages.map((def) => aggregateStage(def, jobs, taskType, taskTerminal));
 }
 
 export interface PipelineProgress {

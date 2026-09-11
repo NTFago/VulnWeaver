@@ -6,10 +6,11 @@
 
   export let jobs: Job[] = [];
   export let taskType: PipelineTaskType = "source";
+  export let taskStatus: string | undefined = undefined;
   export let busy = false;
   export let onRetryStage: (jobIds: string[]) => void = () => {};
 
-  $: stageViews = aggregatePipelineStages(jobs, taskType);
+  $: stageViews = aggregatePipelineStages(jobs, taskType, taskStatus);
   $: progressInfo = pipelineProgress(stageViews);
 </script>
 
