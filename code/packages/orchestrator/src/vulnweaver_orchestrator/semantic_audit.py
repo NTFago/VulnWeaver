@@ -425,6 +425,39 @@ class SemanticAuditor:
                         created_at=_now_from(job),
                     )
                 )
+                request = finding.get("verification_request")
+                if isinstance(request, str) and request:
+                    # The agent's verification intent is provenance, not proof: it
+                    # is linked CONTEXTUAL with weight 0 so it can never satisfy
+                    # the confirmation policy, but it stays in the evidence chain
+                    # so a report can show what the auditor asked to have proven.
+                    request_evidence_id = _stable_id(
+                        "evidence", run_id, "verification", cwe_id, _canonical(location)
+                    )
+                    raw_reason = finding.get("verification_reason")
+                    await repositories.evidence.create(
+                        _verification_request_evidence(
+                            request_evidence_id,
+                            job,
+                            request,
+                            raw_reason if isinstance(raw_reason, str) else None,
+                            report_ref,
+                            report_digest,
+                            location,
+                            run_id,
+                        )
+                    )
+                    await repositories.findings.link_evidence(
+                        FindingEvidence(
+                            schema_version=SchemaVersion.VALUE_1_0_0,
+                            finding_id=finding_id,
+                            evidence_id=request_evidence_id,
+                            relation=EvidenceRelation.CONTEXTUAL,
+                            weight=0.0,
+                            created_by=run_id,
+                            created_at=_now_from(job),
+                        )
+                    )
                 accepted.append((finding_id, evidence_id))
         finding_ids = tuple(sorted({item[0] for item in accepted}))
         evidence_ids = tuple(sorted({item[1] for item in accepted}))
@@ -476,6 +509,46 @@ def _evidence(
         schema_version=SchemaVersion.VALUE_1_0_0,
         id=evidence_id,
         type=EvidenceType.MODEL_EXPLANATION,
+        strength=EvidenceStrength.CONTEXTUAL,
+        artifact_ref=report_ref,
+        digest=report_digest,
+        tool=_AUDIT_TOOL,
+        input_ref=report_ref,
+        command_hash=None,
+        exit_code=None,
+        stdout_ref=None,
+        stderr_ref=None,
+        replay_recipe=recipe,
+        created_at=_now_from(job),
+    )
+
+
+def _verification_request_evidence(
+    evidence_id: str,
+    job: Job,
+    tool: str,
+    reason: str | None,
+    report_ref: str,
+    report_digest: str,
+    location: JsonObject,
+    run_id: str,
+) -> Evidence:
+    """Record that the auditor asked for dynamic proof of this candidate."""
+
+    recipe: JsonObject = {
+        "kind": "dynamic_verification_request",
+        "reproducible": False,
+        "verification_tool": tool,
+        "agent_run_id": run_id,
+        "baseline": AUDIT_BASELINE,
+        "location": location,
+    }
+    if reason:
+        recipe["reason"] = reason[:1024]
+    return Evidence(
+        schema_version=SchemaVersion.VALUE_1_0_0,
+        id=evidence_id,
+        type=EvidenceType.TOOL_OUTPUT,
         strength=EvidenceStrength.CONTEXTUAL,
         artifact_ref=report_ref,
         digest=report_digest,

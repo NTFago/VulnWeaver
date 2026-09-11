@@ -400,6 +400,29 @@ def test_agent_investigates_then_reports_and_projection_anchors(
             assert "plan_accepted" in recorded
             assert recorded.count("step_executed") >= 3
             assert len(decisions) >= 4
+
+            # The agent's "verify this dynamically" intent is recorded as
+            # provenance: CONTEXTUAL, weight 0, so it can never satisfy the
+            # confirmation policy but the evidence chain still shows it.
+            async with database.transaction() as repositories:
+                relations = await repositories.findings.list_evidence_relations(
+                    findings[0]["id"]
+                )
+                evidence = [
+                    await repositories.evidence.get(item["evidence_id"])
+                    for item in relations
+                ]
+            requests = [
+                item
+                for item in evidence
+                if item["replay_recipe"].get("kind") == "dynamic_verification_request"
+            ]
+            assert len(requests) == 1
+            assert requests[0]["replay_recipe"]["verification_tool"] == "fuzz"
+            assert requests[0]["strength"] == "contextual"
+            contextual = [item for item in relations if item["relation"] == "contextual"]
+            assert len(contextual) == 1
+            assert contextual[0]["weight"] == 0.0
         finally:
             await database.dispose()
 

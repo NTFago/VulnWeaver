@@ -281,6 +281,10 @@ class ReportedFinding:
             document["start_line"] = self.start_line
             if self.end_line is not None:
                 document["end_line"] = self.end_line
+        if self.verification_request:
+            document["verification_request"] = self.verification_request
+            if self.verification_reason:
+                document["verification_reason"] = self.verification_reason
         return document
 
 
