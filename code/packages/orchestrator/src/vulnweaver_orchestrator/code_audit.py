@@ -84,6 +84,10 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "finding on its own. Set verification_request to fuzz only when dynamic "
     "confirmation would settle a memory-safety question you cannot settle by "
     "reading. Arguments must never contain absolute paths or parent-directory "
+    "Every step must list input_refs copied verbatim from context.artifact_refs; a "
+    "reference you invent makes the Policy Engine reject the whole plan, which "
+    "wastes a round. Use only the tools named above, and keep step_id unique "
+    "inside one plan. "
     "segments. Report each candidate with finding-report as soon as the code you "
     "have read substantiates it rather than saving them for the end: an "
     "investigation that never reports is worth nothing. Return zero steps as soon "
@@ -103,6 +107,10 @@ class CodeAuditOutcome:
     findings: tuple[ReportedFinding, ...]
     steps: tuple[ExecutedStep, ...]
     degraded: bool
+    # False when the loop stopped without the model declaring itself finished
+    # (token budget, deadline). The caller must not read such a run as "the
+    # audit looked and found nothing".
+    completed: bool = True
     fallback_code: str | None = None
 
     @property
@@ -226,6 +234,7 @@ class CodeAuditAgent:
             findings=tuple(executor.reported),
             steps=result.steps,
             degraded=result.status is AgentLoopStatus.DEGRADED,
+            completed=result.status is AgentLoopStatus.COMPLETED,
             fallback_code=str(fallback["code"]) if fallback is not None else None,
         )
 
