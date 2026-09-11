@@ -2109,23 +2109,31 @@ class DeletionRepository:
         for task_row in task_rows:
             await self._delete_task_rows(task_row["id"])
 
-        artifact_ids = (
-            await self._connection.execute(
-                select(artifacts.c.id).where(artifacts.c.project_id == project_id)
-            )
-        ).scalars().all()
-        if not artifact_ids:
-            version_rows = []
-        else:
-            version_rows = (
+        # SQLAlchemy's scalar results are only partially typed, so name the row
+        # types here rather than let "unknown" flow into the deletes below.
+        artifact_ids = cast(
+            list[str],
+            (
                 await self._connection.execute(
-                    select(artifact_versions.c.id)
-                    .where(artifact_versions.c.artifact_id.in_(artifact_ids))
-                    # Children reference parents via parent_version_id with an
-                    # immediate RESTRICT check, so delete newest-first.
-                    .order_by(artifact_versions.c.created_at.desc())
+                    select(artifacts.c.id).where(artifacts.c.project_id == project_id)
                 )
-            ).scalars().all()
+            ).scalars().all(),
+        )
+        if not artifact_ids:
+            version_rows: list[str] = []
+        else:
+            version_rows = cast(
+                list[str],
+                (
+                    await self._connection.execute(
+                        select(artifact_versions.c.id)
+                        .where(artifact_versions.c.artifact_id.in_(artifact_ids))
+                        # Children reference parents via parent_version_id with an
+                        # immediate RESTRICT check, so delete newest-first.
+                        .order_by(artifact_versions.c.created_at.desc())
+                    )
+                ).scalars().all(),
+            )
         if version_rows:
             await self._connection.execute(
                 delete(pair_raw).where(pair_raw.c.artifact_version_id.in_(version_rows))
@@ -2196,13 +2204,16 @@ class DeletionRepository:
         ).scalars().all()
         evidence_ids: list[str] = []
         if finding_ids:
-            evidence_ids = (
-                await self._connection.execute(
-                    select(finding_evidence.c.evidence_id).where(
-                        finding_evidence.c.finding_id.in_(finding_ids)
+            evidence_ids = cast(
+                list[str],
+                (
+                    await self._connection.execute(
+                        select(finding_evidence.c.evidence_id).where(
+                            finding_evidence.c.finding_id.in_(finding_ids)
+                        )
                     )
-                )
-            ).scalars().all()
+                ).scalars().all(),
+            )
             await self._connection.execute(
                 delete(finding_evidence).where(finding_evidence.c.finding_id.in_(finding_ids))
             )
