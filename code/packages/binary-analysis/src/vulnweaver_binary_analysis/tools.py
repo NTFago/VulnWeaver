@@ -841,7 +841,9 @@ def derive_objdump_control_flow(
         elif mnemonic.startswith("j"):
             reference_type = BinaryXrefType.JUMP
         if reference_type is not None:
-            target = _biased(_reference(_DIRECT_TARGET, instruction["operands"]), operand_address_bias)
+            target = _biased(
+                _reference(_DIRECT_TARGET, instruction["operands"]), operand_address_bias
+            )
             if target is not None:
                 _append_xref(xrefs, xref_keys, instruction, target, reference_type, limits)
         data_target = _biased(
