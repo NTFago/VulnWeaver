@@ -35,7 +35,7 @@
         {#if run.job_id}<small class="trace-ref">作业 {run.job_id}{run.job_attempt !== null ? ` · 第 ${run.job_attempt} 次尝试` : ""}</small>{/if}
         <div class="meta">
           <span>决策 {run.decisions.length}</span>
-          <span>token {run.token_usage.input_tokens}/{run.token_usage.output_tokens}</span>
+          <span>输入 {run.token_usage.input_tokens} · 输出 {run.token_usage.output_tokens}</span>
           <span>{typeof run.duration_ms === "number" ? `耗时 ${formatDuration(run.duration_ms) || "不足 1 秒"}` : run.status === "running" ? "运行中" : "未记录耗时"}</span>
         </div>
         {#if run.decisions.length > 0}
