@@ -529,12 +529,19 @@ def _failed_result(job_id: str, failure: StructuredFailure) -> WorkerResult:
 
 
 def _unexpected_failure_result(job_id: str, error: Exception) -> WorkerResult:
+    # The type alone is not enough to act on: an unhandled error here is by
+    # definition one nobody anticipated, and without its message the only way to
+    # find out what happened is to reproduce it inside the container.  Bounded so
+    # a pathological exception cannot inflate the failure record.
     failure = StructuredFailure(
         code="worker.execution_error",
         kind=FailureKind.INTERNAL,
         message="worker executor raised an unexpected error",
         retryable=True,
-        details={"exception_type": type(error).__name__},
+        details={
+            "exception_type": type(error).__name__,
+            "exception_message": str(error)[:500],
+        },
     )
     return _failed_result(job_id, failure)
 
