@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -111,8 +111,8 @@ class CodeAuditOutcome:
     steps: tuple[ExecutedStep, ...]
     degraded: bool
     # False when the loop stopped without the model declaring itself finished
-    # (token budget, deadline). The caller must not read such a run as "the
-    # audit looked and found nothing".
+    # (deadline, or the model degrading). The caller must not read such a run as
+    # "the audit looked and found nothing".
     completed: bool = True
     fallback_code: str | None = None
 
@@ -178,7 +178,7 @@ class CodeAuditAgent:
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
         # No planning-round cap: the investigation ends when the model reports
-        # and stops asking for steps, or when the token budget runs out.
+        # and stops asking for steps, or when the model degrades.
         self._budget = budget or AgentLoopBudget(
             max_plan_rejections=4,
             max_steps_per_plan=8,
@@ -197,11 +197,8 @@ class CodeAuditAgent:
         attempt: int,
         run_id: str,
         input_refs: tuple[str, ...] = (),
-        # Per-execution override of the loop's model token budget; None means
-        # uncapped, mirroring the resource_budget convention where 0 = no limit.
-        max_model_tokens: int | None = 200_000,
     ) -> CodeAuditOutcome:
-        budget = replace(self._budget, max_model_tokens=max_model_tokens)
+        budget = self._budget
         workspace = AuditWorkspace(self._database, self._store, task_id, limits=self._limits)
         await workspace.load()
         executor = AuditStepExecutor(
