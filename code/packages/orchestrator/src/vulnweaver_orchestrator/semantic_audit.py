@@ -36,6 +36,7 @@ from vulnweaver_contracts import (
     JobRequestedEvent,
     JobStatus,
     JsonObject,
+    JsonValue,
     PairEdge,
     PairFunction,
     PairNode,
@@ -50,9 +51,10 @@ from vulnweaver_contracts import (
     WorkerResult,
 )
 from vulnweaver_model_gateway import ModelCallResult, ModelGatewayError, ModelTier
-from vulnweaver_pair import build_call_path_steps
+from vulnweaver_pair import build_call_path_steps, pseudocode_text
 from vulnweaver_persistence import Database, Repositories
 
+from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
 
 AUDIT_BASELINE = "semantic_function_audit"
@@ -164,11 +166,13 @@ class SemanticAuditor:
         store: ArtifactStore,
         *,
         fact_loader: FactLoader | None = None,
+        agent: CodeAuditAgent | None = None,
     ) -> None:
         self._database = database
         self._gateway = gateway
         self._store = store
         self._fact_loader = fact_loader or SourceReviewFactLoader(database, store)
+        self._agent = agent
 
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
@@ -180,6 +184,84 @@ class SemanticAuditor:
             # Nothing indexed to audit: a successful no-op baseline keeps the
             # task aggregation running without inventing model output.
             return SemanticAuditOutcome(run_id, None, (), (), 0)
+        if self._agent is not None:
+            agent_outcome = await self._run_agent(
+                job, run_id, source_version_id, binary_version_id
+            )
+            if agent_outcome is not None:
+                return agent_outcome
+        return await self._single_shot_audit(
+            job, run_id, entries, source_version_id, binary_version_id, max_tokens
+        )
+
+    async def _run_agent(
+        self,
+        job: Job,
+        run_id: str,
+        source_version_id: str,
+        binary_version_id: str,
+    ) -> SemanticAuditOutcome | None:
+        """Investigate with the audit agent; ``None`` means "fall back".
+
+        The agent run is persisted under its own id so a degraded attempt can
+        hand the job back to the single-shot path without colliding on the
+        run record.
+        """
+
+        agent = self._agent
+        assert agent is not None
+        outcome: CodeAuditOutcome = await agent.audit(
+            task_id=job["task_id"],
+            job_id=job["id"],
+            attempt=int(job["attempt"]),
+            run_id=f"{run_id}-agent",
+            input_refs=tuple(job["input_refs"]),
+        )
+        if outcome.degraded:
+            # The degraded run is still worth keeping: it records why the job
+            # fell back to the fixed prompt.
+            await self._persist_run(dict(outcome.run))
+            return None
+        investigation = outcome.investigation
+        report = cast(
+            JsonObject,
+            {
+                "schema_version": "1.0.0",
+                "summary": (
+                    f"Agentic audit investigated the index over {len(outcome.steps)} tool "
+                    f"step(s) and reported {len(outcome.findings)} candidate(s)."
+                ),
+                "findings": [finding.as_document() for finding in outcome.findings],
+            },
+        )
+        report_ref, report_digest = await self._store_report(
+            run_id, job["task_id"], report, investigation=investigation
+        )
+        finding_ids, evidence_ids, dropped = await self._project(
+            job,
+            source_version_id,
+            binary_version_id,
+            report,
+            report_ref,
+            report_digest,
+            run_id,
+            investigation=investigation,
+        )
+        await self._persist_run(dict(outcome.run))
+        return SemanticAuditOutcome(run_id, report_ref, finding_ids, evidence_ids, dropped)
+
+    async def _single_shot_audit(
+        self,
+        job: Job,
+        run_id: str,
+        entries: list[tuple[str, PairFunction]],
+        source_version_id: str,
+        binary_version_id: str,
+        max_tokens: int | None,
+    ) -> SemanticAuditOutcome:
+        """Fixed fallback used when no agent is configured or the agent degrades."""
+
+        task_id = job["task_id"]
         observations = await self._observations(task_id, entries)
         response = await self._gateway.complete_structured(
             tier=ModelTier.AUDIT,
@@ -250,8 +332,11 @@ class SemanticAuditor:
                 "start_line": source["start_line"] if source else None,
                 "address": binary["virtual_address"] if binary else None,
             }
-            pseudocode = function["attributes"].get("pseudocode")
-            if isinstance(pseudocode, str) and pseudocode.strip():
+            # Binary PAIR functions carry a list of BinaryPseudocode records,
+            # never a plain string; reading it as a string silently dropped the
+            # decompiled code for every binary function.
+            pseudocode = pseudocode_text(function)
+            if pseudocode:
                 entry["code"] = pseudocode
             elif source is not None:
                 facts: SourceReviewFacts = await self._fact_loader.load(
@@ -262,12 +347,18 @@ class SemanticAuditor:
             observations.append(entry)
         return observations
 
-    async def _store_report(self, run_id: str, task_id: str, report: JsonObject) -> tuple[str, str]:
-        content = json.dumps(
-            {"run_id": run_id, "task_id": task_id, "report": report},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
+    async def _store_report(
+        self,
+        run_id: str,
+        task_id: str,
+        report: JsonObject,
+        *,
+        investigation: list[JsonObject] | None = None,
+    ) -> tuple[str, str]:
+        document: JsonObject = {"run_id": run_id, "task_id": task_id, "report": report}
+        if investigation:
+            document["investigation"] = cast(JsonValue, investigation)
+        content = json.dumps(document, ensure_ascii=False, sort_keys=True).encode("utf-8")
         try:
             stored = await asyncio.to_thread(
                 self._store.put_stream, io.BytesIO(content), max_bytes=8 * 1024 * 1024
@@ -287,6 +378,8 @@ class SemanticAuditor:
         report_ref: str,
         report_digest: str,
         run_id: str,
+        *,
+        investigation: list[JsonObject] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
         accepted: list[tuple[str, str]] = []
         dropped = 0
@@ -308,7 +401,14 @@ class SemanticAuditor:
                 evidence_id = _stable_id("evidence", run_id, cwe_id, _canonical(location))
                 await repositories.evidence.create(
                     _evidence(
-                        evidence_id, job, finding, report_ref, report_digest, location, run_id
+                        evidence_id,
+                        job,
+                        finding,
+                        report_ref,
+                        report_digest,
+                        location,
+                        run_id,
+                        investigation=investigation,
                     )
                 )
                 await repositories.findings.upsert_candidate(
@@ -352,7 +452,26 @@ def _evidence(
     report_digest: str,
     location: JsonObject,
     run_id: str,
+    *,
+    investigation: list[JsonObject] | None = None,
 ) -> Evidence:
+    recipe: JsonObject = {
+        "kind": "semantic_model_audit",
+        "reproducible": False,
+        "agent_run_id": run_id,
+        "baseline": AUDIT_BASELINE,
+        "finding_selector": {
+            "cwe_id": finding["cwe_id"],
+            **(
+                {"path": finding["path"], "start_line": finding["start_line"]}
+                if "path" in finding
+                else {"address": finding["address"]}
+            ),
+        },
+        "location": location,
+    }
+    if investigation:
+        recipe["investigation"] = cast(JsonValue, investigation)
     return Evidence(
         schema_version=SchemaVersion.VALUE_1_0_0,
         id=evidence_id,
@@ -366,24 +485,7 @@ def _evidence(
         exit_code=None,
         stdout_ref=None,
         stderr_ref=None,
-        replay_recipe=cast(
-            JsonObject,
-            {
-                "kind": "semantic_model_audit",
-                "reproducible": False,
-                "agent_run_id": run_id,
-                "baseline": AUDIT_BASELINE,
-                "finding_selector": {
-                    "cwe_id": finding["cwe_id"],
-                    **(
-                        {"path": finding["path"], "start_line": finding["start_line"]}
-                        if "path" in finding
-                        else {"address": finding["address"]}
-                    ),
-                },
-                "location": location,
-            },
-        ),
+        replay_recipe=recipe,
         created_at=_now_from(job),
     )
 

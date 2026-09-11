@@ -47,6 +47,7 @@ from vulnweaver_model_gateway import (
     ThinkingConfig,
 )
 from vulnweaver_orchestrator import (
+    CodeAuditAgent,
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
     FuzzJobScheduler,
@@ -381,7 +382,17 @@ def _model_executors(
         )
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
-    auditor = SemanticAuditor(database, gateway, store)
+    # The audit runs the shared plan-execute-observe loop over read-only
+    # investigation tools; when the loop degrades the auditor falls back to the
+    # fixed single-shot prompt so the audit baseline still completes.
+    auditor = SemanticAuditor(
+        database,
+        gateway,
+        store,
+        # The auditor owns run persistence for both paths, so the agent gets no
+        # sink of its own and one attempt never writes two run records.
+        agent=CodeAuditAgent(database, gateway, store),
+    )
     return (
         ReviewJobExecutor(reviewer),
         SemanticAuditJobExecutor(database, auditor),

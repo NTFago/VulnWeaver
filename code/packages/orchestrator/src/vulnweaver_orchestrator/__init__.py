@@ -18,12 +18,24 @@ from vulnweaver_orchestrator.audit_plan import (
     build_baseline_plan,
     complete_baselines,
 )
+from vulnweaver_orchestrator.audit_tools import (
+    AUDIT_TOOLS,
+    AuditStepExecutor,
+    AuditWorkspace,
+    AuditWorkspaceLimits,
+    ReportedFinding,
+)
 from vulnweaver_orchestrator.checkpoints import (
     Checkpoint,
     CheckpointConflict,
     CheckpointStore,
     InMemoryCheckpointStore,
     PostgresCheckpointStore,
+)
+from vulnweaver_orchestrator.code_audit import (
+    CodeAuditAgent,
+    CodeAuditOutcome,
+    audit_run_id,
 )
 from vulnweaver_orchestrator.flow import (
     InitialJobPolicy,
@@ -96,6 +108,14 @@ __all__ = [
     "StepExecutor",
     "StepOutcome",
     "TaskAggregateSettlementHook",
+    "AUDIT_TOOLS",
+    "AuditStepExecutor",
+    "AuditWorkspace",
+    "AuditWorkspaceLimits",
+    "CodeAuditAgent",
+    "CodeAuditOutcome",
+    "ReportedFinding",
+    "audit_run_id",
     "AuditBaseline",
     "AuditPlan",
     "build_baseline_plan",

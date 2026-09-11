@@ -402,6 +402,13 @@ def _check_forbidden_arguments(
 
 _WINDOWS_ABSOLUTE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
 
+# Free-text arguments are prose that the service never resolves to a filesystem
+# path, so the traversal scan must not read them. Auditing agents legitimately
+# describe traversal patterns (``../``) in a rationale, and rejecting the whole
+# plan for that reason would block CWE-22 findings. Path-bearing arguments keep
+# the full scan, and forbidden control keys are still caught structurally.
+_FREE_TEXT_KEYS = frozenset({"rationale", "reason", "message", "title", "summary"})
+
 
 def _check_paths(value: JsonValue, step_id: str, path: str = "") -> list[PolicyViolation]:
     violations: list[PolicyViolation] = []
@@ -418,6 +425,8 @@ def _check_paths(value: JsonValue, step_id: str, path: str = "") -> list[PolicyV
             )
     elif isinstance(value, Mapping):
         for key, nested in value.items():
+            if str(key).lower() in _FREE_TEXT_KEYS:
+                continue
             current_path = f"{path}.{key}" if path else str(key)
             violations.extend(_check_paths(nested, step_id, current_path))
     elif isinstance(value, list):
