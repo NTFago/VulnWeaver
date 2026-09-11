@@ -9,7 +9,7 @@
     "check:python": "pnpm run check:ruff && pnpm run check:pyright && pnpm run check:pytest",
     "check:ruff": "uv run --no-sync ruff check .",
     "check:pyright": "pyright",
-    "check:pytest": "uv run --no-sync pytest --cov --cov-report=term-missing --cov-fail-under=80",
+    "check:pytest": "uv run --no-sync pytest -n 4 --cov --cov-report=term-missing --cov-fail-under=80",
     "check:typescript": "pnpm run lint && pnpm run typecheck && pnpm run test",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
