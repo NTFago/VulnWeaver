@@ -44,5 +44,8 @@ code/reports/
 code/test-results/
 .fuzz-out/
 
+# Generated teaching samples (rebuild with code/tests/fixtures/teaching-samples/build-packed-sample.sh)
+code/tests/fixtures/teaching-samples/build/
+
 # Local agent tooling scratch
 .zcode/
