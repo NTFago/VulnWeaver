@@ -27,7 +27,7 @@ from vulnweaver_contracts import (
     Task,
 )
 from vulnweaver_fuzzing import build_fuzz_request
-from vulnweaver_persistence import Database, Repositories
+from vulnweaver_persistence import Database, EntityConflict, Repositories
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +134,11 @@ class FuzzJobScheduler:
             if finding["task_id"] != task["id"]:
                 raise ValueError("fuzz finding does not belong to source task")
             job_id = _id("job", "fuzz", finding_id)
+            if await repositories.jobs.exists(job_id):
+                # Settlement hooks replay per terminal job; this finding's fuzz
+                # Job already exists, so the replay must stay a no-op instead of
+                # colliding on the deterministic identifier.
+                continue
             target = targets[finding_id]
             job = Job(
                 schema_version=SchemaVersion.VALUE_1_0_0,
@@ -200,7 +205,13 @@ class FuzzJobScheduler:
                     "attempt": 0,
                 },
             )
-            result = await repositories.jobs.enqueue_with_outbox(job, event)
+            try:
+                result = await repositories.jobs.enqueue_with_outbox(job, event)
+            except EntityConflict:
+                # A sibling review job's settlement can create this finding's
+                # fuzz Job between the pre-check and the insert; the Job
+                # existing is the desired end state for a replay.
+                continue
             if result.created:
                 created.append(job_id)
         return tuple(created)

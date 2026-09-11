@@ -175,8 +175,8 @@ def test_unknown_protocol_rejected() -> None:
 
 
 @pytest.mark.anyio
-async def test_context_window_guard_rejects_oversized_input() -> None:
-    transport = FakeTransport([])
+async def test_context_window_trims_oversized_input_instead_of_rejecting() -> None:
+    transport = FakeTransport([anthropic_response('{"ok": true}')])
     gateway = ModelGateway(
         ModelGatewaySettings(
             routes={
@@ -197,10 +197,17 @@ async def test_context_window_guard_rejects_oversized_input() -> None:
         messages=[{"role": "user", "content": "x" * 2000}],
         output_contract="JsonObject",
     )
-    assert not result.succeeded
-    assert result.failure is not None
-    assert "context window" in str(result.failure["message"])
-    assert transport.requests == []
+    # The oversized message is trimmed to fit and the request proceeds.
+    assert result.succeeded
+    _, _, payload = transport.requests[0]
+    messages = cast(list[dict[str, str]], payload["messages"])
+    assert len(messages) == 1
+    sent = messages[0]["content"]
+    assert "[context trimmed]" in sent
+    # Reserve is window // 4 tokens, so the content is bounded well below 2000 chars.
+    assert len(sent) < 2000
+    decisions = [str(decision["decision"]) for decision in result.agent_run["decisions"]]
+    assert "context_window_trimmed" in decisions
 
 
 def test_anthropic_messages_url_appends_to_v1_root() -> None:

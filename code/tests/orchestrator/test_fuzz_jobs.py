@@ -85,7 +85,11 @@ class _FindingLookup:
 
 class _Jobs:
     def __init__(self) -> None:
+        self.existing_ids: set[str] = set()
         self.enqueued: list[dict[str, object]] = []
+
+    async def exists(self, job_id: str) -> bool:
+        return job_id in self.existing_ids
 
     async def enqueue_with_outbox(self, job, event):
         self.enqueued.append({"job": job, "event": event})

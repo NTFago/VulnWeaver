@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
-from vulnweaver_contracts import AgentRun, ArtifactKind, JsonObject, PermissionMode, ResourceBudget
+from vulnweaver_contracts import AgentRun, ArtifactKind, JsonObject, PermissionMode
 from vulnweaver_model_gateway import ModelTier
 from vulnweaver_persistence import Database
 from vulnweaver_tool_runtime import (
@@ -157,7 +157,6 @@ class ReversePlanningAgent:
             context=facts,
             policy_context=PolicyContext(
                 artifact_kinds={input_version: ArtifactKind.ELF},
-                resource_budget=cast(ResourceBudget, _budget()),
                 permission_mode=PermissionMode.FULL_ACCESS,
             ),
             input_refs=(input_version,),
@@ -188,26 +187,18 @@ class ReversePlanningAgent:
 
 
 class DatabaseAgentRunSink:
-    """Persist aggregated loop runs into the agent_runs table."""
+    """Persist aggregated loop runs into the agent_runs table.
+
+    Uses the progress-aware write so a loop can flush the run once per round and
+    the trajectory is observable while the loop is still running.
+    """
 
     def __init__(self, database: Database) -> None:
         self._database = database
 
     async def add(self, run: AgentRun) -> None:
         async with self._database.transaction() as repositories:
-            await repositories.agent_runs.add(run)
-
-
-def _budget() -> dict[str, int]:
-    return {
-        "max_model_tokens": 1_000_000,
-        "cpu_millis": 4_000_000,
-        "memory_bytes": 8 * 1024 * 1024 * 1024,
-        "disk_bytes": 8 * 1024 * 1024 * 1024,
-        "max_tool_concurrency": 1,
-        "max_dynamic_runs": 4,
-        "timeout_seconds": 3600,
-    }
+            await repositories.agent_runs.save_progress(run)
 
 
 def planning_context(

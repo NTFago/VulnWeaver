@@ -2,6 +2,7 @@
 
 from vulnweaver_reporting.artifacts import register_report
 from vulnweaver_reporting.content import build_report_model
+from vulnweaver_reporting.context import CodeExcerpt
 from vulnweaver_reporting.executor import ReportJobExecutor
 from vulnweaver_reporting.html import build_html, render_html
 from vulnweaver_reporting.markdown import build_markdown, render_markdown
@@ -10,6 +11,7 @@ from vulnweaver_reporting.sarif import build_sarif, validate_sarif
 from vulnweaver_reporting.scheduler import ReportJobScheduler
 
 __all__ = [
+    "CodeExcerpt",
     "ReportJobExecutor",
     "ReportJobScheduler",
     "build_html",

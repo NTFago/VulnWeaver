@@ -36,6 +36,7 @@ from vulnweaver_contracts import (
     JobRequestedEvent,
     JobStatus,
     JsonObject,
+    JsonValue,
     PairEdge,
     PairFunction,
     PairNode,
@@ -50,19 +51,14 @@ from vulnweaver_contracts import (
     WorkerResult,
 )
 from vulnweaver_model_gateway import ModelCallResult, ModelGatewayError, ModelTier
-from vulnweaver_pair import build_call_path_steps
+from vulnweaver_pair import build_call_path_steps, pseudocode_text
 from vulnweaver_persistence import Database, Repositories
 
+from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
 
 AUDIT_BASELINE = "semantic_function_audit"
 _MAX_FUNCTIONS = 256
-# Audit context budgets: every observation may carry the function body, so the
-# payload is bounded per function and in total. When the total is exceeded the
-# degradation is deterministic: later functions lose their code and keep only
-# metadata, instead of truncating model output mid-report.
-_MAX_CODE_CHARS_PER_FUNCTION = 8_000
-_MAX_AUDIT_PAYLOAD_CHARS = 65_536
 _AUDIT_TOOL = ToolIdentity(name="vulnweaver-semantic-audit", version="1.0.0", image_digest=None)
 
 
@@ -170,23 +166,108 @@ class SemanticAuditor:
         store: ArtifactStore,
         *,
         fact_loader: FactLoader | None = None,
+        agent: CodeAuditAgent | None = None,
     ) -> None:
         self._database = database
         self._gateway = gateway
         self._store = store
         self._fact_loader = fact_loader or SourceReviewFactLoader(database, store)
+        self._agent = agent
 
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
         run_id = _stable_id("agent-run", "semantic-audit", job["id"], str(job["attempt"]))
-        max_tokens = job["resource_budget"]["max_model_tokens"]
-        if max_tokens < 1:
-            raise _AuditError("semantic_audit.model_budget_exhausted", FailureKind.POLICY)
+        # max_model_tokens 0 means uncapped; compute-resource budgets no longer gate jobs.
+        max_tokens = job["resource_budget"]["max_model_tokens"] or None
         entries, source_version_id, binary_version_id = await self._auditable_functions(task_id)
         if not entries:
             # Nothing indexed to audit: a successful no-op baseline keeps the
             # task aggregation running without inventing model output.
             return SemanticAuditOutcome(run_id, None, (), (), 0)
+        if self._agent is not None:
+            agent_outcome = await self._run_agent(
+                job, run_id, source_version_id, binary_version_id
+            )
+            if agent_outcome is not None:
+                return agent_outcome
+        return await self._single_shot_audit(
+            job, run_id, entries, source_version_id, binary_version_id, max_tokens
+        )
+
+    async def _run_agent(
+        self,
+        job: Job,
+        run_id: str,
+        source_version_id: str,
+        binary_version_id: str,
+    ) -> SemanticAuditOutcome | None:
+        """Investigate with the audit agent; ``None`` means "fall back".
+
+        The agent run is persisted under its own id so a degraded attempt can
+        hand the job back to the single-shot path without colliding on the
+        run record.
+        """
+
+        agent = self._agent
+        assert agent is not None
+        outcome: CodeAuditOutcome = await agent.audit(
+            task_id=job["task_id"],
+            job_id=job["id"],
+            attempt=int(job["attempt"]),
+            run_id=f"{run_id}-agent",
+            input_refs=tuple(job["input_refs"]),
+        )
+        if outcome.degraded:
+            # The degraded run is still worth keeping: it records why the job
+            # fell back to the fixed prompt.
+            await self._persist_run(dict(outcome.run))
+            return None
+        investigation = outcome.investigation
+        report = cast(
+            JsonObject,
+            {
+                "schema_version": "1.0.0",
+                "summary": (
+                    f"Agentic audit investigated the index over {len(outcome.steps)} tool "
+                    f"step(s) and reported {len(outcome.findings)} candidate(s)."
+                ),
+                "findings": [finding.as_document() for finding in outcome.findings],
+            },
+        )
+        report_ref, report_digest = await self._store_report(
+            run_id, job["task_id"], report, investigation=investigation
+        )
+        finding_ids, evidence_ids, dropped = await self._project(
+            job,
+            source_version_id,
+            binary_version_id,
+            report,
+            report_ref,
+            report_digest,
+            run_id,
+            investigation=investigation,
+        )
+        await self._persist_run(dict(outcome.run))
+        if not outcome.completed:
+            # Whatever the agent did report is already persisted above, but an
+            # audit that stopped early has not covered the code it was asked to
+            # audit. Failing here keeps the task from reporting NO_FINDINGS on
+            # the strength of an investigation that never finished.
+            raise _AuditError("semantic_audit.loop_not_completed", FailureKind.TIMEOUT)
+        return SemanticAuditOutcome(run_id, report_ref, finding_ids, evidence_ids, dropped)
+
+    async def _single_shot_audit(
+        self,
+        job: Job,
+        run_id: str,
+        entries: list[tuple[str, PairFunction]],
+        source_version_id: str,
+        binary_version_id: str,
+        max_tokens: int | None,
+    ) -> SemanticAuditOutcome:
+        """Fixed fallback used when no agent is configured or the agent degrades."""
+
+        task_id = job["task_id"]
         observations = await self._observations(task_id, entries)
         response = await self._gateway.complete_structured(
             tier=ModelTier.AUDIT,
@@ -257,9 +338,12 @@ class SemanticAuditor:
                 "start_line": source["start_line"] if source else None,
                 "address": binary["virtual_address"] if binary else None,
             }
-            code = _observation_code(function)
-            if code is not None:
-                entry["code"] = code
+            # Binary PAIR functions carry a list of BinaryPseudocode records,
+            # never a plain string; reading it as a string silently dropped the
+            # decompiled code for every binary function.
+            pseudocode = pseudocode_text(function)
+            if pseudocode:
+                entry["code"] = pseudocode
             elif source is not None:
                 facts: SourceReviewFacts = await self._fact_loader.load(
                     task_id, cast(JsonObject, source)
@@ -267,14 +351,20 @@ class SemanticAuditor:
                 if facts.available and facts.excerpt is not None:
                     entry["code"] = facts.excerpt.text
             observations.append(entry)
-        return _fit_audit_payload(observations)
+        return observations
 
-    async def _store_report(self, run_id: str, task_id: str, report: JsonObject) -> tuple[str, str]:
-        content = json.dumps(
-            {"run_id": run_id, "task_id": task_id, "report": report},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
+    async def _store_report(
+        self,
+        run_id: str,
+        task_id: str,
+        report: JsonObject,
+        *,
+        investigation: list[JsonObject] | None = None,
+    ) -> tuple[str, str]:
+        document: JsonObject = {"run_id": run_id, "task_id": task_id, "report": report}
+        if investigation:
+            document["investigation"] = cast(JsonValue, investigation)
+        content = json.dumps(document, ensure_ascii=False, sort_keys=True).encode("utf-8")
         try:
             stored = await asyncio.to_thread(
                 self._store.put_stream, io.BytesIO(content), max_bytes=8 * 1024 * 1024
@@ -294,6 +384,8 @@ class SemanticAuditor:
         report_ref: str,
         report_digest: str,
         run_id: str,
+        *,
+        investigation: list[JsonObject] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
         accepted: list[tuple[str, str]] = []
         dropped = 0
@@ -315,7 +407,14 @@ class SemanticAuditor:
                 evidence_id = _stable_id("evidence", run_id, cwe_id, _canonical(location))
                 await repositories.evidence.create(
                     _evidence(
-                        evidence_id, job, finding, report_ref, report_digest, location, run_id
+                        evidence_id,
+                        job,
+                        finding,
+                        report_ref,
+                        report_digest,
+                        location,
+                        run_id,
+                        investigation=investigation,
                     )
                 )
                 await repositories.findings.upsert_candidate(
@@ -332,6 +431,39 @@ class SemanticAuditor:
                         created_at=_now_from(job),
                     )
                 )
+                request = finding.get("verification_request")
+                if isinstance(request, str) and request:
+                    # The agent's verification intent is provenance, not proof: it
+                    # is linked CONTEXTUAL with weight 0 so it can never satisfy
+                    # the confirmation policy, but it stays in the evidence chain
+                    # so a report can show what the auditor asked to have proven.
+                    request_evidence_id = _stable_id(
+                        "evidence", run_id, "verification", cwe_id, _canonical(location)
+                    )
+                    raw_reason = finding.get("verification_reason")
+                    await repositories.evidence.create(
+                        _verification_request_evidence(
+                            request_evidence_id,
+                            job,
+                            request,
+                            raw_reason if isinstance(raw_reason, str) else None,
+                            report_ref,
+                            report_digest,
+                            location,
+                            run_id,
+                        )
+                    )
+                    await repositories.findings.link_evidence(
+                        FindingEvidence(
+                            schema_version=SchemaVersion.VALUE_1_0_0,
+                            finding_id=finding_id,
+                            evidence_id=request_evidence_id,
+                            relation=EvidenceRelation.CONTEXTUAL,
+                            weight=0.0,
+                            created_by=run_id,
+                            created_at=_now_from(job),
+                        )
+                    )
                 accepted.append((finding_id, evidence_id))
         finding_ids = tuple(sorted({item[0] for item in accepted}))
         evidence_ids = tuple(sorted({item[1] for item in accepted}))
@@ -339,7 +471,7 @@ class SemanticAuditor:
 
     async def _persist_run(self, run: dict[str, object]) -> None:
         async with self._database.transaction() as repositories:
-            await repositories.agent_runs.add(cast(AgentRun, run))
+            await repositories.agent_runs.save_progress(cast(AgentRun, run))
 
 
 def _run_from_response(
@@ -359,7 +491,26 @@ def _evidence(
     report_digest: str,
     location: JsonObject,
     run_id: str,
+    *,
+    investigation: list[JsonObject] | None = None,
 ) -> Evidence:
+    recipe: JsonObject = {
+        "kind": "semantic_model_audit",
+        "reproducible": False,
+        "agent_run_id": run_id,
+        "baseline": AUDIT_BASELINE,
+        "finding_selector": {
+            "cwe_id": finding["cwe_id"],
+            **(
+                {"path": finding["path"], "start_line": finding["start_line"]}
+                if "path" in finding
+                else {"address": finding["address"]}
+            ),
+        },
+        "location": location,
+    }
+    if investigation:
+        recipe["investigation"] = cast(JsonValue, investigation)
     return Evidence(
         schema_version=SchemaVersion.VALUE_1_0_0,
         id=evidence_id,
@@ -373,24 +524,47 @@ def _evidence(
         exit_code=None,
         stdout_ref=None,
         stderr_ref=None,
-        replay_recipe=cast(
-            JsonObject,
-            {
-                "kind": "semantic_model_audit",
-                "reproducible": False,
-                "agent_run_id": run_id,
-                "baseline": AUDIT_BASELINE,
-                "finding_selector": {
-                    "cwe_id": finding["cwe_id"],
-                    **(
-                        {"path": finding["path"], "start_line": finding["start_line"]}
-                        if "path" in finding
-                        else {"address": finding["address"]}
-                    ),
-                },
-                "location": location,
-            },
-        ),
+        replay_recipe=recipe,
+        created_at=_now_from(job),
+    )
+
+
+def _verification_request_evidence(
+    evidence_id: str,
+    job: Job,
+    tool: str,
+    reason: str | None,
+    report_ref: str,
+    report_digest: str,
+    location: JsonObject,
+    run_id: str,
+) -> Evidence:
+    """Record that the auditor asked for dynamic proof of this candidate."""
+
+    recipe: JsonObject = {
+        "kind": "dynamic_verification_request",
+        "reproducible": False,
+        "verification_tool": tool,
+        "agent_run_id": run_id,
+        "baseline": AUDIT_BASELINE,
+        "location": location,
+    }
+    if reason:
+        recipe["reason"] = reason[:1024]
+    return Evidence(
+        schema_version=SchemaVersion.VALUE_1_0_0,
+        id=evidence_id,
+        type=EvidenceType.TOOL_OUTPUT,
+        strength=EvidenceStrength.CONTEXTUAL,
+        artifact_ref=report_ref,
+        digest=report_digest,
+        tool=_AUDIT_TOOL,
+        input_ref=report_ref,
+        command_hash=None,
+        exit_code=None,
+        stdout_ref=None,
+        stderr_ref=None,
+        replay_recipe=recipe,
         created_at=_now_from(job),
     )
 
@@ -521,64 +695,6 @@ def _messages(observations: list[JsonObject]) -> list[dict[str, str]]:
 
 def _now_from(job: Job) -> str:
     return job["updated_at"]
-
-
-def _observation_code(function: PairFunction) -> str | None:
-    """Return the function body the model can audit, or None.
-
-    Binary PAIR functions carry decompiler output as a list of BinaryPseudocode
-    records in ``attributes['pseudocode']`` (source functions use the string
-    form handled above by the same guard). When no decompilation exists, a
-    bounded disassembly listing from ``attributes['disassembly']`` is used so
-    the audit never has to reason from names and addresses alone.
-    """
-
-    pseudocode = function["attributes"].get("pseudocode")
-    if isinstance(pseudocode, str) and pseudocode.strip():
-        return pseudocode[:_MAX_CODE_CHARS_PER_FUNCTION]
-    if isinstance(pseudocode, list) and pseudocode:
-        texts = [
-            str(item.get("text", ""))
-            for item in pseudocode
-            if isinstance(item, dict) and str(item.get("text", "")).strip()
-        ]
-        if texts:
-            return "\n\n".join(texts)[:_MAX_CODE_CHARS_PER_FUNCTION]
-    disassembly = function["attributes"].get("disassembly")
-    if isinstance(disassembly, list) and disassembly:
-        lines = [
-            f"{item.get('address')}  {item.get('mnemonic')} {item.get('operands')}".rstrip()
-            for item in disassembly
-            if isinstance(item, dict)
-        ]
-        if lines:
-            return "\n".join(lines)[:_MAX_CODE_CHARS_PER_FUNCTION]
-    return None
-
-
-def _payload_size(observations: list[JsonObject]) -> int:
-    return len(json.dumps({"functions": observations}, ensure_ascii=False, sort_keys=True))
-
-
-def _fit_audit_payload(observations: list[JsonObject]) -> list[JsonObject]:
-    """Bound the total audit payload, dropping code from the tail first."""
-
-    if _payload_size(observations) <= _MAX_AUDIT_PAYLOAD_CHARS:
-        return observations
-    fitted = [dict(item) for item in observations]
-    total = _payload_size(fitted)
-    for entry in reversed(fitted):
-        if total <= _MAX_AUDIT_PAYLOAD_CHARS:
-            break
-        if "code" not in entry:
-            continue
-        stripped = {key: value for key, value in entry.items() if key != "code"}
-        total -= len(json.dumps(entry, ensure_ascii=False, sort_keys=True)) - len(
-            json.dumps(stripped, ensure_ascii=False, sort_keys=True)
-        )
-        entry.clear()
-        entry.update(stripped)
-    return fitted
 
 
 def _function_sort_key(function: PairFunction) -> tuple[str, int, str]:

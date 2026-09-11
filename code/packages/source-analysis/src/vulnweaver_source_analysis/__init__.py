@@ -7,7 +7,12 @@ from vulnweaver_source_analysis.archive import (
     SafeArchiveImporter,
     SourceImportError,
 )
-from vulnweaver_source_analysis.excerpts import ExcerptLimits, SourceExcerpt, SourceExcerptReader
+from vulnweaver_source_analysis.excerpts import (
+    ExcerptLimits,
+    SourceExcerpt,
+    SourceExcerptReader,
+    SourceFileText,
+)
 from vulnweaver_source_analysis.executor import (
     AnalysisJobExecutor,
     SourceImportExecutionError,
@@ -40,6 +45,7 @@ __all__ = [
     "ExcerptLimits",
     "SourceExcerpt",
     "SourceExcerptReader",
+    "SourceFileText",
     "SafeArchiveImporter",
     "SemgrepAdapter",
     "SourceImportError",

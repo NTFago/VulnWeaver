@@ -21,6 +21,16 @@ class SampleSummary(TypedDict):
     kind: str
 
 
+class CodeExcerpt(TypedDict):
+    """Bounded, attributable source or decompiler output; never model-invented code."""
+
+    text: str
+    label: str
+    source: str
+    first_line: int
+    truncated: bool
+
+
 class ReportContext(TypedDict, total=False):
     """Task metadata consumed by the Markdown and HTML report renderers."""
 
@@ -34,6 +44,12 @@ class ReportContext(TypedDict, total=False):
     produced_by: str
     samples: list[SampleSummary]
     reviews: dict[str, list[Review]]
+    excerpts: dict[str, CodeExcerpt]
+    excerpt_errors: dict[str, str]
+    evidence_relations: dict[str, dict[str, str]]
+    job_failures: list[str]
+    task_status: str
+    generated_at: str
 
 
 def empty_context() -> ReportContext:

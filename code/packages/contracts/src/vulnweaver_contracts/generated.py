@@ -960,7 +960,7 @@ class CreateProjectRequest(TypedDict):
 class CreateTaskRequest(TypedDict):
     schema_version: SchemaVersion
     artifact_version_ids: list[Identifier]
-    resource_budget: ResourceBudget
+    resource_budget: NotRequired[ResourceBudget]
 
 class LoginRequest(TypedDict):
     schema_version: SchemaVersion
@@ -989,6 +989,7 @@ class ProductSettings(TypedDict):
     review_model_max_attempts: int
     review_model_repair_attempts: int
     review_model_min_interval_seconds: float
+    review_model_context_window_tokens: NotRequired[int]
     review_model_api_key: NotRequired[str | None]
     clear_review_model_api_key: NotRequired[bool]
     tool_image_digests: NotRequired[ToolImageDigests]

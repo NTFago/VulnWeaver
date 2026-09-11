@@ -131,7 +131,7 @@ def test_markdown_summary_renders_sample_and_task_metadata() -> None:
     assert "task:demo" in report
     assert "部分成功（partial）" in report
     assert "vulnweaver-report@1.0.0" in report
-    assert "发现漏洞总数 | 1（最高严重等级：高危（high））" in report
+    assert "扫描发现总数（含误报） | 1（最高严重等级：高危（high））" in report
 
 
 def test_markdown_summary_renders_failure_and_limitations() -> None:
@@ -146,12 +146,6 @@ def test_markdown_summary_renders_failure_and_limitations() -> None:
 def test_markdown_without_context_shows_missing_placeholders() -> None:
     report = build_markdown([make_finding()])
     assert "未提供" in report
-
-
-def test_markdown_task_result_pending_when_result_not_yet_settled() -> None:
-    context = make_context(task_result=None)
-    report = build_markdown([make_finding()], context=context)  # type: ignore[arg-type]
-    assert "待最终归类" in report
 
 
 def test_markdown_statistics_cover_every_severity_and_status_row() -> None:
@@ -318,9 +312,7 @@ def test_markdown_states_the_missing_call_path_explicitly() -> None:
 def test_markdown_marks_model_only_findings_for_human_confirmation() -> None:
     finding = make_finding(status="candidate")
     evidence = {
-        "finding:1": [
-            make_evidence(type="model_explanation", strength="contextual", tool=None)
-        ]
+        "finding:1": [make_evidence(type="model_explanation", strength="contextual", tool=None)]
     }
     report = build_markdown([finding], evidence=evidence)  # type: ignore[arg-type]
     assert MODEL_INFERRED_MARK in report

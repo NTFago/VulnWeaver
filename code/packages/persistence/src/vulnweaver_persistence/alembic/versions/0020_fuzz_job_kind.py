@@ -1,9 +1,13 @@
 """Allow the fuzz Job kind in the jobs kind constraint.
 
-The fuzz Job kind exists in the v1 contract and in the models metadata
-(derived from the JobKind enum) since automatic fuzz dispatch landed, but the
-check constraint was last rewritten by 0017 before that, so scheduling a fuzz
-Job violated ck_jobs_kind and wedged the pipeline settlement.
+T32 wired fuzz Jobs into the automatic pipeline, but migration 0017's kind
+check predates it: every deployment built from migrations rejected fuzz Job
+INSERTs with ``ck_jobs_kind`` while metadata-created test tables accepted
+them. Adds ``fuzz`` to the allowed kinds.
+
+Revision ID: 0020_fuzz_job_kind
+Revises: 0019_task_failure
+Create Date: 2026-09-11
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ def upgrade() -> None:
         batch.create_check_constraint(
             op.f("ck_jobs_kind"),
             "kind IN ('validate', 'import', 'source_analysis', 'semantic_audit', "
-            "'binary_analysis', 'review', 'fuzz', 'proof', 'exploit', 'report')",
+            "'binary_analysis', 'review', 'proof', 'exploit', 'fuzz', 'report')",
         )
 
 

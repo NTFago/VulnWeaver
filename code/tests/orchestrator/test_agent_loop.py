@@ -150,7 +150,6 @@ def failure_stub(code: str) -> StructuredFailure:
 def full_access_context() -> PolicyContext:
     return PolicyContext(
         artifact_kinds={"version:1": ArtifactKind.SOURCE_ARCHIVE},
-        resource_budget=budget_limits(),
         permission_mode=PermissionMode.FULL_ACCESS,
     )
 
@@ -253,7 +252,10 @@ async def _loop_executes_steps_until_empty_plan() -> None:
         "loop_completed",
     ]
     assert result.agent_run["result_refs"] == ["derived:1"]
-    assert [run["id"] for run in sink.runs] == ["agent-run:loop:1"]
+    # The loop may flush a progress snapshot per round; every write is the
+    # same aggregated run, and the last one carries the terminal status.
+    assert {run["id"] for run in sink.runs} == {"agent-run:loop:1"}
+    assert sink.runs[-1]["status"] is RunStatus.SUCCEEDED
     # The next observation carries the bounded result of the executed step.
     second_user = json.loads(planner.messages[1][1]["content"])
     assert second_user["last_feedback"]["last_steps"][0]["output"] == {"findings": 0}
@@ -428,7 +430,6 @@ async def _waiting_permission_stops_the_loop() -> None:
         context={"artifact": "version:1"},
         policy_context=PolicyContext(
             artifact_kinds={"version:1": ArtifactKind.SOURCE_ARCHIVE},
-            resource_budget=budget_limits(),
             permission_mode=PermissionMode.REQUEST_PERMISSION,
         ),
         input_refs=("version:1",),

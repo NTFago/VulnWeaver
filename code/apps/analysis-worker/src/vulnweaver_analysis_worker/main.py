@@ -14,13 +14,18 @@ from types import FrameType
 from typing import Any, cast
 
 from vulnweaver_artifact_store import ArtifactRegistrationService, LocalContentAddressedStore
-from vulnweaver_binary_analysis import BinaryImportExecutor
+from vulnweaver_binary_analysis import (
+    BinaryAnalysisLimits,
+    BinaryFactsAdapter,
+    BinaryImportExecutor,
+)
 from vulnweaver_contracts import (
     ArtifactKind,
     CrashRecord,
     Finding,
     FindingCategory,
     JsonObject,
+    JsonValue,
     ResourceBudget,
     Task,
     ToolIdentity,
@@ -47,6 +52,7 @@ from vulnweaver_model_gateway import (
     ThinkingConfig,
 )
 from vulnweaver_orchestrator import (
+    CodeAuditAgent,
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
     FuzzJobScheduler,
@@ -58,6 +64,7 @@ from vulnweaver_orchestrator import (
     SemanticAuditJobExecutor,
     SemanticAuditor,
     SemanticAuditScheduler,
+    SymbolicRunner,
     TaskAggregateSettlementHook,
     persist_crash_evidence,
 )
@@ -90,6 +97,7 @@ from vulnweaver_analysis_worker.hot_reload import (
     ReconfigurableAssembly,
 )
 from vulnweaver_analysis_worker.readable_pseudocode import ModelReadablePseudocodeHook
+from vulnweaver_analysis_worker.report_excerpts import ReportSourceExcerptReader
 
 LOGGER = logging.getLogger("vulnweaver.analysis-worker")
 
@@ -127,6 +135,7 @@ async def _run() -> None:
     report_executor = ReportJobExecutor(
         database,
         ArtifactRegistrationService(store, database),
+        source_excerpt_reader=ReportSourceExcerptReader(store),
         tool=ToolIdentity(
             name="vulnweaver-report",
             version=os.environ.get("REPORT_TOOL_VERSION", "1.0.0"),
@@ -158,8 +167,14 @@ async def _run() -> None:
         """Build every settings-dependent component from one settings row."""
 
         config = resolve_deployment_config(settings, os.environ)
+        binary_sandbox, binary_digest = await _binary_sandbox(config)
+        symbolic_runner = (
+            _SymbolicVerificationRunner(database, store, binary_sandbox, binary_digest)
+            if binary_sandbox is not None and binary_digest is not None
+            else None
+        )
         review_executor, audit_executor, model_gateway = _model_executors(
-            database, store, settings
+            database, store, settings, symbolic_runner=symbolic_runner
         )
         proof_executor = _proof_executor(database, store, model_gateway, config)
         fuzz_executor = await _fuzz_executor(
@@ -167,9 +182,13 @@ async def _run() -> None:
         )
         exploit_scheduler = _auto_exploit_scheduler(database, config)
         fuzz_scheduler = _fuzz_scheduler(
-            database, store, config, harness_enabled=model_gateway is not None
+            database,
+            store,
+            config,
+            fuzz_executor=fuzz_executor,
+            registry=tool_registry,
+            harness_enabled=model_gateway is not None,
         )
-        binary_sandbox, binary_digest = await _binary_sandbox(config)
         binary_planning_hook = (
             _ReversePlanningHook(
                 ReversePlanningAgent(model_gateway, database, sink=DatabaseAgentRunSink(database))
@@ -290,6 +309,63 @@ class _WorkerAssembly:
     settlement: TaskAggregateSettlementHook
 
 
+class _SymbolicVerificationRunner:
+    """Run one agent-requested symbolic pass through the Sandbox Runner.
+
+    The audit Job holds no extracted sample, but it does hold the pinned input
+    reference, so the request is built against the CAS object exactly as the
+    binary executor builds it. The sample still only ever executes inside the
+    Sandbox Runner; the worker merely awaits the result. Addresses were already
+    resolved onto the task's immutable index by the audit step executor, so a
+    version id can only name an artifact this task indexed.
+    """
+
+    def __init__(
+        self,
+        database: Database,
+        store: LocalContentAddressedStore,
+        sandbox: SandboxRunnerClient,
+        image_digest: str,
+        *,
+        limits: BinaryAnalysisLimits | None = None,
+    ) -> None:
+        self._database = database
+        self._store = store
+        self._sandbox = sandbox
+        self._image_digest = image_digest
+        self._limits = limits or BinaryAnalysisLimits()
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, target_addresses: tuple[int, ...]
+    ) -> JsonObject:
+        async with self._database.transaction() as repositories:
+            version = await repositories.artifacts.get_version(version_id)
+        adapter = BinaryFactsAdapter(
+            self._sandbox,
+            self._store,
+            image_digest=self._image_digest,
+            input_ref=version["object_ref"],
+            target_addresses=target_addresses,
+            angr_enabled=True,
+        )
+        contribution = await adapter.analyze_ref(
+            artifact_kind, self._limits, asyncio.Event()
+        )
+        targeted = [
+            cast(JsonObject, dict(fact))
+            for fact in contribution.symbolic_facts
+            if fact["function_address"] in target_addresses
+        ]
+        return cast(
+            JsonObject,
+            {
+                "status": "completed",
+                "targets": list(target_addresses),
+                "symbolic_facts": cast(JsonValue, targeted),
+            },
+        )
+
+
 class _ReversePlanningHook:
     """Bridge the orchestrator planning agent to the binary executor hook."""
 
@@ -336,6 +412,8 @@ def _model_executors(
     database: Database,
     store: LocalContentAddressedStore,
     product_settings: dict[str, object],
+    *,
+    symbolic_runner: object | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
     """Build one gateway with an independent endpoint per configured tier.
 
@@ -376,7 +454,26 @@ def _model_executors(
         )
     )
     reviewer = IndependentModelReviewer(database, gateway, store)
-    auditor = SemanticAuditor(database, gateway, store)
+    # The audit runs the shared plan-execute-observe loop over read-only
+    # investigation tools; when the loop degrades the auditor falls back to the
+    # fixed single-shot prompt so the audit baseline still completes.
+    auditor = SemanticAuditor(
+        database,
+        gateway,
+        store,
+        # The sink is progress-aware, so the loop can flush a running snapshot
+        # each round and the trajectory is visible while the audit is still in
+        # flight; the auditor's final write advances the same row to terminal.
+        # The symbolic runner is None when no Sandbox Runner is configured, and
+        # the agent's symbolic step is then refused structurally.
+        agent=CodeAuditAgent(
+            database,
+            gateway,
+            store,
+            sink=DatabaseAgentRunSink(database),
+            symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
+        ),
+    )
     return (
         ReviewJobExecutor(reviewer),
         SemanticAuditJobExecutor(database, auditor),
@@ -449,6 +546,9 @@ def _tier_endpoint(
         api_key=stored_api_key,
         timeout_seconds=_setting_float(product_settings, "review_model_timeout_seconds", 60),
         max_attempts=_setting_int(product_settings, "review_model_max_attempts", 2),
+        context_window_tokens=_setting_int(
+            product_settings, "review_model_context_window_tokens", 0
+        ),
     )
 
 
@@ -495,7 +595,6 @@ def _proof_executor(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
-        resource_limits=_proof_resource_budget(),
     )
     generator = (
         ExploitScriptGenerator(database, model_gateway, store)
@@ -530,34 +629,21 @@ def _sandbox_client(runner_url: str, timeout: float) -> SandboxRunnerClient:
     )
 
 
-def _proof_resource_budget() -> ResourceBudget:
-    """Mirror the budget the Sandbox Runner registers for the proof tool.
+def _fuzz_resource_budget() -> ResourceBudget:
+    """Spec metadata for the registered AFL++/CASR ToolSpec.
 
-    Proof and exploit requests carry the whole project budget, which exceeds the proof tool's
-    limits and would be refused as ``sandbox.resource_budget_exceeded``. The executor clamps to
-    these values, so they must track the Runner's ``PROOF_*`` deployment configuration.
+    Budgets no longer gate execution (ADR-025); the ToolSpec still needs a
+    well-formed resource_limits row, so it is filled with generous values.
     """
 
     return ResourceBudget(
         max_model_tokens=0,
-        cpu_millis=int(os.environ.get("PROOF_CPU_MILLIS", "1000")),
-        memory_bytes=int(os.environ.get("PROOF_MEMORY_BYTES", str(256 * 1024 * 1024))),
-        disk_bytes=int(os.environ.get("PROOF_DISK_BYTES", str(256 * 1024 * 1024))),
+        cpu_millis=1_000_000,
+        memory_bytes=1 << 40,
+        disk_bytes=1 << 40,
         max_tool_concurrency=1,
         max_dynamic_runs=1,
-        timeout_seconds=int(os.environ.get("PROOF_TIMEOUT_SECONDS", "120")),
-    )
-
-
-def _fuzz_resource_budget() -> ResourceBudget:
-    return ResourceBudget(
-        max_model_tokens=0,
-        cpu_millis=int(os.environ.get("AFL_CPU_MILLIS", "4000")),
-        memory_bytes=int(os.environ.get("AFL_MEMORY_BYTES", str(1024 * 1024 * 1024))),
-        disk_bytes=int(os.environ.get("AFL_DISK_BYTES", str(512 * 1024 * 1024))),
-        max_tool_concurrency=1,
-        max_dynamic_runs=1,
-        timeout_seconds=int(os.environ.get("AFL_TIMEOUT_SECONDS", "300")),
+        timeout_seconds=600,
     )
 
 
@@ -627,11 +713,18 @@ def _fuzz_scheduler(
     store: LocalContentAddressedStore,
     config: ResolvedDeploymentConfig,
     *,
+    fuzz_executor: FuzzJobExecutor | None,
+    registry: ToolRegistry,
     harness_enabled: bool,
 ) -> FuzzJobScheduler | None:
-    """Enable automatic fuzz dispatch; the resolver declines when it cannot run."""
-    if not (config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()):
-        # Without a pinned fuzz image the scheduler would only ever decline.
+    """Enable automatic fuzz dispatch; the resolver declines when it cannot run.
+
+    Availability follows the executor, which discovers the AFL++/CASR digest from
+    the Runner (or a settings/env pin); a deployment able to execute fuzz jobs
+    can also dispatch them.
+    """
+
+    if fuzz_executor is None:
         return None
 
     async def resolve(
@@ -643,10 +736,22 @@ def _fuzz_scheduler(
             task,
             config,
             store=store,
+            digest=_registered_fuzz_digest(registry),
             harness_enabled=harness_enabled,
         )
 
     return FuzzJobScheduler(database, target_resolver=resolve)
+
+
+def _registered_fuzz_digest(registry: ToolRegistry) -> str | None:
+    """Return the AFL++/CASR digest the executor registered, if any."""
+
+    try:
+        spec = registry.get(AFL_CASR_TOOL_NAME, AFL_CASR_TOOL_VERSION)
+    except ToolRuntimeError:
+        return None
+    digest = str(spec["image_digest"])
+    return digest or None
 
 
 async def _fuzz_target(
@@ -656,6 +761,7 @@ async def _fuzz_target(
     config: ResolvedDeploymentConfig,
     *,
     store: LocalContentAddressedStore,
+    digest: str | None,
     harness_enabled: bool,
 ) -> FuzzTarget | None:
     """Resolve a bounded fuzz target for one Finding, or decline.
@@ -664,10 +770,8 @@ async def _fuzz_target(
     or injection candidates and only against the artifact the Finding is
     anchored to. The anchored artifact doubles as the visible seed corpus: it is
     present in both the fuzz and binary-facts CAS by construction, and the bundle
-    builder keeps the total seed budget bounded. When the deployment has not
-    pinned a fuzz digest, no target is produced and dispatch is skipped.
+    builder keeps the total seed budget bounded.
     """
-    digest = config.digests.afl_casr or os.environ.get("AFL_CASR_IMAGE_DIGEST", "").strip()
     if not digest:
         return None
     if finding["category"] not in _FUZZABLE_CATEGORIES:

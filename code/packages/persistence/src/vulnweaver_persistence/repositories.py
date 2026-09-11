@@ -494,6 +494,21 @@ class JobRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
 
+    async def exists(self, job_id: str) -> bool:
+        """Return whether the job id is taken, without aborting the transaction.
+
+        Callers that probe for deterministic identifiers inside an active
+        settlement transaction need a non-raising check: a failed statement
+        would abort the surrounding PostgreSQL transaction.
+        """
+
+        row = (
+            await self._connection.execute(
+                select(jobs.c.id).where(jobs.c.id == job_id)
+            )
+        ).first()
+        return row is not None
+
     async def create_without_outbox(self, job: Job) -> CreateResult[Job]:
         """Create a waiting job without publishing it before permission is granted."""
 
@@ -1080,6 +1095,9 @@ class JobRepository:
         return row, row["_database_now"]
 
 
+_NON_TERMINAL_RUN_STATUSES = (RunStatus.CREATED.value, RunStatus.RUNNING.value)
+
+
 class AgentRunRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -1108,6 +1126,38 @@ class AgentRunRepository:
                 details={"run_id": run["id"]},
             )
         return CreateResult(stored, False)
+
+    async def save_progress(self, run: AgentRun) -> None:
+        """Insert a run or advance it in place, so a long run is observable.
+
+        A plan-execute-observe loop can run for minutes; without this the run
+        row only appears once the loop is over and the trajectory panel stays
+        empty for the whole investigation. The update is refused once the stored
+        run has reached a terminal status, so a late or repeated progress write
+        can never overwrite a finished conclusion.
+        """
+
+        validate_contract("AgentRun", run)
+        values = _agent_run_values(run, request_fingerprint(run))
+        statement = (
+            insert(agent_runs)
+            .values(values)
+            .on_conflict_do_update(
+                index_elements=[agent_runs.c.id],
+                set_={
+                    "status": values["status"],
+                    "decisions": values["decisions"],
+                    "token_usage": values["token_usage"],
+                    "duration_ms": values["duration_ms"],
+                    "result_refs": values["result_refs"],
+                    "failure": values["failure"],
+                    "run_fingerprint": values["run_fingerprint"],
+                    "updated_at": values["updated_at"],
+                },
+                where=agent_runs.c.status.in_(_NON_TERMINAL_RUN_STATUSES),
+            )
+        )
+        await self._connection.execute(statement)
 
     async def get(self, run_id: str) -> AgentRun:
         row = (

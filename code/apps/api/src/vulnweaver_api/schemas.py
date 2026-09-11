@@ -115,6 +115,8 @@ class ProductSettingsBody(StrictModel):
     review_model_max_attempts: int = Field(default=2, ge=1, le=8)
     review_model_repair_attempts: int = Field(default=1, ge=0, le=3)
     review_model_min_interval_seconds: float = Field(default=0, ge=0, le=60)
+    # 0 disables the gateway's context-window trimming for the fallback endpoint.
+    review_model_context_window_tokens: int = Field(default=0, ge=0, le=100_000_000)
     review_model_api_key: str | None = Field(default=None, min_length=1, max_length=4096)
     clear_review_model_api_key: bool = False
     tool_image_digests: ToolImageDigestsModel = Field(default_factory=ToolImageDigestsModel)
@@ -136,6 +138,7 @@ class ProductSettingsResponse(StrictModel):
     review_model_max_attempts: int
     review_model_repair_attempts: int
     review_model_min_interval_seconds: float
+    review_model_context_window_tokens: int
     api_key_configured: bool
     tool_image_digests: ToolImageDigestsModel
     sandbox_budgets: SandboxBudgetsModel
@@ -192,7 +195,8 @@ class CreateProjectBody(StrictModel):
 class CreateTaskBody(StrictModel):
     schema_version: Literal["1.0.0"]
     artifact_version_ids: list[str] = Field(min_length=1)
-    resource_budget: ResourceBudgetModel
+    # Budgets are inert bookkeeping (ADR-025); an omitted budget inherits the project row.
+    resource_budget: ResourceBudgetModel | None = None
 
 
 class CreateAnnotationBody(StrictModel):
@@ -219,7 +223,8 @@ class CreateProofJobBody(StrictModel):
     script_ref: str = Field(min_length=1, max_length=2048)
     image_digest: str = Field(min_length=1, max_length=128)
     permission_mode: Literal["request_permission", "full_access"]
-    resource_budget: ResourceBudgetModel
+    # Budgets are inert bookkeeping (ADR-025); an omitted budget inherits the project row.
+    resource_budget: ResourceBudgetModel | None = None
     kind: Literal["proof_of_concept", "exploit"] = "proof_of_concept"
 
 
