@@ -34,6 +34,8 @@ from vulnweaver_contracts import (
     JobStatus,
     Project,
     ResourceBudget,
+    SandboxResult,
+    SandboxStatus,
     StaticToolStatus,
     Task,
     TaskStatus,
@@ -339,6 +341,189 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
             assert invalid["failure"] is not None
             assert invalid["failure"]["code"] == "binary_import.target_outside_executable_section"
             assert invalid["produced_artifact_version_ids"] == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class _RecordingSandbox:
+    """Capture sandbox requests and answer each with a minimal valid facts document."""
+
+    def __init__(self, store: LocalContentAddressedStore) -> None:
+        self._store = store
+        self.requests: list[Mapping[str, object]] = []
+
+    async def run(
+        self, request: Mapping[str, object], cancellation: asyncio.Event
+    ) -> SandboxResult:
+        del cancellation
+        self.requests.append(request)
+        payload = {
+            "tools": {
+                "objdump": {
+                    "run": {
+                        "tool_name": "objdump",
+                        "tool_version": "GNU objdump 2.42",
+                        "status": "succeeded",
+                        "exit_code": 0,
+                        "reason": None,
+                        "raw_output": None,
+                    }
+                },
+                "die": {"compiler": "GCC", "packer": "UPX", "packed": True},
+            },
+            "functions": [],
+            "instructions": [],
+            "basic_blocks": [],
+            "xrefs": [],
+            "pseudocode": [],
+        }
+        stored = self._store.put_stream(
+            io.BytesIO(json.dumps(payload).encode()), max_bytes=1024 * 1024
+        )
+        return SandboxResult(
+            schema_version="1.0.0",
+            request_id=str(request["id"]),
+            status=SandboxStatus.SUCCEEDED,
+            exit_code=0,
+            stdout_ref=None,
+            stderr_ref=None,
+            outputs=[
+                {
+                    "path": "binary-facts.json",
+                    "object_ref": stored.object_ref,
+                    "digest": stored.digest,
+                    "size_bytes": stored.size_bytes,
+                }
+            ],
+            resource_usage={
+                "duration_millis": 1,
+                "cpu_millis": 1,
+                "memory_bytes": 1,
+                "output_bytes": stored.size_bytes,
+            },
+            failure=None,
+        )
+
+
+def test_binary_executor_hands_the_sandbox_the_unpacked_image(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    """Regression: the sandbox must analyse the unpacked image, not the packed upload.
+
+    The facts adapter fetches its input by CAS reference rather than from the
+    local path, so pinning the original upload there meant every sandbox tool
+    decompiled the packer stub while the freshly unpacked image sat unread.  The
+    run still succeeded, still reported `packed=true`, and still produced empty
+    function and basic-block lists -- which starved the flattening assessment of
+    any input and looked like "a packed binary with nothing in it".
+    """
+
+    async def scenario() -> None:
+        suffix = uuid.uuid4().hex[:12]
+        project_id = f"project:unpacked-{suffix}"
+        artifact_id = f"artifact:unpacked-{suffix}"
+        version_id = f"artifact-version:unpacked-{suffix}"
+        task_id = f"task:unpacked-{suffix}"
+        job_id = f"job:unpacked-{suffix}"
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "store")
+        packed = store.put_stream(
+            io.BytesIO(elf64_sample(upx_section=True)), max_bytes=1024 * 1024
+        )
+        project = Project(
+            schema_version="1.0.0",
+            id=project_id,
+            name="Unpacked image project",
+            input_scope=["local://authorized-binary"],
+            permission_mode="request_permission",
+            exploit_validation_enabled=False,
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+        )
+        artifact = Artifact(
+            schema_version="1.0.0",
+            id=artifact_id,
+            project_id=project_id,
+            kind=ArtifactKind.ELF,
+            current_version_id=version_id,
+            created_at=TIMESTAMP,
+        )
+        version = ArtifactVersion(
+            schema_version="1.0.0",
+            id=version_id,
+            artifact_id=artifact_id,
+            digest=packed.digest,
+            object_ref=packed.object_ref,
+            generation_config={},
+            created_at=TIMESTAMP,
+        )
+        task = Task(
+            schema_version="1.0.0",
+            id=task_id,
+            project_id=project_id,
+            artifact_version_ids=[version_id],
+            status=TaskStatus.CREATED,
+            result=None,
+            failure=None,
+            idempotency_key=f"task-unpacked-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        job = Job(
+            schema_version="1.0.0",
+            id=job_id,
+            task_id=task_id,
+            kind=JobKind.IMPORT,
+            tool={
+                "name": "binary-import",
+                "version": "1.0.0",
+                "image_digest": "sha256:" + "a" * 64,
+            },
+            arguments={"artifact_version_id": version_id},
+            input_refs=[packed.object_ref],
+            status=JobStatus.RUNNING,
+            idempotency_key=f"job-unpacked-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            retry_policy={
+                "max_attempts": 2,
+                "backoff_seconds": 1.0,
+                "retryable_failure_kinds": ["environment"],
+            },
+            attempt=1,
+            lease=None,
+            failure=None,
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project)
+                await repositories.artifacts.add(artifact)
+                await repositories.artifacts.add_version(version)
+                await repositories.tasks.create(task)
+            sandbox = _RecordingSandbox(store)
+            executor = BinaryImportExecutor(
+                database,
+                store,
+                adapters=(),
+                upx=_UnpacksUpx(),
+                pair_importer=BinaryPairImporter(database),
+                scratch_root=tmp_path,
+                sandbox=sandbox,
+                sandbox_image_digest="sha256:" + "a" * 64,
+            )
+            result = await executor.execute(job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED
+            unpacked_version_id = result["produced_artifact_version_ids"][0]
+            async with database.transaction() as repositories:
+                unpacked_version = await repositories.artifacts.get_version(unpacked_version_id)
+            unpacked_ref = unpacked_version["object_ref"]
+            assert unpacked_ref != packed.object_ref
+            assert sandbox.requests, "the sandbox was never asked to analyse anything"
+            assert [request["input_ref"] for request in sandbox.requests] == [unpacked_ref]
         finally:
             await database.dispose()
 

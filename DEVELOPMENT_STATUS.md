@@ -80,6 +80,10 @@
 | T40 智能体调查式审计与确认链路打通 | 待验证 | Codex（`dev` 分支，worktree `.claude/worktrees/t40-agent-audit`） | ①审计由一次性模型调用改为 `AgentLoop` 驱动的调查循环，新增 8 件只读调查工具（`audit_tools.py`）与 `CodeAuditAgent`（`code_audit.py`），静态扫描器输出降级为线索，候选仍经 PAIR 锚定与既有复核/确认门禁；模型未配置时回落原一次性路径。②修复二进制伪代码读取缺陷（`vulnweaver_pair.pseudocode_text` 成为伪代码形状唯一所有者）。③修复 `AgentLoop` 生成的 `AgentRun.prompt_hash` 缺 `sha256:` 前缀（schema 与 DB CHECK 约束均会拒绝，任何 loop run 都无法落库）。④Policy Engine 不再对自由文本参数做遍历扫描（此前 CWE-22 的 `../` rationale 会导致整个计划被拒）。⑤新增 `derive_established_facts`：类别事实终于可从证据推导；fuzz/proof 结算后对受影响的 Finding 以证据修订 id 重开复核。⑥智能体的 `verification_request`（「这个候选需要动态验证」）不再被丢弃，落为 CONTEXTUAL、weight 0 的溯源证据进入证据链，且结构上不可能满足确认策略。⑦`symbolic-execute`：模型可在循环内指定二进制地址发起定点符号执行，地址经索引校验锚定、未开启动态验证即拒绝、单次审计运行与地址双上限在步执行器内强制；样本仍只在 Sandbox Runner 内执行，产物是观察不是 Finding；`BinaryFactsAdapter` 新增 `analyze_ref` 以支持持有 CAS 引用者驱动 profile；worker 已接线（无 Runner 时该步骤结构化拒绝）。全量门禁 498 passed / 5 skipped（Dev Container 内 PostgreSQL/Redis 集成实跑）、ruff 通过、pyright 0 错误 | 内联符号执行的真实 Sandbox Runner 回放未执行（单元测试用注入的假 runner 覆盖拒绝/锚定/上限三条路径）；**真实模型对智能体本身的端到端已完成**（见验证记录），但整条管线与浏览器证据链回归、二进制侧真实模型验收未执行。已推送 `origin/dev` 并开 PR #60（base `main`），实跑 CI 全绿（`Determine change scope` pass、`Python quality gate` pass 2m22s） | 2026-09-11 |
 | T41 审计轨迹只读 API 投影 | 已完成 | Codex（`feat/web-audit-observability`，worktree `.worktree/web-audit-backend`） | 新增 `GET /api/tasks/{task_id}/audit-trail` 的明确 DTO：只按已核实的生产端 run-id 规则和实际 Job kind/tool/arguments 关联角色与 Job；含 attempt 的规则只能关联当前 attempt，历史 run 一律 `unknown`；无 attempt 的规则明确 `job_attempt=null`。Review 以 finding_id+attempt 精确重建，不接受裸前缀。T40 调查步骤为 `tool_steps`，仅投影原始 AgentRun 决策中已持久化的调用结果；观察输出未持久化则明确 `not_recorded`。二进制默认聚合为真实 `binary-import` Job 与已登记输出版本，不虚构细分进度 | Linux Dev Container：Ruff 通过；`pytest tests/api/test_api.py -q` 22 passed（1 个既有 Starlette 弃用警告）；Pyright 1.1.413 0 errors。响应 DTO 未新增长度上限，因此长的既有原始字段不会触发 response validation 截断/500 | 2026-09-11 |
 
+| T44 加壳+混淆教学样本 | 待验证 | Codex | 新增 `code/tests/fixtures/teaching-samples/packed-flattened.c` 与配套 `build-packed-sample.sh`：真实 UPX 加壳（壳）+ OLLVM `fla` 风格控制流平坦化（混淆），并带可判定的基准真值（FNV-1a 32 + `flatten_mix` 收尾，`REFERENCE_DIGEST=0x0770648E`，构建脚本运行 reference 构建自检该常量）；`-O0` 为承重选项（`-O1` 起 GCC 会把状态机折回循环）；Dev Container 镜像补装 UPX（bookworm-backports 固定版本，main 无此包）；fixture README 记录构建方式、真值判定标准与实测事实 | 按用户决定，本轮不跑混淆启发式的端到端判定、不投递部署栈 | 2026-09-11 |
+
+| T45 二进制脱壳链路修复 | 进行中 | Codex | 目标：识别壳（含自定义壳）→ 脱壳 → 反混淆 → 重构函数 → 正常进入审计。已定位首要缺陷：`BinaryFactsAdapter.analyze()` 丢弃 `analyzed_path`（`del path`）并改用 `input_ref`（= 上传的**加壳**工件），导致脱壳虽逐字节成功、但 Ghidra/objdump 分析的仍是加壳文件，`functions/basic_blocks/instructions/xrefs` 全 0，`assess_control_flow_flattening([],[])` 无输入，混淆从未被判定 | 按阶段修复并补测试 | 2026-09-11 |
+
 ### 3.1 课设差距补齐任务包定义（T25-T34）
 
 依据：对照《2026 网络空间安全课程设计》题目要求与代码实际的差距分析（Q-009）。所有任务包对应《系统实现模块拆分》既有模块（M01/M07/M10/M11/M13/M14/M15/M16）的验收标准，不改变架构与安全红线。
@@ -207,6 +211,7 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 | 日期 | 任务/变更 | 验证结果 | 后续工作 |
 |---|---|---|---|
 | 2026-09-11 | T43 前端删除项目/任务 + 任务级模型 token 预算（`feat/frontend-delete-and-token-budget`） | Linux Dev Container（临时副本）：API/Persistence/Orchestrator 定向回归 **151 passed / 1 skipped**（含新增 2 项删除端点测试与 1 项预算不设限测试）；Ruff 通过；Web `svelte-check` 0 错误 0 警告、Vite build 通过 | 未跑全仓 540+ 全量门禁与真实浏览器回归；未合并/部署 |
+| 2026-09-11 | T44 加壳+混淆教学样本（`packed-flattened.c` + `build-packed-sample.sh`） | Dev Container 内实跑构建：`ok: reference build reproduces REFERENCE_DIGEST`；打包 `14392 -> 5436` 字节（37.77%，UPX 4.2.2）；`upx -t` 通过；`upx -d` 还原与加壳前**逐字节一致**（`cmp` 通过）；脚本连续两次运行均 exit 0（已修复非幂等）。交叉版本：binary-tools 的 UPX 4.2.4 可正常 `-t` 解开 4.2.2 产物。以 `inspect_binary` 实测：加壳样本 `sections=0, packed=False, packer=None`，未加壳 reference `sections=35` | 见下条验证记录的两项未覆盖范围 |
 | 2026-09-11 | T42 任务详情双栏对齐（`fix/task-panel-alignment`） | Linux Dev Container：前端 13 passed，Svelte/TypeScript 0 错误 0 警告，Vite build 通过；浏览器几何核对确认 1600px 下双栏 top/bottom/headBottom/bodyTop 完全一致（680px），900px 下单列且无横向溢出 | 发布时重建 Web 镜像；真实任务内容仅需部署后冒烟确认 |
 | 2026-09-11 | WEB-INTEGRATE：中文审计工作台与 main 功能整合，Terra 只读审计轨迹接入 | Python 540 passed / 5 skipped、81.71%；前端 12 passed、Svelte/TypeScript 0 错误、Vite build 通过；桌面和 390px 窄屏验收通过 | 已推送并创建 PR #61；未合并/部署，发布前补真实部署 E2E，详细边界见验收文档 |
 | 2026-09-11 | T40 智能体调查式审计（`dev`，提交 `c7d3089`） | 新增 `audit_tools.py`（8 件只读调查工具 + `AuditWorkspace` + `AuditStepExecutor`）与 `code_audit.py`（`CodeAuditAgent`）；`semantic_audit` 改为循环驱动并在降级时回落一次性路径；修复二进制伪代码读取、`AgentRun.prompt_hash` 前缀、策略层自由文本误杀三项缺陷。Linux Dev Container：`ruff check .` 通过、`pyright` 0 错误、`pytest -q` **492 passed / 5 skipped**（PostgreSQL/Redis 集成实跑） | 真实模型端到端与动态验证自主权 |
@@ -221,6 +226,14 @@ T40 未完成项说明（属待验证/待实现，不构成阻碍）：
 更早记录见 [历史归档](code/docs/progress/2026-09-11-web-integration-history.md)。
 
 ## 9. 验证记录
+
+- 2026-09-11 T44 加壳+混淆样本的构建与解析事实（Dev Container 内实测，非推断）：
+
+  - **打包与还原成立**：UPX 4.2.2 压缩 `14392 -> 5436` 字节（37.77%）；`upx -t` 报 `[OK]`；`upx -d` 的输出与加壳前输入 `cmp` 逐字节一致。binary-tools 镜像的 UPX 4.2.4 同样能 `-t` 解开该 4.2.2 产物，故打包/解壳版本不一致不影响本样本。
+  - **头部识别对真实 UPX 样本恒不命中**：UPX 4.2.2 与 4.2.4 均删除 linux/amd64 产物的段头表（`readelf -S` → `There are no sections in this file`）。`inspect_binary()` 实测返回加壳样本 `format=elf arch=x86_64 sections=0 packed=False packer=None`，未加壳 reference `sections=35 packed=False`。`_packer_from_sections()` 只按段名匹配（`upx*`/`.aspack`/`.themida`），因此对 UPX 的 Linux 产物**永不触发**；对 PE 产物仍有效（UPX 压 PE 保留 `UPX0`/`UPX1`）。
+  - **还原路径不依赖上述识别**：`executor.py` 中 `_upx.unpack(...)` 是无条件调用，不以 `metadata.packed` 为门，`aggregate.packed/packer` 由解壳结果赋值。故本样本仍会被正常去壳，只是无段名这一路信号可供规划智能体参考。
+  - **对既有测试的提示**：`tests/binary_analysis/samples.py` 的 `elf64_sample(upx_section=True)` 是带 `UPX0` 段名的合成 ELF，不代表 UPX 在 Linux 上的真实输出形状。
+  - **未覆盖**：混淆启发式端到端判定未跑。`assess_control_flow_flattening()` 默认 `min_score=0.55`，`score = 0.7*(successor≥4 块占比) + 0.3*min(1, 间接跳转/块数)`；单一 dispatcher 在真实函数中占块比很低，本样本（5 状态）是否越阈取决于 Ghidra 报出的实际块划分，需实跑记录 `dispatcher_blocks` 与 `score` 才能断言。同样未投递部署栈、未产生 Job/PAIR 数据。
 
 - 2026-09-11 T42 双栏布局定向验收：`vulnweaver-dev-t40` 内 `pnpm --filter @vulnweaver/web test` 13 passed；`typecheck` 0 错误 0 警告；`build` 134 modules transformed。合同同形 Mock API + Edge Headless 在 1600×1000 下确认两面板 top/bottom/headBottom/bodyTop 完全一致，均高 680px，右侧正文独立滚动；900×900 下为单列自然高度，`document.scrollWidth` 890≤900。未修改或重建当前部署 Web 镜像，真实任务数据和写路径未执行。
 
