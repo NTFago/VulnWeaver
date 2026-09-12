@@ -1,16 +1,20 @@
 #!/bin/sh
 # Build obfuscated-heap-overflow: compile (gcc, Docker) -> verify obfuscation
-# features (flattening dispatch, opaque predicate, XOR-encoded strings).
+# features (nested flattening dispatchers, opaque predicates, position-dependent
+# XOR-encoded strings).
 #
 # Images (override via environment if the local mirror differs):
 #   VULNWEAVER_CC_IMAGE default gcc:13-bookworm
 #   VULNWEAVER_PACK_IMAGE default vulnweaver-binary-tools:fixed (readelf/objdump)
 #
-# Obfuscation is hand-written in the source: OLLVM-style flattening, an
-# always-true opaque predicate and XOR-encoded string constants. Distributed
-# as an unpacked ELF; source stays in src/ for registration.
+# Obfuscation is hand-written in the source: OLLVM-style flattening in two
+# nested state machines, always-true/always-false opaque predicates and
+# XOR-encoded string constants with a position-dependent key. Distributed as
+# an unpacked ELF; source stays in src/ for registration.
 #
 # Idempotent: dist/ is wiped and rebuilt from src/ on every run.
+# Behaviour assertions cover both registered findings:
+#   CWE-122 parse_token (original), CWE-415 free_session.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -43,13 +47,13 @@ docker_sh "$CC_IMAGE" '
 '
 
 # 2) Verify ELF + obfuscation signatures:
-#    a) indirect jump through the switch jump table (flattening dispatcher);
-#    b) the plaintext banner must NOT appear in `strings` (XOR encoding).
+#    a) indirect jump through the switch jump tables (nested dispatchers);
+#    b) neither banner may appear in `strings` (position-dependent XOR).
 docker_sh "$VERIFY_IMAGE" '
     set -eu
     readelf -h dist/obfuscated-heap-overflow | grep -qi "x86-64"
     objdump -d dist/obfuscated-heap-overflow | grep -Eq "jmp[[:space:]]+\\*"
-    if strings dist/obfuscated-heap-overflow | grep -q "TOKEN-PARSER"; then
+    if strings dist/obfuscated-heap-overflow | grep -Eq "TOKEN-PARSER|SESSION-VAULT"; then
         echo "[verify] banner leaked as plaintext; XOR encoding missing" >&2
         exit 1
     fi
@@ -58,7 +62,8 @@ docker_sh "$VERIFY_IMAGE" '
 
 # 3) Behaviour checks inside throwaway containers: a short token decodes and
 #    stores fine; an oversized token smashes the heap line buffer and the
-#    process aborts (glibc free() next-size check) or segfaults (CWE-122).
+#    process aborts or segfaults (CWE-122); --free replays free() on the same
+#    lease and aborts deterministically (CWE-415).
 docker_sh "$CC_IMAGE" '
     set -eu
     chmod +x dist/obfuscated-heap-overflow
@@ -72,7 +77,17 @@ docker_sh "$CC_IMAGE" '
         echo "[verify] expected abort/segfault for oversized token, got exit $status" >&2
         exit 1
     fi
-    echo "[verify] heap overflow trigger crashed as expected (exit $status)"
+    echo "[verify] CWE-122 heap overflow trigger crashed as expected (exit $status)"
+    # CWE-415: --free replays free() on the same lease -> glibc tcache abort.
+    set +e
+    dist/obfuscated-heap-overflow --free s1 >/dev/null 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 134 ]; then
+        echo "[verify] expected abort (134) for double free, got exit $status" >&2
+        exit 1
+    fi
+    echo "[verify] CWE-415 double free trigger aborted as expected (exit 134)"
 '
 
 # 4) SHA-256 manifest.
