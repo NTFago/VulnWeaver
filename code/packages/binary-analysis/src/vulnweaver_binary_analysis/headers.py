@@ -51,6 +51,7 @@ class _ContainerLayout:
     declared_sections: int
     declared_program_headers: int
     executable_regions: tuple[tuple[int, int], ...]
+    virtual_only_executable_sections: int = 0
 
 
 class BinaryInspectionError(ValueError):
@@ -391,10 +392,12 @@ def _inspect_pe(
         raise BinaryInspectionError(
             "pe_architecture_mismatch", "PE machine and optional header disagree"
         )
+    dotnet = _pe_clr_directory_present(optional, magic)
     section_offset = optional_offset + optional_size
     _validate_table(data, section_offset, 40, section_count, 40, "PE section header")
     sections: list[BinarySection] = []
     executable_regions: list[tuple[int, int]] = []
+    virtual_only_executable = 0
     for index in range(section_count):
         position = section_offset + index * 40
         name = data[position : position + 8].split(b"\0", 1)[0].decode("ascii", "replace")
@@ -407,6 +410,8 @@ def _inspect_pe(
         _slice(data, raw_offset, raw_size, f"PE section {name}")
         if characteristics & _PE_MEM_EXECUTE:
             executable_regions.append((raw_offset, raw_size))
+            if virtual_size > 0 and raw_size == 0:
+                virtual_only_executable += 1
         sections.append(
             BinarySection(
                 name=name,
@@ -428,15 +433,36 @@ def _inspect_pe(
             image_base=image_base,
             entry_point=image_base + entry_rva,
             sections=tuple(sections),
+            dotnet=dotnet,
         ),
         _ContainerLayout(
             declared_sections=section_count,
-            # PE has no program header table; structure-based packing signals do
-            # not apply, so the heuristic falls back to segment entropy alone.
+            # PE has no program header table; the entropy bar alone would miss
+            # compressed-but-not-encrypted shells (UPX lands ~7.26), so the
+            # layout also carries the raw-less executable section count.
             declared_program_headers=0,
             executable_regions=tuple(executable_regions),
+            virtual_only_executable_sections=virtual_only_executable,
         ),
     )
+
+
+def _pe_clr_directory_present(optional: bytes, magic: int) -> bool:
+    """A non-empty CLR runtime header (data directory index 14) marks a .NET image.
+
+    .NET assemblies need their own unpacking strategy (de4dot), so the inspector
+    reports the flag instead of leaving every managed image looking like a plain
+    native PE.
+    """
+    count_offset = 92 if magic == 0x10B else 108
+    directories_offset = 96 if magic == 0x10B else 112
+    if len(optional) < count_offset + 4:
+        return False
+    directory_count = struct.unpack_from("<I", optional, count_offset)[0]
+    if directory_count < 15 or len(optional) < directories_offset + 15 * 8:
+        return False
+    rva, size = struct.unpack_from("<II", optional, directories_offset + 14 * 8)
+    return rva != 0 and size != 0
 
 
 def _pe_architecture(machine: int) -> BinaryArchitecture:
@@ -540,13 +566,21 @@ def _heuristic_packed(data: bytes, layout: _ContainerLayout) -> bool:
     """
     entropy = max(
         (
-            _entropy(data[offset : offset + size])
+            shannon_entropy(data[offset : offset + size])
             for offset, size in layout.executable_regions
             if size >= _MIN_ENTROPY_BYTES
         ),
         default=0.0,
     )
     if entropy >= _ENTROPY_ENCRYPTED:
+        return True
+    if layout.virtual_only_executable_sections > 0:
+        # A packed PE hands the loader an executable section with no file
+        # backing -- the stub fills it at runtime (UPX0, MPRESS's tail section
+        # and friends).  Ordinary uninitialized sections like .bss are never
+        # executable, so the flag cannot fire on toolchain output.  This
+        # catches compressed-but-not-encrypted bodies whose entropy (UPX
+        # measures ~7.26 on linux/amd64) sits below every entropy bar.
         return True
     stripped_container = (
         layout.declared_sections == 0
@@ -555,7 +589,7 @@ def _heuristic_packed(data: bytes, layout: _ContainerLayout) -> bool:
     return stripped_container and entropy >= _ENTROPY_PACKED
 
 
-def _entropy(chunk: bytes) -> float:
+def shannon_entropy(chunk: bytes) -> float:
     """Shannon entropy of a byte string in bits per byte; 0.0 when empty."""
     if not chunk:
         return 0.0

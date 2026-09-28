@@ -343,15 +343,15 @@ class ObjdumpAdapter:
                 self._run(("-p", str(path)), path, limits, cancellation, include_path=False),
             )
         except ToolUnavailable:
-            return ToolContribution(run=_unavailable_run(self.name, "executable_not_found"))
+            return ToolContribution(run=unavailable_tool_run(self.name, "executable_not_found"))
         except ToolCancelled:
             raise
         except TimeoutError:
-            return ToolContribution(run=_failed_run(self.name, "timeout", None))
+            return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
         except ToolOutputLimitExceeded:
-            return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
+            return ToolContribution(run=failed_tool_run(self.name, "output_limit_exceeded", None))
         version = _first_line(version_result.stdout)
-        raw = _bounded_text(
+        raw = bounded_tool_text(
             b"\n--- disassembly ---\n"
             + disassembly.stdout
             + b"\n--- symbols ---\n"
@@ -437,14 +437,16 @@ class DetectItEasyAdapter:
                 cwd=path.parent,
             )
         except ToolUnavailable:
-            return ToolContribution(run=_unavailable_run(self.name, "executable_not_found"))
+            return ToolContribution(run=unavailable_tool_run(self.name, "executable_not_found"))
         except ToolCancelled:
             raise
         except TimeoutError:
-            return ToolContribution(run=_failed_run(self.name, "timeout", None))
+            return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
         except ToolOutputLimitExceeded:
-            return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-        output = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
+            return ToolContribution(run=failed_tool_run(self.name, "output_limit_exceeded", None))
+        output = bounded_tool_text(
+            result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
+        )
         compiler, packer = _detect_compiler_and_packer(output)
         return ToolContribution(
             run=BinaryToolRun(
@@ -486,16 +488,19 @@ class UpxAdapter:
                 cwd=path.parent,
             )
         except ToolUnavailable:
-            return UpxOutcome(run=_unavailable_run(self.name, "executable_not_found"), packed=False)
+            return UpxOutcome(
+                run=unavailable_tool_run(self.name, "executable_not_found"),
+                packed=False,
+            )
         except ToolCancelled:
             raise
         except TimeoutError:
-            return UpxOutcome(run=_failed_run(self.name, "test_timeout", None), packed=False)
+            return UpxOutcome(run=failed_tool_run(self.name, "test_timeout", None), packed=False)
         except ToolOutputLimitExceeded:
             return UpxOutcome(
-                run=_failed_run(self.name, "test_output_limit_exceeded", None), packed=False
+                run=failed_tool_run(self.name, "test_output_limit_exceeded", None), packed=False
             )
-        tested_text = _bounded_text(
+        tested_text = bounded_tool_text(
             tested.stdout + b"\n" + tested.stderr, limits.max_raw_output_chars
         )
         if tested.exit_code != 0:
@@ -522,13 +527,16 @@ class UpxAdapter:
             )
         except TimeoutError:
             return UpxOutcome(
-                run=_failed_run(self.name, "unpack_timeout", tested_text), packed=True
+                run=failed_tool_run(self.name, "unpack_timeout", tested_text), packed=True
             )
         except ToolOutputLimitExceeded:
             return UpxOutcome(
-                run=_failed_run(self.name, "unpack_output_limit_exceeded", tested_text), packed=True
+                run=failed_tool_run(
+                    self.name, "unpack_output_limit_exceeded", tested_text
+                ),
+                packed=True,
             )
-        raw = _bounded_text(
+        raw = bounded_tool_text(
             tested.stdout
             + tested.stderr
             + b"\n--- unpack ---\n"
@@ -538,7 +546,10 @@ class UpxAdapter:
         )
         if unpacked.exit_code != 0 or not destination.is_file():
             return UpxOutcome(
-                run=_failed_run(self.name, "unpack_failed", raw, unpacked.exit_code), packed=True
+                run=failed_tool_run(
+                    self.name, "unpack_failed", raw, unpacked.exit_code
+                ),
+                packed=True,
             )
         return UpxOutcome(
             run=BinaryToolRun(
@@ -575,7 +586,7 @@ class GhidraHeadlessAdapter:
         cancellation: asyncio.Event,
     ) -> ToolContribution:
         if not self._executable or self._script_directory is None:
-            return ToolContribution(run=_unavailable_run(self.name, "not_configured"))
+            return ToolContribution(run=unavailable_tool_run(self.name, "not_configured"))
         with tempfile.TemporaryDirectory(prefix="vulnweaver-ghidra-", dir=path.parent) as temporary:
             root = Path(temporary)
             # Ghidra refuses to create the project directory itself.
@@ -606,17 +617,21 @@ class GhidraHeadlessAdapter:
                     cwd=root,
                 )
             except ToolUnavailable:
-                return ToolContribution(run=_unavailable_run(self.name, "executable_not_found"))
+                return ToolContribution(run=unavailable_tool_run(self.name, "executable_not_found"))
             except ToolCancelled:
                 raise
             except TimeoutError:
-                return ToolContribution(run=_failed_run(self.name, "timeout", None))
+                return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
             except ToolOutputLimitExceeded:
-                return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
+                return ToolContribution(
+                    run=failed_tool_run(self.name, "output_limit_exceeded", None)
+                )
+            raw = bounded_tool_text(
+                result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
+            )
             if result.exit_code != 0 or not output.is_file():
                 return ToolContribution(
-                    run=_failed_run(self.name, "analysis_failed", raw, result.exit_code)
+                    run=failed_tool_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
                 document = _load_json_file(output, limits.max_tool_output_bytes)
@@ -631,7 +646,7 @@ class GhidraHeadlessAdapter:
                 ) = _parse_structured_output(document, metadata, limits)
             except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
                 return ToolContribution(
-                    run=_failed_run(self.name, "invalid_export", raw, result.exit_code)
+                    run=failed_tool_run(self.name, "invalid_export", raw, result.exit_code)
                 )
             return ToolContribution(
                 run=BinaryToolRun(
@@ -681,9 +696,11 @@ class AngrAdapter:
         target_addresses: tuple[int, ...],
     ) -> ToolContribution:
         if not self._enabled:
-            return ToolContribution(run=_unavailable_run(self.name, "not_configured"))
+            return ToolContribution(run=unavailable_tool_run(self.name, "not_configured"))
         if importlib.util.find_spec("angr") is None:
-            return ToolContribution(run=_unavailable_run(self.name, "python_package_not_installed"))
+            return ToolContribution(
+                run=unavailable_tool_run(self.name, "python_package_not_installed")
+            )
         with tempfile.TemporaryDirectory(prefix="vulnweaver-angr-", dir=path.parent) as temporary:
             output = Path(temporary) / "angr.json"
             try:
@@ -708,17 +725,21 @@ class AngrAdapter:
                     cwd=path.parent,
                 )
             except ToolUnavailable:
-                return ToolContribution(run=_unavailable_run(self.name, "python_not_found"))
+                return ToolContribution(run=unavailable_tool_run(self.name, "python_not_found"))
             except ToolCancelled:
                 raise
             except TimeoutError:
-                return ToolContribution(run=_failed_run(self.name, "timeout", None))
+                return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
             except ToolOutputLimitExceeded:
-                return ToolContribution(run=_failed_run(self.name, "output_limit_exceeded", None))
-            raw = _bounded_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
+                return ToolContribution(
+                    run=failed_tool_run(self.name, "output_limit_exceeded", None)
+                )
+            raw = bounded_tool_text(
+                result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
+            )
             if result.exit_code != 0 or not output.is_file():
                 return ToolContribution(
-                    run=_failed_run(self.name, "analysis_failed", raw, result.exit_code)
+                    run=failed_tool_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
                 document = _load_json_file(output, limits.max_tool_output_bytes)
@@ -733,7 +754,7 @@ class AngrAdapter:
                 ) = _parse_structured_output(document, metadata, limits)
             except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
                 return ToolContribution(
-                    run=_failed_run(self.name, "invalid_export", raw, result.exit_code)
+                    run=failed_tool_run(self.name, "invalid_export", raw, result.exit_code)
                 )
             return ToolContribution(
                 run=BinaryToolRun(
@@ -1262,11 +1283,11 @@ def _first_line(value: bytes) -> str | None:
     return text[0][:128] if text else None
 
 
-def _bounded_text(value: bytes, limit: int) -> str:
+def bounded_tool_text(value: bytes, limit: int) -> str:
     return value[:limit].decode("utf-8", "replace")
 
 
-def _unavailable_run(name: str, reason: str) -> BinaryToolRun:
+def unavailable_tool_run(name: str, reason: str) -> BinaryToolRun:
     return BinaryToolRun(
         tool_name=name,
         tool_version=None,
@@ -1277,7 +1298,7 @@ def _unavailable_run(name: str, reason: str) -> BinaryToolRun:
     )
 
 
-def _failed_run(
+def failed_tool_run(
     name: str, reason: str, raw_output: str | None, exit_code: int | None = None
 ) -> BinaryToolRun:
     return BinaryToolRun(

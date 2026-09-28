@@ -2,9 +2,14 @@
 """Sandboxed binary-analysis entrypoint running the real VulnWeaver adapters.
 
 The sandbox materializes the target ELF/PE at /input/input.bin. This entrypoint
-inspects headers, detects compiler/packer with DIE, tests and performs UPX
-unpacking, disassembles with objdump, and runs bounded Ghidra headless
-decompilation, then publishes one bounded binary-facts.json to the output dir.
+inspects headers, detects compiler/packer with DIE, runs the layered static
+unpacking chain (UPX, de4dot for .NET, unipacker emulation, XOR recovery,
+LIEF rebuild for broken dumps), disassembles with objdump, runs bounded Ghidra
+headless decompilation, and publishes one bounded binary-facts.json to the
+output dir.
+
+With --mode unpack it runs only detection plus the unpacking chain and emits a
+binary-unpack.json report plus the unpacked image as unpacked.bin.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import json
 import os
 import shutil
@@ -22,10 +28,16 @@ from vulnweaver_binary_analysis import (
     AngrAdapter,
     BinaryAnalysisLimits,
     BinaryMetadata,
+    De4dotUnpacker,
     DetectItEasyAdapter,
     GhidraHeadlessAdapter,
+    LiefRebuilder,
     ObjdumpAdapter,
+    UnipackerUnpacker,
+    UnpackerChain,
+    UpxCliUnpacker,
     UpxAdapter,
+    XorRegionUnpacker,
     extract_strings,
     inspect_binary,
 )
@@ -58,20 +70,27 @@ def _sampled(items: tuple, limit: int = 5) -> list[object]:
     return list(items[:limit])
 
 
-async def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--max-functions", type=int, required=True)
-    parser.add_argument("--max-instructions", type=int, required=True)
-    parser.add_argument("--max-pseudocode-functions", type=int, required=True)
-    parser.add_argument("--target-addresses", default="")
-    parser.add_argument("--angr-enabled", action="store_true")
-    args = parser.parse_args()
-    if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
-        print("binary limits must be positive", file=sys.stderr)
-        return 2
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
+
+def _full_unpacker_chain() -> UnpackerChain:
+    return UnpackerChain(
+        (
+            UpxCliUnpacker(UpxAdapter()),
+            De4dotUnpacker(),
+            UnipackerUnpacker(),
+            XorRegionUnpacker(),
+        ),
+        rebuilder=LiefRebuilder(),
+    )
+
+
+async def _prepare(args: argparse.Namespace) -> tuple[Path, BinaryMetadata, BinaryAnalysisLimits, asyncio.Event]:
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     workdir = Path("/work") / "run"
@@ -86,96 +105,155 @@ async def main() -> int:
         max_instructions=args.max_instructions,
         max_pseudocode_functions=args.max_pseudocode_functions,
     )
+    # The Ghidra adapter creates scratch space next to the target, so the
+    # analysis copy must live on the writable /work tmpfs, not /input.
+    target = workdir / "target"
+    shutil.copyfile(args.input, target)
+    target.chmod(0o755)
+    metadata: BinaryMetadata = inspect_binary(target, limits)
+    return target, metadata, limits, cancellation
+
+
+async def _unpack_mode(args: argparse.Namespace) -> int:
+    target, metadata, limits, cancellation = await _prepare(args)
+    die = await DetectItEasyAdapter().analyze(target, metadata, limits, cancellation)
+    outcome = await _full_unpacker_chain().run(target, metadata, limits, cancellation)
+    report: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "source_digest": _sha256(target),
+        "dotnet": metadata.dotnet,
+        "die": {
+            "compiler": die.compiler,
+            "packer": die.packer,
+            "packed": die.packed,
+            "run": dict(die.run),
+        },
+        "tool_runs": [dict(run) for run in outcome.runs],
+        "unpacked": outcome.unpacked_path is not None,
+        "method": outcome.method,
+        "methods": list(outcome.methods),
+        "rounds": outcome.rounds,
+        "packed": outcome.packed,
+    }
+    if outcome.unpacked_path is not None:
+        destination = args.output_dir / "unpacked.bin"
+        shutil.copyfile(outcome.unpacked_path, destination)
+        report["unpacked_digest"] = _sha256(destination)
+    payload = json.dumps(report, ensure_ascii=True, sort_keys=True, default=str)
+    if len(payload) > 1024 * 1024:
+        payload = payload[: 1024 * 1024]
+    (args.output_dir / "binary-unpack.json").write_text(payload, encoding="utf-8")
+    return 0
+
+
+async def _facts_mode(args: argparse.Namespace) -> int:
+    target, metadata, limits, cancellation = await _prepare(args)
+    die = await DetectItEasyAdapter().analyze(target, metadata, limits, cancellation)
+    unpacked_path = Path("/work") / "run" / "unpacked"
+    upx = await UpxAdapter().unpack(target, unpacked_path, limits, cancellation)
+    objdump = await ObjdumpAdapter().analyze(target, metadata, limits, cancellation)
+    ghidra = await GhidraHeadlessAdapter(
+        GHIDRA_EXECUTABLE, GHIDRA_SCRIPTS
+    ).analyze(target, metadata, limits, cancellation)
+    targets = tuple(
+        sorted({int(value) for value in args.target_addresses.split(",") if value})
+    )
+    if len(targets) > limits.max_symbolic_functions or any(value < 0 for value in targets):
+        print("target addresses are invalid", file=sys.stderr)
+        return 2
+    angr = await AngrAdapter(enabled=args.angr_enabled).analyze_targets(
+        target, metadata, limits, cancellation, targets
+    )
+
+    if ghidra.functions:
+        functions = ghidra.functions
+        instructions = ghidra.instructions
+        basic_blocks = ghidra.basic_blocks
+        xrefs = ghidra.xrefs
+        normalized_from = "ghidra"
+    else:
+        functions = objdump.functions
+        instructions = objdump.instructions
+        basic_blocks = objdump.basic_blocks
+        xrefs = objdump.xrefs
+        normalized_from = "objdump"
+    # objdump is the only source of imports; the Ghidra export emits an
+    # empty list, so this one stays with objdump either way.
+    imports = objdump.imports or ghidra.imports
+
+    facts = {
+        "schema_version": SCHEMA_VERSION,
+        "metadata": dataclasses.asdict(metadata),
+        "tools": {
+            "die": {
+                **_run_dict(die),
+                "compiler": die.compiler,
+                "packer": die.packer,
+                "packed": die.packed,
+            },
+            "upx": {
+                "run": dict(upx.run),
+                "packed": upx.packed,
+                "unpacked": upx.unpacked_path is not None,
+            },
+            "objdump": _run_dict(objdump),
+            "ghidra": _run_dict(ghidra),
+            "angr": _run_dict(angr),
+        },
+        # These normalized collections are consumed by the worker-side
+        # PAIR importer; tool-specific runs above remain available for
+        # provenance and diagnostics.
+        #
+        # Ghidra is the primary source because it recovers function
+        # boundaries by flow analysis.  objdump recovers them from the
+        # symbol table instead, so on a stripped image -- which is what
+        # every unpacked sample is -- it reports only section-level labels
+        # and lumps the whole of .text into one "function", which is worse
+        # than useless to a per-function assessment.  objdump remains the
+        # fallback for when Ghidra is unconfigured or produced nothing, and
+        # `normalized_from` records which source was used.
+        "normalized_from": normalized_from,
+        "functions": list(functions),
+        "instructions": list(instructions),
+        "basic_blocks": list(basic_blocks),
+        "xrefs": list(xrefs),
+        "pseudocode": list(ghidra.pseudocode),
+        "symbolic_facts": list(angr.symbolic_facts),
+        "imports": list(imports),
+        "strings": list(extract_strings(target, metadata, limits)),
+        "samples": {
+            "objdump_functions": _sampled(objdump.functions),
+            "ghidra_pseudocode": _sampled(ghidra.pseudocode),
+        },
+    }
+    payload = json.dumps(facts, ensure_ascii=True, sort_keys=True, default=str)
+    if len(payload) > 8 * 1024 * 1024:
+        payload = payload[: 8 * 1024 * 1024]
+    (args.output_dir / "binary-facts.json").write_text(payload, encoding="utf-8")
+    return 0
+
+
+async def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=("facts", "unpack"), default="facts")
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    # The facts profile passes explicit limits; the unpack profile passes none,
+    # so these fall back to the same defaults BinaryAnalysisLimits would pick.
+    parser.add_argument("--max-functions", type=int, default=20_000)
+    parser.add_argument("--max-instructions", type=int, default=200_000)
+    parser.add_argument("--max-pseudocode-functions", type=int, default=20_000)
+    parser.add_argument("--target-addresses", default="")
+    parser.add_argument("--angr-enabled", action="store_true")
+    args = parser.parse_args()
+    if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
+        print("binary limits must be positive", file=sys.stderr)
+        return 2
+
     try:
-        # The Ghidra adapter creates scratch space next to the target, so the
-        # analysis copy must live on the writable /work tmpfs, not /input.
-        target = workdir / "target"
-        shutil.copyfile(args.input, target)
-        target.chmod(0o755)
-        metadata: BinaryMetadata = inspect_binary(target, limits)
-        die = await DetectItEasyAdapter().analyze(target, metadata, limits, cancellation)
-        unpacked_path = workdir / "unpacked"
-        upx = await UpxAdapter().unpack(target, unpacked_path, limits, cancellation)
-        objdump = await ObjdumpAdapter().analyze(target, metadata, limits, cancellation)
-        ghidra = await GhidraHeadlessAdapter(
-            GHIDRA_EXECUTABLE, GHIDRA_SCRIPTS
-        ).analyze(target, metadata, limits, cancellation)
-        targets = tuple(
-            sorted({int(value) for value in args.target_addresses.split(",") if value})
-        )
-        if len(targets) > limits.max_symbolic_functions or any(value < 0 for value in targets):
-            print("target addresses are invalid", file=sys.stderr)
-            return 2
-        angr = await AngrAdapter(enabled=args.angr_enabled).analyze_targets(
-            target, metadata, limits, cancellation, targets
-        )
-
-        if ghidra.functions:
-            functions = ghidra.functions
-            instructions = ghidra.instructions
-            basic_blocks = ghidra.basic_blocks
-            xrefs = ghidra.xrefs
-            normalized_from = "ghidra"
-        else:
-            functions = objdump.functions
-            instructions = objdump.instructions
-            basic_blocks = objdump.basic_blocks
-            xrefs = objdump.xrefs
-            normalized_from = "objdump"
-        # objdump is the only source of imports; the Ghidra export emits an
-        # empty list, so this one stays with objdump either way.
-        imports = objdump.imports or ghidra.imports
-
-        facts = {
-            "schema_version": SCHEMA_VERSION,
-            "metadata": dataclasses.asdict(metadata),
-            "tools": {
-                "die": {
-                    **_run_dict(die),
-                    "compiler": die.compiler,
-                    "packer": die.packer,
-                    "packed": die.packed,
-                },
-                "upx": {
-                    "run": dict(upx.run),
-                    "packed": upx.packed,
-                    "unpacked": upx.unpacked_path is not None,
-                },
-                "objdump": _run_dict(objdump),
-                "ghidra": _run_dict(ghidra),
-                "angr": _run_dict(angr),
-            },
-            # These normalized collections are consumed by the worker-side
-            # PAIR importer; tool-specific runs above remain available for
-            # provenance and diagnostics.
-            #
-            # Ghidra is the primary source because it recovers function
-            # boundaries by flow analysis.  objdump recovers them from the
-            # symbol table instead, so on a stripped image -- which is what
-            # every unpacked sample is -- it reports only section-level labels
-            # and lumps the whole of .text into one "function", which is worse
-            # than useless to a per-function assessment.  objdump remains the
-            # fallback for when Ghidra is unconfigured or produced nothing, and
-            # `normalized_from` records which source was used.
-            "normalized_from": normalized_from,
-            "functions": list(functions),
-            "instructions": list(instructions),
-            "basic_blocks": list(basic_blocks),
-            "xrefs": list(xrefs),
-            "pseudocode": list(ghidra.pseudocode),
-            "symbolic_facts": list(angr.symbolic_facts),
-            "imports": list(imports),
-            "strings": list(extract_strings(target, metadata, limits)),
-            "samples": {
-                "objdump_functions": _sampled(objdump.functions),
-                "ghidra_pseudocode": _sampled(ghidra.pseudocode),
-            },
-        }
-        payload = json.dumps(facts, ensure_ascii=True, sort_keys=True, default=str)
-        if len(payload) > 8 * 1024 * 1024:
-            payload = payload[: 8 * 1024 * 1024]
-        (output_dir / "binary-facts.json").write_text(payload, encoding="utf-8")
-        return 0
+        if args.mode == "unpack":
+            return await _unpack_mode(args)
+        return await _facts_mode(args)
     except Exception as error:  # the structured output is the tool contract
         import traceback
 

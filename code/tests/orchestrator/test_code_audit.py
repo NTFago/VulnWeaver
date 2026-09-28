@@ -34,6 +34,7 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_model_gateway import ModelCallResult
 from vulnweaver_orchestrator import (
+    AUDIT_CHECKPOINT_NODE,
     AUDIT_TOOLS,
     AgentLoopBudget,
     AuditStepExecutor,
@@ -814,5 +815,162 @@ def test_an_audit_that_stops_early_never_reports_no_findings(
             assert runs[0]["failure"]["code"] == "loop_planning_round_budget_exhausted"
         finally:
             await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def _interrupted_checkpoint_state(job_id: str, run_id: str, function_version: str) -> JsonObject:
+    """What the progress callback would have persisted after round 1 crashed."""
+    step_document = {
+        "step_id": "s1",
+        "tool_name": "code-function-list",
+        "tool_version": "1.0.0",
+        "plan_id": f"{run_id}-plan-1",
+        "succeeded": True,
+        "output": {"functions": 1},
+        "artifact_refs": [function_version],
+        "failure_code": None,
+    }
+    return cast(
+        JsonObject,
+        {
+            "schema_version": "1.0.0",
+            "job_id": job_id,
+            "run_id": run_id,
+            "completed": False,
+            "rounds": 1,
+            "decisions": [
+                {
+                    "sequence": 1,
+                    "decision": "plan_accepted",
+                    "reason": "plan approved with 1 step(s): survey the index",
+                    "created_at": TIMESTAMP,
+                },
+                {
+                    "sequence": 2,
+                    "decision": "step_executed",
+                    "reason": "step s1 via code-function-list",
+                    "created_at": TIMESTAMP,
+                },
+            ],
+            "steps": [step_document],
+            "last_round_steps": [step_document],
+            "reported": [
+                {
+                    "cwe_id": "CWE-95",
+                    "title": "eval on request data",
+                    "severity": "high",
+                    "rationale": "request data reaches eval",
+                    "path": "src/app.py",
+                    "start_line": 2,
+                    "end_line": None,
+                    "address": None,
+                    "verification_request": None,
+                    "verification_reason": None,
+                    "step_id": "s2",
+                }
+            ],
+            "usage": {"input_tokens": 900, "output_tokens": 120},
+            "artifact_refs": [function_version],
+            "model_label": "audit/test-model",
+        },
+    )
+
+
+def test_audit_resumes_from_an_interrupted_checkpoint(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    async def scenario() -> None:
+        from vulnweaver_orchestrator import InMemoryCheckpointStore
+
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(
+            database,
+            lambda vid: [source_function(f"pair-fn:{uuid4().hex}", vid, "src/app.py")],
+        )
+        async with database.transaction() as repositories:
+            functions = await repositories.pair.list_functions(version_id)
+        function_version = functions[0]["artifact_version_id"]
+        task_id = f"task:{suffix}"
+        job_id = f"job:audit:{suffix}"
+        run_id = f"agent-run:semantic-audit:{suffix}-agent"
+
+        checkpoints = InMemoryCheckpointStore()
+        await checkpoints.save(
+            task_id,
+            AUDIT_CHECKPOINT_NODE,
+            _interrupted_checkpoint_state(job_id, run_id, function_version),
+            created_at=TIMESTAMP,
+        )
+        # The resumed model immediately concludes: it must see the prior round's
+        # observation in its first message rather than starting from zero.
+        planner = ScriptedPlanner([])
+        agent = CodeAuditAgent(
+            database,
+            planner,
+            LocalContentAddressedStore(tmp_path),
+            checkpoint_store=checkpoints,
+        )
+        outcome = await agent.audit(
+            task_id=task_id,
+            job_id=job_id,
+            attempt=2,
+            run_id=f"{run_id}-retry",
+            input_refs=(version_id,),
+        )
+        assert outcome.completed
+        assert planner.calls == 1
+        assert outcome.steps and outcome.steps[0].step_id == "s1"
+        # The finding reported before the crash survives the takeover.
+        assert [finding.cwe_id for finding in outcome.findings] == ["CWE-95"]
+        decisions = outcome.run["decisions"]
+        assert [record["sequence"] for record in decisions][:2] == [1, 2]
+        assert decisions[-1]["decision"] == "loop_completed"
+        # The terminal checkpoint marks the investigation done for this job.
+        latest = await checkpoints.latest(task_id)
+        assert latest is not None and latest.state["completed"] is True
+        await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_completed_checkpoint_is_never_replayed(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    async def scenario() -> None:
+        from vulnweaver_orchestrator import InMemoryCheckpointStore
+
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(
+            database,
+            lambda vid: [source_function(f"pair-fn:{uuid4().hex}", vid, "src/app.py")],
+        )
+        task_id = f"task:{suffix}"
+        job_id = f"job:audit:{suffix}"
+        checkpoints = InMemoryCheckpointStore()
+        state = _interrupted_checkpoint_state(
+            job_id, f"agent-run:semantic-audit:{suffix}-agent", version_id
+        )
+        state["completed"] = True
+        await checkpoints.save(task_id, AUDIT_CHECKPOINT_NODE, state, created_at=TIMESTAMP)
+
+        planner = ScriptedPlanner([])
+        agent = CodeAuditAgent(
+            database,
+            planner,
+            LocalContentAddressedStore(tmp_path),
+            checkpoint_store=checkpoints,
+        )
+        outcome = await agent.audit(
+            task_id=task_id,
+            job_id=job_id,
+            attempt=2,
+            run_id=f"agent-run:semantic-audit:{suffix}-retry",
+            input_refs=(version_id,),
+        )
+        # No resumed findings or steps: the completed marker forces a fresh run.
+        assert outcome.findings == ()
+        assert all(step.step_id != "s1" for step in outcome.steps)
+        await database.dispose()
 
     asyncio.run(scenario())

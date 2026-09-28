@@ -59,6 +59,7 @@ from vulnweaver_orchestrator import (
     FuzzJobScheduler,
     FuzzTarget,
     IndependentModelReviewer,
+    PostgresCheckpointStore,
     ReversePlanningAgent,
     ReviewJobExecutor,
     ReviewJobScheduler,
@@ -493,6 +494,10 @@ def _model_executors(
             gateway,
             store,
             sink=DatabaseAgentRunSink(database),
+            # Durable resume for the investigation loop: each round's progress
+            # lands in orchestration_checkpoints, so a worker crash or lease
+            # takeover continues the audit instead of restarting it (ADR-029).
+            checkpoint_store=PostgresCheckpointStore(database),
             symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
             budget=_agent_loop_budget(audit_deadline_seconds),
         ),

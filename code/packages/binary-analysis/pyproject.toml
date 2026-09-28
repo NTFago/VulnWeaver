@@ -12,6 +12,18 @@ dependencies = [
     "vulnweaver-sandbox-runner",
 ]
 
+[project.optional-dependencies]
+# Fuller unpacking toolchain for the isolated binary-tools image: emulated PE
+# unpacking (unipacker) and LIEF-based PE rebuilding.  Optional so the worker
+# image stays lean and degrades to the static local chain without them.
+# setuptools is not for our own code: unipacker's unicorn fork still imports
+# distutils, which Python 3.12 removed and setuptools' .pth shim restores.
+unpack = [
+    "lief>=0.15,<1",
+    "setuptools<81",
+    "unipacker>=1.0.8,<2",
+]
+
 [build-system]
 requires = ["uv_build>=0.10.0,<0.11.0"]
 build-backend = "uv_build"

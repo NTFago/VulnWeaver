@@ -119,3 +119,23 @@ def test_rejects_section_ranges_outside_the_file(tmp_path: Path) -> None:
     with pytest.raises(BinaryInspectionError) as captured:
         inspect_binary(sample)
     assert captured.value.code == "invalid_range"
+
+
+def test_pe_with_virtual_only_executable_section_is_packed(tmp_path) -> None:
+    import struct as _struct
+
+    from tests.binary_analysis.samples import pe64_sample
+
+    # A packed PE's hallmark: an executable section with virtual size but no
+    # file backing, which the unpacking stub fills at runtime.  Ordinary
+    # uninitialized sections (.bss) are never executable and cannot fire this.
+    section_offset = 0x80 + 24 + 0xF0
+    data = bytearray(pe64_sample())
+    _struct.pack_into("<IIII", data, section_offset + 8, 0x2000, 0x1000, 0, 0)
+    packed = tmp_path / "virtual-only.exe"
+    packed.write_bytes(bytes(data))
+    plain = tmp_path / "plain.exe"
+    plain.write_bytes(pe64_sample())
+
+    assert inspect_binary(packed, BinaryAnalysisLimits()).packed
+    assert not inspect_binary(plain, BinaryAnalysisLimits()).packed

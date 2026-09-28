@@ -40,7 +40,9 @@ class BinaryAnalysisLimits:
     min_string_chars: int = 4
     max_tool_output_bytes: int = 8 * 1024 * 1024
     max_raw_output_chars: int = 1024 * 1024
-    command_timeout_seconds: float = 180.0
+    # Aligned with the sandbox request ceiling: one Ghidra/de4dot run over a
+    # real-world binary legitimately needs more than the old 180-second cap.
+    command_timeout_seconds: float = 600.0
 
     def __post_init__(self) -> None:
         positive = {
@@ -81,6 +83,7 @@ class BinaryMetadata:
     packed: bool = False
     packer: str | None = None
     compiler: str | None = None
+    dotnet: bool = False
 
     def offset_to_virtual_address(self, offset: int) -> int | None:
         for section in self.sections:

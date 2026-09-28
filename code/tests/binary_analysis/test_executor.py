@@ -14,6 +14,7 @@ from vulnweaver_binary_analysis import (
     BinaryImportExecutor,
     BinaryMetadata,
     ToolContribution,
+    UpxCliUnpacker,
     UpxOutcome,
 )
 from vulnweaver_contracts import (
@@ -262,7 +263,7 @@ def test_binary_executor_publishes_normalized_immutable_result_and_replays(
                 database,
                 store,
                 adapters=(_NormalizedAdapter(), _FailedGhidraAdapter()),
-                upx=_UnpacksUpx(),
+                unpackers=(UpxCliUnpacker(upx=_UnpacksUpx()),),
                 pair_importer=BinaryPairImporter(database),
                 scratch_root=tmp_path,
             )
@@ -511,7 +512,7 @@ def test_binary_executor_hands_the_sandbox_the_unpacked_image(
                 database,
                 store,
                 adapters=(),
-                upx=_UnpacksUpx(),
+                unpackers=(UpxCliUnpacker(upx=_UnpacksUpx()),),
                 pair_importer=BinaryPairImporter(database),
                 scratch_root=tmp_path,
                 sandbox=sandbox,

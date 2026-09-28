@@ -5,6 +5,7 @@ ARG DEBIAN_SECURITY_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian-security
 ARG DIE_VERSION=3.21
 ARG GHIDRA_VERSION=12.1.3
 ARG GHIDRA_BUILD_DATE=20260817
+ARG DE4DOT_VERSION=3.10.0
 ENV PYTHONUNBUFFERED=1 UV_LINK_MODE=copy PATH=/app/.venv/bin:$PATH UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
 
 RUN sed -i \
@@ -16,12 +17,19 @@ RUN sed -i \
     && apt-get update \
     && apt-get install --no-install-recommends -y \
       binutils upx-ucl openjdk-21-jdk-headless ca-certificates curl unzip \
+      mono-complete libmono-system-runtime4.0-cil \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL "https://github.com/horsicq/DIE-engine/releases/download/${DIE_VERSION}/die_${DIE_VERSION}_Debian_13_amd64.deb" \
       -o /tmp/die.deb \
     && dpkg -i /tmp/die.deb || (apt-get update && apt-get -f install -y && dpkg -i /tmp/die.deb) \
     && rm -f /tmp/die.deb
+
+RUN curl -fsSL "https://github.com/GDATAAdvancedAnalytics/de4dotEx/releases/download/${DE4DOT_VERSION}/de4dotEx-${DE4DOT_VERSION}-net48.zip" \
+      -o /tmp/de4dot.zip \
+    && unzip -q /tmp/de4dot.zip -d /opt/de4dot \
+    && ln -s "$(find /opt/de4dot -name 'de4dot.exe' | head -1)" /usr/local/bin/de4dot.exe \
+    && rm -f /tmp/de4dot.zip
 
 RUN curl -fsSL "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/ghidra_${GHIDRA_VERSION}_PUBLIC_${GHIDRA_BUILD_DATE}.zip" \
       -o /tmp/ghidra.zip \
@@ -35,14 +43,15 @@ RUN python -m pip install --no-cache-dir --index-url "${UV_DEFAULT_INDEX}" "uv>=
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY packages ./packages
-RUN uv sync --frozen --no-editable --package vulnweaver-binary-analysis
+RUN uv sync --frozen --no-editable --package vulnweaver-binary-analysis --extra unpack
 
 COPY deploy/ghidra/ExportVulnWeaver.java /opt/vulnweaver/ghidra-scripts/ExportVulnWeaver.java
 COPY apps/binary-tools/vulnweaver-binary-entrypoint /usr/local/bin/vulnweaver-binary-entrypoint
 RUN chmod 0555 /usr/local/bin/vulnweaver-binary-entrypoint \
-    && useradd --uid 10001 --create-home --shell /usr/sbin/nologin vulnweaver \
-    && rm -rf /home/vulnweaver && ln -s /work/home /home/vulnweaver
+      && useradd --uid 10001 --create-home --shell /usr/sbin/nologin vulnweaver \
+      && rm -rf /home/vulnweaver && ln -s /work/home /home/vulnweaver
 
 USER 10001:10001
-ENV GHIDRA_HEADLESS_EXECUTABLE=/opt/ghidra/support/analyzeHeadless
+ENV GHIDRA_HEADLESS_EXECUTABLE=/opt/ghidra/support/analyzeHeadless \
+    DE4DOT_EXECUTABLE=/usr/local/bin/de4dot.exe
 ENTRYPOINT ["vulnweaver-binary-entrypoint"]

@@ -63,7 +63,11 @@ services:
       - |
         set -eu
         root=/var/lib/vulnweaver/artifacts
-        mkdir -p "$$root/.staging" "$$root/objects"
+        # `objects/sha256` is pre-created because the root-run migrate service
+        # initializes the store before the uid-10001 consumers start; without
+        # this the store's first mkdir lands root-owned and every later write
+        # from api/worker fails with EACCES on a fresh volume.
+        mkdir -p "$$root/.staging" "$$root/objects/sha256"
         chown -R 10001:10001 "$$root"
     volumes:
       - artifact-data:/var/lib/vulnweaver/artifacts
