@@ -391,6 +391,7 @@ def _inspect_pe(
         raise BinaryInspectionError(
             "pe_architecture_mismatch", "PE machine and optional header disagree"
         )
+    dotnet = _pe_clr_directory_present(optional, magic)
     section_offset = optional_offset + optional_size
     _validate_table(data, section_offset, 40, section_count, 40, "PE section header")
     sections: list[BinarySection] = []
@@ -428,6 +429,7 @@ def _inspect_pe(
             image_base=image_base,
             entry_point=image_base + entry_rva,
             sections=tuple(sections),
+            dotnet=dotnet,
         ),
         _ContainerLayout(
             declared_sections=section_count,
@@ -437,6 +439,24 @@ def _inspect_pe(
             executable_regions=tuple(executable_regions),
         ),
     )
+
+
+def _pe_clr_directory_present(optional: bytes, magic: int) -> bool:
+    """A non-empty CLR runtime header (data directory index 14) marks a .NET image.
+
+    .NET assemblies need their own unpacking strategy (de4dot), so the inspector
+    reports the flag instead of leaving every managed image looking like a plain
+    native PE.
+    """
+    count_offset = 92 if magic == 0x10B else 108
+    directories_offset = 96 if magic == 0x10B else 112
+    if len(optional) < count_offset + 4:
+        return False
+    directory_count = struct.unpack_from("<I", optional, count_offset)[0]
+    if directory_count < 15 or len(optional) < directories_offset + 15 * 8:
+        return False
+    rva, size = struct.unpack_from("<II", optional, directories_offset + 14 * 8)
+    return rva != 0 and size != 0
 
 
 def _pe_architecture(machine: int) -> BinaryArchitecture:
@@ -540,7 +560,7 @@ def _heuristic_packed(data: bytes, layout: _ContainerLayout) -> bool:
     """
     entropy = max(
         (
-            _entropy(data[offset : offset + size])
+            shannon_entropy(data[offset : offset + size])
             for offset, size in layout.executable_regions
             if size >= _MIN_ENTROPY_BYTES
         ),
@@ -555,7 +575,7 @@ def _heuristic_packed(data: bytes, layout: _ContainerLayout) -> bool:
     return stripped_container and entropy >= _ENTROPY_PACKED
 
 
-def _entropy(chunk: bytes) -> float:
+def shannon_entropy(chunk: bytes) -> float:
     """Shannon entropy of a byte string in bits per byte; 0.0 when empty."""
     if not chunk:
         return 0.0

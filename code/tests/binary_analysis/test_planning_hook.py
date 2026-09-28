@@ -14,6 +14,7 @@ from vulnweaver_binary_analysis import (
     BinaryAnalysisLimits,
     BinaryImportExecutor,
     ToolContribution,
+    UpxCliUnpacker,
     UpxOutcome,
 )
 from vulnweaver_contracts import (
@@ -184,7 +185,7 @@ def test_planning_hook_receives_facts_and_targets_reach_generation_config(
                 database,
                 store,
                 adapters=(angr,),
-                upx=_NotPacked(),
+                unpackers=(UpxCliUnpacker(upx=_NotPacked()),),
                 scratch_root=tmp_path,
                 planning_hook=hook,
             )

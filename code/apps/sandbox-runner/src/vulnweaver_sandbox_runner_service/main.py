@@ -16,7 +16,12 @@ from typing import cast
 
 import uvicorn
 from vulnweaver_artifact_store import LocalContentAddressedStore
-from vulnweaver_binary_analysis import binary_command_profile, binary_tool_spec
+from vulnweaver_binary_analysis import (
+    binary_command_profile,
+    binary_tool_spec,
+    binary_unpack_command_profile,
+    binary_unpack_tool_spec,
+)
 from vulnweaver_contracts import ResourceBudget
 from vulnweaver_domain import ResolvedDeploymentConfig, resolve_deployment_config
 from vulnweaver_fuzzing import afl_casr_command_profile, afl_casr_tool_spec
@@ -163,6 +168,12 @@ def _build_runner_state(config: ResolvedDeploymentConfig | None) -> _RunnerState
             binary_tool_spec(binary_digest, _binary_resource_budget(config))
         )
         profiles.append(binary_command_profile(binary_ref, binary_digest))
+        # The unpack tool shares the binary-tools image: same digest, one more
+        # trusted command profile for the layered unpacking chain.
+        registry.register(
+            binary_unpack_tool_spec(binary_digest, _binary_resource_budget(config))
+        )
+        profiles.append(binary_unpack_command_profile(binary_ref, binary_digest))
     if proof_digest:
         registry.register(proof_tool_spec(proof_digest, _resource_budget(config)))
         profiles.append(proof_command_profile(proof_ref, proof_digest))

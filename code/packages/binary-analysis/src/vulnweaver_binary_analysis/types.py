@@ -81,6 +81,7 @@ class BinaryMetadata:
     packed: bool = False
     packer: str | None = None
     compiler: str | None = None
+    dotnet: bool = False
 
     def offset_to_virtual_address(self, offset: int) -> int | None:
         for section in self.sections:

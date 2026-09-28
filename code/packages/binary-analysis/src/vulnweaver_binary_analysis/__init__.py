@@ -27,6 +27,8 @@ from vulnweaver_binary_analysis.obfuscation import (
 from vulnweaver_binary_analysis.profiles import (
     binary_command_profile,
     binary_tool_spec,
+    binary_unpack_command_profile,
+    binary_unpack_tool_spec,
 )
 from vulnweaver_binary_analysis.tools import (
     AngrAdapter,
@@ -53,11 +55,25 @@ from vulnweaver_binary_analysis.types import (
     ToolContribution,
     UpxOutcome,
 )
+from vulnweaver_binary_analysis.unpacking import (
+    BinaryUnpackSandboxAdapter,
+    De4dotUnpacker,
+    LiefRebuilder,
+    UnipackerUnpacker,
+    UnpackAttempt,
+    UnpackChainOutcome,
+    Unpacker,
+    UnpackerChain,
+    UpxCliUnpacker,
+    XorRegionUnpacker,
+)
 
 __all__ = [
     "AngrAdapter",
     "binary_command_profile",
     "binary_tool_spec",
+    "binary_unpack_command_profile",
+    "binary_unpack_tool_spec",
     "BinaryAnalysisAggregate",
     "BinaryAnalysisExecutionError",
     "BinaryAnalysisLimits",
@@ -67,6 +83,9 @@ __all__ = [
     "ReadablePseudocodeHook",
     "BinaryInspectionError",
     "BinaryMetadata",
+    "BinaryUnpackSandboxAdapter",
+    "De4dotUnpacker",
+    "LiefRebuilder",
     "ObfuscationAssessment",
     "CriticalLogicCandidate",
     "BoundedCommandRunner",
@@ -79,9 +98,16 @@ __all__ = [
     "ToolContribution",
     "ToolOutputLimitExceeded",
     "ToolUnavailable",
+    "UnpackAttempt",
+    "UnpackChainOutcome",
+    "Unpacker",
+    "UnpackerChain",
+    "UnipackerUnpacker",
     "UpxAdapter",
+    "UpxCliUnpacker",
     "UpxUnpacker",
     "UpxOutcome",
+    "XorRegionUnpacker",
     "derive_objdump_control_flow",
     "extract_strings",
     "inspect_binary",

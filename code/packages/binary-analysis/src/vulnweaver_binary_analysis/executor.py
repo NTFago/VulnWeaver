@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Protocol, cast
+from typing import IO, Protocol, cast
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from vulnweaver_artifact_store import ArtifactStoreError, LocalContentAddressedStore, StoredObject
@@ -64,16 +64,34 @@ from vulnweaver_binary_analysis.tools import (
     GhidraHeadlessAdapter,
     ObjdumpAdapter,
     ToolCancelled,
+    ToolExecutionError,
     UpxAdapter,
-    UpxUnpacker,
 )
 from vulnweaver_binary_analysis.types import (
     BinaryAnalysisAggregate,
     BinaryAnalysisLimits,
     BinaryMetadata,
 )
+from vulnweaver_binary_analysis.unpacking import (
+    BinaryUnpackSandboxAdapter,
+    LiefRebuilder,
+    UnpackChainOutcome,
+    Unpacker,
+    UnpackerChain,
+    UpxCliUnpacker,
+    XorRegionUnpacker,
+)
 
 LOGGER = logging.getLogger("vulnweaver.binary_analysis")
+
+# Derived-artifact identity per final unpacking method.  UPX keeps its
+# historical role and format so existing provenance stays readable.
+_UNPACK_DERIVATIONS: dict[str, tuple[str, str, str]] = {
+    "upx": ("upx-unpacked", "upx-unpacked-binary", "upx"),
+    "de4dot": ("de4dot-cleaned", "dotnet-cleaned-assembly", "de4dot"),
+    "unipacker": ("emulated-unpacked", "emulated-unpacked-binary", "unipacker"),
+    "xor-recovery": ("xor-recovered", "xor-recovered-binary", "xor-recovery"),
+}
 
 
 class BinaryAnalysisExecutionError(RuntimeError):
@@ -136,7 +154,8 @@ class BinaryImportExecutor:
         *,
         limits: BinaryAnalysisLimits | None = None,
         adapters: Sequence[BinaryToolAdapter] | None = None,
-        upx: UpxUnpacker | None = None,
+        unpackers: Sequence[Unpacker] | None = None,
+        rebuilder: LiefRebuilder | None = None,
         pair_importer: BinaryPairImporter | None = None,
         scratch_root: str | Path | None = None,
         sandbox: BinaryFactsSandbox | None = None,
@@ -149,7 +168,10 @@ class BinaryImportExecutor:
         self._store = store
         self._limits = limits or BinaryAnalysisLimits()
         self._adapters = tuple(adapters) if adapters is not None else (ObjdumpAdapter(),)
-        self._upx = upx or UpxAdapter()
+        self._unpacker_chain = UnpackerChain(
+            unpackers if unpackers is not None else (UpxCliUnpacker(), XorRegionUnpacker()),
+            rebuilder=rebuilder if rebuilder is not None else LiefRebuilder(),
+        )
         self._pair_importer = pair_importer
         self._scratch_root = Path(scratch_root) if scratch_root is not None else None
         self._sandbox = sandbox
@@ -191,7 +213,13 @@ class BinaryImportExecutor:
                 GhidraHeadlessAdapter(ghidra_executable, ghidra_script_directory),
                 AngrAdapter(angr_enabled),
             ),
-            upx=UpxAdapter(upx_executable),
+            # The worker-local chain stays cheap and static: UPX plus pure-Python
+            # XOR recovery.  Emulated and .NET unpacking live in the isolated
+            # binary-tools image and are reached through the sandbox fallback.
+            unpackers=(
+                UpxCliUnpacker(UpxAdapter(upx_executable)),
+                XorRegionUnpacker(),
+            ),
             pair_importer=pair_importer,
             scratch_root=scratch_root,
             sandbox=sandbox,
@@ -360,11 +388,25 @@ class BinaryImportExecutor:
             aggregate = BinaryAnalysisAggregate(original_metadata)
             aggregate.tool_runs.append(_header_run())
 
-            unpacked_path = scratch / "unpacked.bin"
-            upx_outcome = await self._upx.unpack(
-                input_path, unpacked_path, self._limits, cancellation
+            unpack_outcome = await self._unpacker_chain.run(
+                input_path, original_metadata, self._limits, cancellation
             )
-            aggregate.tool_runs.append(upx_outcome.run)
+            aggregate.tool_runs.extend(unpack_outcome.runs)
+            if (
+                unpack_outcome.unpacked_path is None
+                and original_metadata.packed
+                and self._sandbox is not None
+                and self._sandbox_image_digest is not None
+            ):
+                # The local chain only holds static strategies; everything that
+                # needs the fuller toolchain (emulation, .NET cleaning, LIEF
+                # rebuild) runs in the isolated binary-tools image.
+                sandbox_outcome = await self._try_sandbox_unpack(
+                    scratch, object_ref, original_metadata, cancellation
+                )
+                if sandbox_outcome is not None:
+                    unpack_outcome = sandbox_outcome
+                    aggregate.tool_runs.extend(sandbox_outcome.runs)
             analyzed_path = input_path
             analyzed_version_id = parent_version_id
             # The sandbox tooling consumes the artifact by CAS reference, not by
@@ -374,34 +416,48 @@ class BinaryImportExecutor:
             analyzed_object_ref = object_ref
             produced: list[str] = []
             metadata = original_metadata
-            if upx_outcome.unpacked_path is not None:
-                metadata = await asyncio.to_thread(
-                    inspect_binary, upx_outcome.unpacked_path, self._limits
-                )
+            if unpack_outcome.unpacked_path is not None:
+                assert unpack_outcome.final_metadata is not None
+                metadata = unpack_outcome.final_metadata
                 _validate_symbolic_targets(target_addresses, metadata)
-                unpacked_version_id = _derived_identifier(
-                    "artifact-version", job["id"], "upx-unpacked"
+                method = unpack_outcome.method or "unknown"
+                role, unpack_format, tool_name = _UNPACK_DERIVATIONS.get(
+                    method, ("unpacked", "unpacked-binary", method)
                 )
-                unpacked_artifact_id = _derived_identifier("artifact", job["id"], "upx-unpacked")
-                stored_unpacked = await asyncio.to_thread(
-                    _put_path, self._store, upx_outcome.unpacked_path, self._limits.max_input_bytes
-                )
+                unpacked_version_id = _derived_identifier("artifact-version", job["id"], role)
+                unpacked_artifact_id = _derived_identifier("artifact", job["id"], role)
+                stored_unpacked = unpack_outcome.stored
+                if stored_unpacked is None:
+                    stored_unpacked = await asyncio.to_thread(
+                        _put_path,
+                        self._store,
+                        unpack_outcome.unpacked_path,
+                        self._limits.max_input_bytes,
+                    )
                 await self._register_derived(
                     job,
                     parent_version_id=parent_version_id,
                     artifact_id=unpacked_artifact_id,
                     version_id=unpacked_version_id,
                     stored=stored_unpacked,
-                    generation_config={"format": "upx-unpacked-binary", "tool": "upx"},
+                    generation_config={
+                        "format": unpack_format,
+                        "tool": tool_name,
+                        "methods": list(unpack_outcome.methods),
+                        "rounds": unpack_outcome.rounds,
+                        "source_artifact_version_id": parent_version_id,
+                    },
                 )
-                analyzed_path = upx_outcome.unpacked_path
+                analyzed_path = unpack_outcome.unpacked_path
                 analyzed_version_id = unpacked_version_id
                 analyzed_object_ref = stored_unpacked.object_ref
                 produced.append(unpacked_version_id)
                 aggregate = BinaryAnalysisAggregate(metadata)
                 aggregate.packed = True
-                aggregate.packer = "UPX"
-                aggregate.tool_runs.extend((_header_run(), upx_outcome.run))
+                aggregate.packer = original_metadata.packer or (
+                    "UPX" if method == "upx" else method
+                )
+                aggregate.tool_runs.extend((_header_run(), *unpack_outcome.runs))
             elif original_metadata.packed:
                 aggregate.packed = True
 
@@ -623,6 +679,49 @@ class BinaryImportExecutor:
             },
         )
         return version_id
+
+    async def _try_sandbox_unpack(
+        self,
+        scratch: Path,
+        object_ref: str,
+        metadata: BinaryMetadata,
+        cancellation: asyncio.Event,
+    ) -> UnpackChainOutcome | None:
+        """Run the isolated binary-unpack tool; failures degrade, never abort."""
+        assert self._sandbox is not None and self._sandbox_image_digest is not None
+        try:
+            outcome = await BinaryUnpackSandboxAdapter(
+                self._sandbox,
+                self._store,
+                image_digest=self._sandbox_image_digest,
+                input_ref=object_ref,
+            ).unpack(cast(ArtifactKind, metadata.format), self._limits, cancellation)
+        except ToolExecutionError as error:
+            LOGGER.warning(
+                "binary_unpack_sandbox_degraded", extra={"error": str(error)[:200]}
+            )
+            return None
+        if outcome.stored is None:
+            return outcome
+        path = scratch / "sandbox-unpacked.bin"
+        try:
+            with self._store.open(outcome.stored.object_ref) as source:
+                await asyncio.to_thread(_copy_stream, source, path)
+            outcome.final_metadata = await asyncio.to_thread(
+                inspect_binary, path, self._limits
+            )
+        except (OSError, BinaryInspectionError) as error:
+            LOGGER.warning(
+                "binary_unpack_sandbox_output_rejected",
+                extra={"error": str(error)[:200]},
+            )
+            outcome.stored = None
+            outcome.unpacked_path = None
+            outcome.method = None
+            outcome.methods = ()
+            return outcome
+        outcome.unpacked_path = path
+        return outcome
 
     async def _validate_input(self, job: Job, version_id: str, object_ref: str) -> None:
         try:
@@ -1046,6 +1145,11 @@ def _derived_identifier(prefix: str, job_id: str, role: str) -> str:
 def _put_path(store: LocalContentAddressedStore, path: Path, max_bytes: int) -> StoredObject:
     with path.open("rb") as stream:
         return store.put_stream(stream, max_bytes=max_bytes)
+
+
+def _copy_stream(source: IO[bytes], destination: Path) -> None:
+    with destination.open("xb") as target:
+        shutil.copyfileobj(source, target, length=1024 * 1024)
 
 
 def _cancelled_result(job_id: str, produced: list[str] | None = None) -> WorkerResult:
