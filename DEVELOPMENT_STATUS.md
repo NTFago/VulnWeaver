@@ -6,7 +6,7 @@
 
 ## 当前焦点
 
-系统定位已从课设验证升级为**面向真实世界样本的长线漏洞挖掘智能体系统**（见 `AGENTS.md` 与 ADR-028）。当前主线：补齐真实样本分析的第一道门槛——通用脱壳/重建工具链。
+系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前主线（用户新 goal）：**agent 主导挖掘、降低对工具结果的依赖、长线作战**——T48 项目级调查记忆已落地（ADR-030）。
 
 部署栈已在本分支上**全部重建并运行**（postgres/redis/api/orchestrator/dispatcher/analysis-worker/sandbox-runner/web/binary-tools 全部 Up），模型经 Web 设置接入（DeepSeek），栈内端到端已通过（见验证记录）。
 
@@ -15,6 +15,7 @@
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
 | T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
+| T48 项目级调查记忆（ADR-030） | ZCode / `feat/agent-investigation-memory` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
 | T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
@@ -48,6 +49,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-09-28 | T48 调查记忆（dev container 内执行，栈内 PG） | orchestrator+binary_analysis **152 passed**（新增 4 记忆用例）；ruff 通过；pyright 0 errors；栈内 E2E `e2e_investigation_memory.py`：同项目两任务全 succeeded，记忆工件 2 版 |
 | 2026-09-28 | T47 + 真实壳回归 | `tests/orchestrator`+`tests/binary_analysis` **90 passed**（新增 5 续跑用例，其中 2 个在栈内 PostgreSQL 实跑）；ruff 通过；**pyright 0 errors**；栈内 E2E 双绿：真实 UPX 壳经 unipacker（`emulated-unpacked-binary`、分析切到脱壳镜像）与 XOR 壳回归（新提示词/新 deadline 下 `semantic_audit` 真实模型审计 succeeded） || 2026-09-28 | T46 部署栈内全链 E2E（`code/scripts/e2e_unpack_chain.py`，连续三跑全绿） | 上传自制 XOR 壳 ELF → `import`/`semantic_audit`/`report` 三 Job 全部 succeeded；`xor-recovered-binary` 派生摘要与内层 ELF 逐字节一致；**analysis 的 parent 即脱壳镜像**；模型（deepseek-flash）驱动的语义审计与报告真实产出 |
 | 2026-09-28 | 部署栈重建 | 6 个服务镜像 + binary-tools 重建成功；期间修复**全新卷权限缺陷**：root 运行的一次性 migrate 服务初始化 CAS store 时把 `objects/sha256` 建成 root 所有，api(10001) 上传必 EACCES——artifact-init 现已预建该目录（compose.yaml），旧卷 chown 修复 |
 | 2026-09-28 | T46 定向测试（Linux 容器 python:3.12-slim + uv 0.10，`uv sync --all-packages --no-editable --group dev`） | `tests/binary_analysis` **54 passed / 3 skipped**（跳过项为 PostgreSQL opt-in，与基线一致）；`tests/sandbox_runner` + `tests/contracts` + `tests/tool_runtime` **44 passed / 1 skipped**（Docker runtime opt-in）；`ruff check .` 通过；`uv lock` 纳入 lief 0.17.6 / unipacker 1.0.8 / unicorn-unipacker 1.0.3b7 |
@@ -59,6 +61,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 ## 下一步
 
 2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-3. **长线分析下一块**：检查点续跑已就位（ADR-029）；下一块是跨任务的分析记忆（同项目新任务复用既往调查结论）与 Q-025 根因修复。
+3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。
+4. **长线下一块**：记忆（T48）+续跑（T47）已就位；候选方向：agent 主导的 fuzz 战役引导（verification_request 结构化并驱动 FuzzJobScheduler 定向）、Q-025 根因修复。
 4. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；本地仅剩 `main`（worktree `课设-worktree-fe-opts` 已随分支清理移除）；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
 5. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。

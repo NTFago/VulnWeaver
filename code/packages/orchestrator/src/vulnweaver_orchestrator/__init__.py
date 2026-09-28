@@ -54,6 +54,12 @@ from vulnweaver_orchestrator.fuzz_jobs import (
     link_fuzz_evidence,
     persist_crash_evidence,
 )
+from vulnweaver_orchestrator.investigation_memory import (
+    DatabaseInvestigationMemory,
+    InvestigationMemory,
+    build_memory_document,
+    memory_context_entry,
+)
 from vulnweaver_orchestrator.key_logic import CriticalLogicConfirmer
 from vulnweaver_orchestrator.model_reviews import IndependentModelReviewer, ModelReviewResult
 from vulnweaver_orchestrator.reverse_planning import (
@@ -128,7 +134,11 @@ __all__ = [
     "AuditPlan",
     "build_baseline_plan",
     "complete_baselines",
-    "CriticalLogicConfirmer",
+    "DatabaseInvestigationMemory",
+    "InvestigationMemory",
+    "build_memory_document",
+    "memory_context_entry",
+"CriticalLogicConfirmer",
     "FuzzJobScheduler",
     "FuzzTarget",
     "FuzzTargetResolver",

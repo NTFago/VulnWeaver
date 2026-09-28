@@ -17,7 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
@@ -63,6 +63,7 @@ from vulnweaver_orchestrator.audit_tools import (
     SymbolicRunner,
 )
 from vulnweaver_orchestrator.checkpoints import CheckpointStore
+from vulnweaver_orchestrator.investigation_memory import memory_context_entry
 
 LOGGER = logging.getLogger("vulnweaver.code_audit")
 
@@ -111,6 +112,12 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "tool result — anything that does not anchor to an indexed function is "
     "discarded. Set verification_request to fuzz only when dynamic confirmation "
     "would settle a memory-safety question that reading cannot.\n\n"
+    "Investigation memory. context.prior_investigations holds the conclusions of "
+    "earlier audits of this same project: findings that were already anchored and "
+    "recorded, candidates whose locations failed anchoring (never re-report those "
+    "locations unless you have new evidence), and how far each dig actually got. "
+    "Build on this instead of repeating it -- spend your rounds on leads the "
+    "memory shows unexplored.\n\n"
     "Resuming. If the context already shows investigation history, this audit was "
     "interrupted and is continuing: treat those steps as already executed, do not "
     "repeat them, and continue from the last observation.\n\n"
@@ -227,6 +234,7 @@ class CodeAuditAgent:
         attempt: int,
         run_id: str,
         input_refs: tuple[str, ...] = (),
+        prior_investigations: Sequence[Mapping[str, object]] = (),
     ) -> CodeAuditOutcome:
         budget = self._budget
         workspace = AuditWorkspace(self._database, self._store, task_id, limits=self._limits)
@@ -276,7 +284,7 @@ class CodeAuditAgent:
             task_id=task_id,
             run_id=run_id,
             objective=AUDIT_AGENT_OBJECTIVE,
-            context=await self._context(task_id, workspace),
+            context=await self._context(task_id, workspace, prior_investigations),
             policy_context=PolicyContext(
                 artifact_kinds=workspace.artifact_kinds,
                 permission_mode=PermissionMode.FULL_ACCESS,
@@ -382,7 +390,12 @@ class CodeAuditAgent:
             project = await repositories.projects.get(task["project_id"])
         return bool(project["exploit_validation_enabled"])
 
-    async def _context(self, task_id: str, workspace: AuditWorkspace) -> JsonObject:
+    async def _context(
+        self,
+        task_id: str,
+        workspace: AuditWorkspace,
+        prior_investigations: Sequence[Mapping[str, object]] = (),
+    ) -> JsonObject:
         """Everything the agent may rely on before it calls its first tool."""
 
         source_count = 0
@@ -404,6 +417,10 @@ class CodeAuditAgent:
             "critical_logic": await workspace.critical_logic(),
             "binary_summary": await workspace.artifact_facts(kind="summary"),
         }
+        if prior_investigations:
+            context["prior_investigations"] = [
+                memory_context_entry(item) for item in prior_investigations
+            ]
         return context
 
 
