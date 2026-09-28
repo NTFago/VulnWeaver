@@ -17,7 +17,7 @@ import hashlib
 import itertools
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -126,6 +126,34 @@ class AgentLoopBudget:
 
 
 @dataclass(frozen=True, slots=True)
+class LoopResume:
+    """Durable progress from a previous attempt of the same investigation.
+
+    Seeding a run with its predecessor's decisions, executed steps and last
+    round feedback lets a worker that died mid-loop (crash, lease takeover)
+    continue the investigation instead of restarting from zero: the model sees
+    the history it already produced, and steps already executed are never
+    re-executed.
+    """
+
+    decisions: tuple[DecisionRecord, ...]
+    steps: tuple[ExecutedStep, ...]
+    last_round_steps: tuple[ExecutedStep, ...]
+    usage: TokenUsage
+    artifact_refs: tuple[str, ...]
+    model_label: str | None
+    rounds: int
+
+    def __post_init__(self) -> None:
+        if self.rounds < 0:
+            raise ValueError("resume rounds cannot be negative")
+        if not self.decisions:
+            raise ValueError("resume state requires at least one decision")
+        if self.rounds == 0 and self.steps:
+            raise ValueError("resumed steps require at least one completed round")
+
+
+@dataclass(frozen=True, slots=True)
 class AgentLoopRequest:
     task_id: str
     run_id: str
@@ -134,6 +162,7 @@ class AgentLoopRequest:
     policy_context: PolicyContext
     input_refs: tuple[str, ...] = ()
     instructions: str = ""
+    resume: LoopResume | None = None
 
     def __post_init__(self) -> None:
         if not self.task_id or not self.run_id:
@@ -171,6 +200,27 @@ class AgentLoopResult:
         return self.status is AgentLoopStatus.DEGRADED
 
 
+@dataclass(frozen=True, slots=True)
+class LoopProgress:
+    """Everything a durable checkpoint needs to resume this investigation.
+
+    Emitted at each round boundary with ``RunStatus.RUNNING`` and once more
+    with a terminal status; the loop's own in-memory state is exactly this, so
+    a checkpoint written from it can seed ``AgentLoopRequest.resume`` after a
+    worker crash or lease takeover.
+    """
+
+    round_index: int
+    status: RunStatus
+    decisions: tuple[DecisionRecord, ...]
+    steps: tuple[ExecutedStep, ...]
+    last_round_steps: tuple[ExecutedStep, ...]
+    usage: TokenUsage
+    artifact_refs: tuple[str, ...]
+    model_label: str
+    failure: StructuredFailure | None = None
+
+
 class AgentLoop:
     """Reusable planner/executor boundary; domain agents supply context and executor."""
 
@@ -186,6 +236,7 @@ class AgentLoop:
         budget: AgentLoopBudget | None = None,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
+        progress: Callable[[LoopProgress], Awaitable[None]] | None = None,
     ) -> None:
         self._gateway = gateway
         self._registry = registry
@@ -196,25 +247,49 @@ class AgentLoop:
         self._budget = budget or AgentLoopBudget()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic: Callable[[], float] = monotonic or time.monotonic
+        self._progress = progress
 
     async def run(self, request: AgentLoopRequest) -> AgentLoopResult:
         budget = self._budget
         started = self._monotonic()
-        decisions: list[DecisionRecord] = []
+        resume = request.resume
+        decisions: list[DecisionRecord] = list(resume.decisions) if resume else []
         plans: list[ActionPlan] = []
-        steps: list[ExecutedStep] = []
-        usage: TokenUsage = {"input_tokens": 0, "output_tokens": 0}
-        model_label = "unconfigured"
-        artifact_refs: list[str] = []
+        steps: list[ExecutedStep] = list(resume.steps) if resume else []
+        usage: TokenUsage = (
+            TokenUsage(
+                input_tokens=resume.usage["input_tokens"],
+                output_tokens=resume.usage["output_tokens"],
+            )
+            if resume
+            else TokenUsage(input_tokens=0, output_tokens=0)
+        )
+        model_label = (resume.model_label if resume else None) or "unconfigured"
+        artifact_refs: list[str] = list(resume.artifact_refs) if resume else []
         feedback: JsonObject | None = None
+        if resume is not None and resume.last_round_steps:
+            # Rebuild the feedback the interrupted round would have produced, so
+            # the model's next proposal continues from the same vantage point
+            # instead of being told the investigation just started.
+            feedback = {
+                "planning_round": resume.rounds,
+                "last_steps": [
+                    _bound_step(step, budget.max_observation_chars)
+                    for step in resume.last_round_steps
+                ],
+            }
         plan_rejections = 0
         consecutive_failures = 0
-        sequence = 0
+        sequence = len(decisions)
         status: AgentLoopStatus | None = None
         fallback: StructuredFailure | None = None
         policy_reason_codes: tuple[str, ...] = ()
+        round_steps: list[ExecutedStep] = []
+        # Anchored for the terminal emission: a first-round budget break leaves
+        # the loop variable unset otherwise.
+        round_index = resume.rounds if resume else 0
 
-        for round_index in itertools.count(1):
+        for round_index in itertools.count(1 if resume is None else resume.rounds + 1):
             if budget.max_planning_rounds is not None and round_index > budget.max_planning_rounds:
                 sequence, _ = _record(
                     decisions,
@@ -422,6 +497,23 @@ class AgentLoop:
                         failure=None,
                     )
                 )
+            if self._progress is not None:
+                await self._progress(
+                    LoopProgress(
+                        round_index=round_index,
+                        status=RunStatus.RUNNING,
+                        decisions=tuple(decisions),
+                        steps=tuple(steps),
+                        last_round_steps=tuple(round_steps),
+                        usage=TokenUsage(
+                            input_tokens=usage["input_tokens"],
+                            output_tokens=usage["output_tokens"],
+                        ),
+                        artifact_refs=tuple(artifact_refs),
+                        model_label=model_label,
+                        failure=None,
+                    )
+                )
 
         if status is None:
             sequence, _ = _record(
@@ -464,6 +556,23 @@ class AgentLoop:
         )
         if self._sink is not None:
             await self._sink.add(run)
+        if self._progress is not None:
+            await self._progress(
+                LoopProgress(
+                    round_index=round_index,
+                    status=run["status"],
+                    decisions=tuple(decisions),
+                    steps=tuple(steps),
+                    last_round_steps=tuple(round_steps) if round_steps else (),
+                    usage=TokenUsage(
+                        input_tokens=usage["input_tokens"],
+                        output_tokens=usage["output_tokens"],
+                    ),
+                    artifact_refs=tuple(artifact_refs),
+                    model_label=model_label,
+                    failure=fallback,
+                )
+            )
         return AgentLoopResult(
             status=status,
             agent_run=run,

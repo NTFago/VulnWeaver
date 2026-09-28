@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from vulnweaver_artifact_store import ArtifactStore
 from vulnweaver_contracts import (
     AgentRun,
+    DecisionRecord,
     JsonObject,
     JsonValue,
     PermissionMode,
+    RunStatus,
     StructuredFailure,
+    TokenUsage,
 )
 from vulnweaver_model_gateway import ModelTier
 from vulnweaver_persistence import Database
@@ -45,6 +49,8 @@ from vulnweaver_orchestrator.agent_loop import (
     AgentLoopStatus,
     AgentRunSink,
     ExecutedStep,
+    LoopProgress,
+    LoopResume,
     PlannerGateway,
     StepOutcome,
 )
@@ -56,6 +62,16 @@ from vulnweaver_orchestrator.audit_tools import (
     ReportedFinding,
     SymbolicRunner,
 )
+from vulnweaver_orchestrator.checkpoints import CheckpointStore
+
+LOGGER = logging.getLogger("vulnweaver.code_audit")
+
+# Durable resume state for the audit investigation.  The node is task-scoped;
+# the state itself names the job so a retry attempt of the same job resumes,
+# while a rerun of the task (new job) starts fresh.
+AUDIT_CHECKPOINT_NODE = "semantic-audit-agent"
+_MAX_CHECKPOINT_STEPS = 256
+_MAX_CHECKPOINT_FINDINGS = 64
 
 AUDIT_AGENT_OBJECTIVE = (
     "Audit this task's indexed code for location-anchored security defects. Work "
@@ -73,29 +89,34 @@ AUDIT_AGENT_OBJECTIVE = (
 )
 
 AUDIT_AGENT_INSTRUCTIONS = (
-    "Use code-function-list, code-function-read, code-search, call-neighborhood, "
-    "artifact-facts, static-leads and critical-logic to gather evidence before "
-    "reporting. The static-leads entries are unverified scanner output: confirm or "
-    "refute each one from code you read yourself, and do not report a lead you "
-    "could not substantiate. Report source findings with path and start_line, and "
-    "binary findings with the function address, copied exactly from what a tool "
-    "returned; anything that does not resolve to an indexed function is discarded. "
-    "Use symbolic-execute only for a binary function whose reachability or "
-    "sink behaviour you cannot settle by reading: it runs inside the sandbox, may "
-    "run at most twice per audit, and is refused unless the project enabled "
-    "dynamic validation. Its result is an observation to reason about, never a "
-    "finding on its own. Set verification_request to fuzz only when dynamic "
-    "confirmation would settle a memory-safety question you cannot settle by "
-    "reading. Arguments must never contain absolute paths or parent-directory "
-    "Every step must list input_refs copied verbatim from context.artifact_refs; a "
-    "reference you invent makes the Policy Engine reject the whole plan, which "
-    "wastes a round. Use only the tools named above, and keep step_id unique "
-    "inside one plan. "
-    "segments. Report each candidate with finding-report as soon as the code you "
-    "have read substantiates it rather than saving them for the end: an "
-    "investigation that never reports is worth nothing. Return zero steps as soon "
-    "as you have reported everything you can substantiate and explain why you are "
-    "finished."
+    "Evidence before conclusions. Orient with code-function-list, artifact-facts, "
+    "static-leads and critical-logic; open what matters with code-function-read; "
+    "follow edges with call-neighborhood; locate patterns with code-search. "
+    "static-leads is unverified scanner output: confirm or refute each lead from "
+    "code you read yourself, never from the lead text alone.\n\n"
+    "Tool contracts. Every step must copy input_refs verbatim from "
+    "context.artifact_refs — an invented reference makes the Policy Engine reject "
+    "the whole plan and wastes a round. Keep step_id unique inside one plan, and "
+    "never put absolute paths or parent-directory segments in arguments. Use "
+    "symbolic-execute only for a binary function whose reachability or sink "
+    "behaviour you cannot settle by reading: it runs in the sandbox, at most "
+    "twice per audit, only when the project enabled dynamic validation, and its "
+    "result is an observation to reason about — never a finding on its own.\n\n"
+    "Reporting discipline. Report a candidate with finding-report as soon as the "
+    "code you have read substantiates it; findings saved for the end are findings "
+    "lost to a deadline. Choose the most specific applicable CWE, and make the "
+    "rationale name its evidence: the function you read, the line or address, and "
+    "how attacker-controlled data reaches the sink. Source findings need path and "
+    "start_line; binary findings need the function address copied exactly from a "
+    "tool result — anything that does not anchor to an indexed function is "
+    "discarded. Set verification_request to fuzz only when dynamic confirmation "
+    "would settle a memory-safety question that reading cannot.\n\n"
+    "Resuming. If the context already shows investigation history, this audit was "
+    "interrupted and is continuing: treat those steps as already executed, do not "
+    "repeat them, and continue from the last observation.\n\n"
+    "Stop when done. Once every substantiated candidate is reported and you can "
+    "name no specific unresolved lead, return zero steps and explain why you are "
+    "finished. More browsing will not add findings."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
@@ -168,6 +189,7 @@ class CodeAuditAgent:
         limits: AuditWorkspaceLimits | None = None,
         symbolic_runner: SymbolicRunner | None = None,
         dynamic_verification_enabled: bool = False,
+        checkpoint_store: CheckpointStore | None = None,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
@@ -177,6 +199,7 @@ class CodeAuditAgent:
         self._sink = sink
         self._symbolic_runner = symbolic_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
+        self._checkpoints = checkpoint_store
         # No planning-round cap: the investigation ends when the model reports
         # and stops asking for steps, or when the model degrades.  With the token
         # budget gone that left nothing bounding a run that keeps planning
@@ -186,7 +209,11 @@ class CodeAuditAgent:
             max_steps_per_plan=8,
             max_observation_chars=8_192,
             soft_round_limit=6,
-            deadline_seconds=1_800.0,
+            # Wall clock is the loop's only hard backstop (ADR-027).  The
+            # 30-minute course-era calibration starved real-world samples;
+            # two hours is the long-horizon default and deployments can still
+            # override it via AGENT_AUDIT_DEADLINE_SECONDS.
+            deadline_seconds=7_200.0,
         )
         self._limits = limits or AuditWorkspaceLimits()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
@@ -211,6 +238,27 @@ class CodeAuditAgent:
                 self._dynamic_verification_enabled or await self._project_opt_in(task_id)
             ),
         )
+        resume_state = await self._load_resume_checkpoint(task_id, job_id)
+        loop_resume = _resume_from_state(resume_state, budget) if resume_state else None
+        if resume_state is not None:
+            resumed_findings = [
+                _finding_from_document(item)
+                for item in _mapping_items(resume_state.get("reported"))
+            ]
+            executor.reported.extend(resumed_findings)
+            LOGGER.info(
+                "audit_resuming_from_checkpoint",
+                extra={
+                    "job_id": job_id,
+                    "rounds": loop_resume.rounds if loop_resume else 0,
+                    "steps": len(loop_resume.steps) if loop_resume else 0,
+                    "findings": len(resumed_findings),
+                },
+            )
+
+        async def emit_progress(progress: LoopProgress) -> None:
+            await self._save_checkpoint(task_id, job_id, run_id, executor, progress)
+
         registry = ToolRegistry(AUDIT_TOOLS)
         loop = AgentLoop(
             self._gateway,
@@ -222,6 +270,7 @@ class CodeAuditAgent:
             budget=budget,
             clock=self._clock,
             monotonic=self._monotonic,
+            progress=emit_progress if self._checkpoints is not None else None,
         )
         request = AgentLoopRequest(
             task_id=task_id,
@@ -234,6 +283,7 @@ class CodeAuditAgent:
             ),
             input_refs=input_refs or workspace.version_ids(),
             instructions=AUDIT_AGENT_INSTRUCTIONS,
+            resume=loop_resume,
         )
         result = await loop.run(request)
         fallback: StructuredFailure | None = result.fallback
@@ -245,6 +295,84 @@ class CodeAuditAgent:
             completed=result.status is AgentLoopStatus.COMPLETED,
             fallback_code=str(fallback["code"]) if fallback is not None else None,
         )
+
+    async def _load_resume_checkpoint(self, task_id: str, job_id: str) -> JsonObject | None:
+        """Find the newest interrupted-audit checkpoint for exactly this job.
+
+        A ``completed`` marker means the previous attempt finished the loop
+        normally (or degraded and fell back), so a later attempt must not replay
+        it.  Checkpoint trouble degrades to a fresh start: resuming is an
+        optimization, never a precondition.
+        """
+
+        if self._checkpoints is None:
+            return None
+        try:
+            checkpoints = [
+                item for item in await self._checkpoints.list(task_id)
+                if item.node == AUDIT_CHECKPOINT_NODE
+            ]
+        except Exception as error:  # a broken checkpoint must never block the audit
+            LOGGER.warning(
+                "audit_checkpoint_load_failed",
+                extra={"task_id": task_id, "error": str(error)[:200]},
+            )
+            return None
+        for checkpoint in reversed(checkpoints):
+            state = checkpoint.state
+            if state.get("job_id") != job_id:
+                continue
+            if state.get("completed"):
+                return None
+            return state
+        return None
+
+    async def _save_checkpoint(
+        self,
+        task_id: str,
+        job_id: str,
+        run_id: str,
+        executor: AuditStepExecutor,
+        progress: LoopProgress,
+    ) -> None:
+        store = self._checkpoints
+        if store is None:
+            return
+        max_chars = self._budget.max_observation_chars
+        state: dict[str, object] = {
+            "schema_version": "1.0.0",
+            "job_id": job_id,
+            "run_id": run_id,
+            "completed": progress.status is not RunStatus.RUNNING,
+            "rounds": progress.round_index,
+            "decisions": [dict(record) for record in progress.decisions],
+            "steps": [
+                _step_document(step, max_chars)
+                for step in progress.steps[-_MAX_CHECKPOINT_STEPS:]
+            ],
+            "last_round_steps": [
+                _step_document(step, max_chars) for step in progress.last_round_steps
+            ],
+            "reported": [
+                _finding_document(finding)
+                for finding in executor.reported[-_MAX_CHECKPOINT_FINDINGS:]
+            ],
+            "usage": {
+                "input_tokens": progress.usage["input_tokens"],
+                "output_tokens": progress.usage["output_tokens"],
+            },
+            "artifact_refs": list(progress.artifact_refs),
+            "model_label": progress.model_label,
+        }
+        try:
+            await store.save(
+                task_id, AUDIT_CHECKPOINT_NODE, state, created_at=_now_iso(self._clock)
+            )
+        except Exception as error:  # checkpointing must never kill the audit
+            LOGGER.warning(
+                "audit_checkpoint_save_failed",
+                extra={"task_id": task_id, "job_id": job_id, "error": str(error)[:200]},
+            )
 
     async def _project_opt_in(self, task_id: str) -> bool:
         """Dynamic validation is a project-level opt-in, resolved per task."""
@@ -293,9 +421,159 @@ def audit_run_id(job_id: str, attempt: int) -> str:
     return f"agent-run:semantic-audit:{digest}"
 
 
+def _now_iso(clock: Callable[[], datetime]) -> str:
+    return clock().astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _step_document(step: ExecutedStep, max_chars: int) -> JsonObject:
+    """JSON shape of one executed step, with its observation bounded.
+
+    The bounded observation is what a resumed run needs: the investigation
+    digest bounds it anyway, and unbounded tool outputs would let a checkpoint
+    grow with the workspace instead of staying a fixed-cost resume record.
+    """
+
+    encoded = json.dumps(step.output, ensure_ascii=False, sort_keys=True)
+    output: JsonObject = (
+        step.output
+        if len(encoded) <= max_chars
+        else {"truncated": True, "prefix": encoded[:max_chars]}
+    )
+    return {
+        "step_id": step.step_id,
+        "tool_name": step.tool_name,
+        "tool_version": step.tool_version,
+        "plan_id": step.plan_id,
+        "succeeded": step.succeeded,
+        "output": output,
+        "artifact_refs": list(step.artifact_refs),
+        "failure_code": step.failure_code,
+    }
+
+
+def _step_from_document(document: Mapping[str, object]) -> ExecutedStep:
+    failure_code = _optional_str(document.get("failure_code"))
+    return ExecutedStep(
+        step_id=_str_value(document.get("step_id")),
+        tool_name=_str_value(document.get("tool_name")) or "unknown",
+        tool_version=_str_value(document.get("tool_version")),
+        plan_id=_str_value(document.get("plan_id")),
+        succeeded=document.get("succeeded") is True,
+        output=cast(JsonObject, dict(_mapping_value(document.get("output")))),
+        artifact_refs=tuple(
+            _str_value(item) for item in _sequence_value(document.get("artifact_refs"))
+        ),
+        failure_code=failure_code,
+    )
+
+
+def _finding_document(finding: ReportedFinding) -> JsonObject:
+    return {
+        "cwe_id": finding.cwe_id,
+        "title": finding.title,
+        "severity": finding.severity,
+        "rationale": finding.rationale,
+        "path": finding.path,
+        "start_line": finding.start_line,
+        "end_line": finding.end_line,
+        "address": finding.address,
+        "verification_request": finding.verification_request,
+        "verification_reason": finding.verification_reason,
+        "step_id": finding.step_id,
+    }
+
+
+def _finding_from_document(document: Mapping[str, object]) -> ReportedFinding:
+    def optional_int(key: str) -> int | None:
+        value = document.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    return ReportedFinding(
+        cwe_id=_str_value(document.get("cwe_id")),
+        title=_str_value(document.get("title")),
+        severity=_str_value(document.get("severity")) or "unknown",
+        rationale=_str_value(document.get("rationale")),
+        path=_optional_str(document.get("path")),
+        start_line=optional_int("start_line"),
+        end_line=optional_int("end_line"),
+        address=optional_int("address"),
+        verification_request=_optional_str(document.get("verification_request")),
+        verification_reason=_optional_str(document.get("verification_reason")),
+        step_id=_str_value(document.get("step_id")),
+    )
+
+
+def _resume_from_state(state: Mapping[str, object], budget: AgentLoopBudget) -> LoopResume:
+    usage = _mapping_value(state.get("usage"))
+    return LoopResume(
+        decisions=tuple(
+            DecisionRecord(
+                sequence=_int_value(item.get("sequence")),
+                decision=_str_value(item.get("decision")),
+                reason=_str_value(item.get("reason")),
+                created_at=_str_value(item.get("created_at")),
+            )
+            for item in _mapping_items(state.get("decisions"))
+        ),
+        steps=tuple(
+            _step_from_document(item)
+            for item in _mapping_items(state.get("steps"))
+        ),
+        last_round_steps=tuple(
+            _step_from_document(item)
+            for item in _mapping_items(state.get("last_round_steps"))
+        ),
+        usage=TokenUsage(
+            input_tokens=_int_value(usage.get("input_tokens")),
+            output_tokens=_int_value(usage.get("output_tokens")),
+        ),
+        artifact_refs=tuple(
+            _str_value(item) for item in _sequence_value(state.get("artifact_refs"))
+        ),
+        model_label=_optional_str(state.get("model_label")),
+        rounds=_int_value(state.get("rounds")),
+    )
+
+
+def _mapping_value(value: object) -> Mapping[str, object]:
+    if isinstance(value, dict):
+        return cast(Mapping[str, object], value)
+    return {}
+
+
+def _mapping_items(value: object) -> list[Mapping[str, object]]:
+    """Every mapping entry of a JSON list, skipping anything else."""
+
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [
+        cast(Mapping[str, object], item)
+        for item in cast(list[object], value)
+        if isinstance(item, Mapping)
+    ]
+
+
+def _sequence_value(value: object) -> list[object]:
+    return cast(list[object], value) if isinstance(value, list) else []
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _str_value(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+
 __all__ = [
     "AUDIT_AGENT_INSTRUCTIONS",
     "AUDIT_AGENT_OBJECTIVE",
+    "AUDIT_CHECKPOINT_NODE",
     "AuditProgressSink",
     "CodeAuditAgent",
     "CodeAuditOutcome",

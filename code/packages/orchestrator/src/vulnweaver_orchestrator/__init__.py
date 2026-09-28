@@ -8,6 +8,8 @@ from vulnweaver_orchestrator.agent_loop import (
     AgentLoopStatus,
     AgentRunSink,
     ExecutedStep,
+    LoopProgress,
+    LoopResume,
     PlannerGateway,
     StepExecutor,
     StepOutcome,
@@ -34,6 +36,7 @@ from vulnweaver_orchestrator.checkpoints import (
     PostgresCheckpointStore,
 )
 from vulnweaver_orchestrator.code_audit import (
+    AUDIT_CHECKPOINT_NODE,
     CodeAuditAgent,
     CodeAuditOutcome,
     audit_run_id,
@@ -80,6 +83,8 @@ __all__ = [
     "AgentLoopResult",
     "AgentLoopStatus",
     "AgentRunSink",
+    "LoopProgress",
+    "LoopResume",
     "Checkpoint",
     "CheckpointConflict",
     "CheckpointStore",
@@ -113,6 +118,7 @@ __all__ = [
     "AuditStepExecutor",
     "AuditWorkspace",
     "AuditWorkspaceLimits",
+    "AUDIT_CHECKPOINT_NODE",
     "CodeAuditAgent",
     "CodeAuditOutcome",
     "ReportedFinding",

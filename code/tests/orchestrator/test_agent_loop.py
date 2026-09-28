@@ -10,12 +10,14 @@ import pytest
 from vulnweaver_contracts import (
     AgentRun,
     ArtifactKind,
+    DecisionRecord,
     FailureKind,
     JsonObject,
     PermissionMode,
     ResourceBudget,
     RunStatus,
     StructuredFailure,
+    TokenUsage,
 )
 from vulnweaver_model_gateway import ModelCallResult
 from vulnweaver_orchestrator import (
@@ -23,6 +25,8 @@ from vulnweaver_orchestrator import (
     AgentLoopBudget,
     AgentLoopRequest,
     AgentLoopStatus,
+    ExecutedStep,
+    LoopResume,
     StepOutcome,
 )
 from vulnweaver_tool_runtime import PolicyContext, PolicyEngine, ScheduledToolCall, ToolRegistry
@@ -555,3 +559,132 @@ def test_request_rejects_missing_identity() -> None:
             context={},
             policy_context=full_access_context(),
         )
+
+
+def _resumed_step(step_id: str = "step:1") -> ExecutedStep:
+    return ExecutedStep(
+        step_id=step_id,
+        tool_name="semgrep",
+        tool_version="1.0.0",
+        plan_id="agent-run:loop:1-plan-1",
+        succeeded=True,
+        output={"findings": 1},
+        artifact_refs=("version:1",),
+        failure_code=None,
+    )
+
+
+def _resume_state(rounds: int = 1) -> LoopResume:
+
+    step = _resumed_step()
+    decisions = [
+        DecisionRecord(
+            sequence=1,
+            decision="plan_accepted",
+            reason="prior attempt approved one step",
+            created_at=NOW.isoformat(),
+        ),
+        DecisionRecord(
+            sequence=2,
+            decision="step_executed",
+            reason="step step:1 via semgrep",
+            created_at=NOW.isoformat(),
+        ),
+    ]
+    return LoopResume(
+        decisions=tuple(decisions),
+        steps=(step,),
+        last_round_steps=(step,),
+        usage=TokenUsage(input_tokens=101, output_tokens=37),
+        artifact_refs=("version:1",),
+        model_label="audit:deepseek-flash",
+        rounds=rounds,
+    )
+
+
+def test_resume_seeds_history_and_skips_reexecution() -> None:
+    planner = FakePlanner([succeeded(model_proposal([]))])
+    executor = RecordingExecutor([])
+    loop = build_loop(planner, executor)
+    request = AgentLoopRequest(
+        task_id="task:1",
+        run_id="agent-run:loop:1",
+        objective="analyze the sample",
+        context={"artifact": "version:1"},
+        policy_context=full_access_context(),
+        input_refs=("version:1",),
+        resume=_resume_state(),
+    )
+    result = asyncio.run(loop.run(request))
+
+    assert executor.calls == []  # resumed steps are never re-executed
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert [step.step_id for step in result.steps] == ["step:1"]
+    decisions = result.agent_run["decisions"]
+    assert len(decisions) == 3
+    assert [record["sequence"] for record in decisions] == [1, 2, 3]
+    # Usage accumulates from the resumed attempt, not reset to zero.
+    assert result.agent_run["token_usage"]["input_tokens"] >= 101
+    # The model's first message on the resumed run must show the prior round.
+    first_round_messages = planner.messages[0]
+    encoded = json.dumps(first_round_messages)
+    assert "planning_round" in encoded
+
+
+def test_resume_rejects_inconsistent_state() -> None:
+    from vulnweaver_orchestrator import LoopResume
+
+    with pytest.raises(ValueError):
+        LoopResume(
+            decisions=(),
+            steps=(),
+            last_round_steps=(),
+            usage={"input_tokens": 0, "output_tokens": 0},
+            artifact_refs=(),
+            model_label=None,
+            rounds=1,
+        )
+    with pytest.raises(ValueError):
+        LoopResume(
+            decisions=_resume_state().decisions,
+            steps=(_resumed_step(),),
+            last_round_steps=(),
+            usage={"input_tokens": 0, "output_tokens": 0},
+            artifact_refs=(),
+            model_label=None,
+            rounds=0,
+        )
+
+
+def test_progress_callback_emits_running_and_terminal_snapshots() -> None:
+    from vulnweaver_orchestrator import LoopProgress
+
+    planner = FakePlanner(
+        [succeeded(model_proposal([scan_step("step:1")])), succeeded(model_proposal([]))]
+    )
+    executor = RecordingExecutor(
+        [StepOutcome(succeeded=True, output={"findings": 0}, artifact_refs=(), failure_code=None)]
+    )
+    emitted: list[LoopProgress] = []
+
+    async def progress(value: LoopProgress) -> None:
+        emitted.append(value)
+
+    loop = AgentLoop(
+        planner,
+        ToolRegistry([spec()]),
+        PolicyEngine(ToolRegistry([spec()])),
+        executor,
+        budget=AgentLoopBudget(deadline_seconds=30),
+        clock=clock,
+        monotonic=monotonic,
+        progress=progress,
+    )
+    result = asyncio.run(loop.run(loop_request()))
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    assert [item.status for item in emitted] == [RunStatus.RUNNING, RunStatus.SUCCEEDED]
+    assert emitted[0].round_index == 1
+    assert [item.step_id for item in emitted[0].last_round_steps] == ["step:1"]
+    assert emitted[-1].steps == result.steps
+    assert emitted[-1].decisions == tuple(result.agent_run["decisions"])
