@@ -526,10 +526,12 @@ class BinaryUnpackSandboxAdapter:
             resource_budget=cast(
                 ResourceBudget,
                 {
+                    # Same inert-bookkeeping values as the facts profile; the
+                    # contract enforces minimums, so zeros are not legal here.
                     "max_model_tokens": 0,
-                    "cpu_millis": 0,
-                    "memory_bytes": 0,
-                    "disk_bytes": 0,
+                    "cpu_millis": 4000,
+                    "memory_bytes": 3 * 1024 * 1024 * 1024,
+                    "disk_bytes": 1024 * 1024 * 1024,
                     "max_tool_concurrency": 1,
                     "max_dynamic_runs": 0,
                     "timeout_seconds": _unpack_timeout(limits),
@@ -539,7 +541,19 @@ class BinaryUnpackSandboxAdapter:
         )
         result = await self._sandbox.run(request, cancellation)
         if result["status"] != "succeeded":
-            raise ToolExecutionError("binary-unpack sandbox execution failed")
+            # Carry the structured failure and the container's stderr tail into
+            # the exception: the caller only logs the message, and without it a
+            # degraded unpack is undiagnosable from the worker side.
+            failure = json.dumps(result.get("failure") or {})[:400]
+            stderr_tail = ""
+            stderr_ref = result.get("stderr_ref")
+            if stderr_ref:
+                with self._store.open(stderr_ref) as stream:
+                    stderr_tail = stream.read(2_048).decode("utf-8", "replace")[-400:]
+            raise ToolExecutionError(
+                f"binary-unpack sandbox execution failed: status={result['status']} "
+                f"failure={failure} stderr={stderr_tail!r}"
+            )
         report_output = next(
             (item for item in result["outputs"] if item["path"] == "binary-unpack.json"), None
         )
@@ -556,7 +570,12 @@ class BinaryUnpackSandboxAdapter:
                 raise ToolExecutionError("binary-unpack output is missing")
             with self._store.open(output["object_ref"]) as source:
                 stored = self._store.put_stream(source, max_bytes=limits.max_input_bytes)
-            if str(report.get("unpacked_digest") or "").lower() != stored.digest:
+            # The entrypoint reports a bare hex digest; CAS object refs carry
+            # the sha256: prefix.  Compare the hex on both sides.
+            reported = str(report.get("unpacked_digest") or "").lower().removeprefix(
+                "sha256:"
+            )
+            if reported != stored.digest.removeprefix("sha256:"):
                 raise ToolExecutionError("binary-unpack digest mismatch")
         return UnpackChainOutcome(
             runs=tuple(cast(list[BinaryToolRun], report.get("tool_runs") or [])),

@@ -33,6 +33,7 @@ from vulnweaver_contracts import (
     SandboxResult,
     SandboxStatus,
     StaticToolStatus,
+    validate_contract,
 )
 
 from tests.binary_analysis.samples import elf64_sample, packed_elf64_sample, pe64_sample
@@ -394,7 +395,7 @@ def test_binary_unpack_sandbox_adapter_round_trips_report(tmp_path: Path) -> Non
         "methods": ["upx", "unipacker"],
         "rounds": 1,
         "packed": False,
-        "unpacked_digest": stored_inner.digest,
+        "unpacked_digest": stored_inner.digest.removeprefix("sha256:"),
         "tool_runs": [dict(_static_run("unipacker", "unpacked"))],
     }
     stored_report = store.put_stream(
@@ -430,6 +431,13 @@ def test_binary_unpack_sandbox_adapter_round_trips_report(tmp_path: Path) -> Non
         failure=None,
     )
     sandbox = _Sandbox(result)
+
+    class _ContractCheckingSandbox(_Sandbox):
+        async def run(self, request, cancellation):
+            validate_contract("SandboxRequest", request)
+            return await super().run(request, cancellation)
+
+    sandbox = _ContractCheckingSandbox(result)
     outcome = _run(
         BinaryUnpackSandboxAdapter(
             sandbox,

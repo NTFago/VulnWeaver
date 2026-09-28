@@ -51,6 +51,7 @@ class _ContainerLayout:
     declared_sections: int
     declared_program_headers: int
     executable_regions: tuple[tuple[int, int], ...]
+    virtual_only_executable_sections: int = 0
 
 
 class BinaryInspectionError(ValueError):
@@ -396,6 +397,7 @@ def _inspect_pe(
     _validate_table(data, section_offset, 40, section_count, 40, "PE section header")
     sections: list[BinarySection] = []
     executable_regions: list[tuple[int, int]] = []
+    virtual_only_executable = 0
     for index in range(section_count):
         position = section_offset + index * 40
         name = data[position : position + 8].split(b"\0", 1)[0].decode("ascii", "replace")
@@ -408,6 +410,8 @@ def _inspect_pe(
         _slice(data, raw_offset, raw_size, f"PE section {name}")
         if characteristics & _PE_MEM_EXECUTE:
             executable_regions.append((raw_offset, raw_size))
+            if virtual_size > 0 and raw_size == 0:
+                virtual_only_executable += 1
         sections.append(
             BinarySection(
                 name=name,
@@ -433,10 +437,12 @@ def _inspect_pe(
         ),
         _ContainerLayout(
             declared_sections=section_count,
-            # PE has no program header table; structure-based packing signals do
-            # not apply, so the heuristic falls back to segment entropy alone.
+            # PE has no program header table; the entropy bar alone would miss
+            # compressed-but-not-encrypted shells (UPX lands ~7.26), so the
+            # layout also carries the raw-less executable section count.
             declared_program_headers=0,
             executable_regions=tuple(executable_regions),
+            virtual_only_executable_sections=virtual_only_executable,
         ),
     )
 
@@ -567,6 +573,14 @@ def _heuristic_packed(data: bytes, layout: _ContainerLayout) -> bool:
         default=0.0,
     )
     if entropy >= _ENTROPY_ENCRYPTED:
+        return True
+    if layout.virtual_only_executable_sections > 0:
+        # A packed PE hands the loader an executable section with no file
+        # backing -- the stub fills it at runtime (UPX0, MPRESS's tail section
+        # and friends).  Ordinary uninitialized sections like .bss are never
+        # executable, so the flag cannot fire on toolchain output.  This
+        # catches compressed-but-not-encrypted bodies whose entropy (UPX
+        # measures ~7.26 on linux/amd64) sits below every entropy bar.
         return True
     stripped_container = (
         layout.declared_sections == 0

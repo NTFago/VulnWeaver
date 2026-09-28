@@ -697,9 +697,10 @@ class BinaryImportExecutor:
                 input_ref=object_ref,
             ).unpack(cast(ArtifactKind, metadata.format), self._limits, cancellation)
         except ToolExecutionError as error:
-            LOGGER.warning(
-                "binary_unpack_sandbox_degraded", extra={"error": str(error)[:200]}
-            )
+            # The detail rides in the message: the default formatter drops
+            # `extra` fields, and a name-only warning makes the failure
+            # undiagnosable from the worker log.
+            LOGGER.warning("binary_unpack_sandbox_degraded: %s", str(error)[:600])
             return None
         if outcome.stored is None:
             return outcome
