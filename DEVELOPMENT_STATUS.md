@@ -14,7 +14,7 @@
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
-| T46 分层脱壳工具链（UPX/de4dotEx/unipacker/XOR 恢复/LIEF 重建 + `binary-unpack` 沙箱工具） | ZCode / `feat/unpacking-toolchain` | 待验证：镜像端到端 |
+| T46 分层脱壳工具链（UPX/de4dotEx/unipacker/XOR 恢复/LIEF 重建 + `binary-unpack` 沙箱工具） | ZCode / `feat/unpacking-toolchain` | 定向测试、ruff/pyright、镜像构建与容器内脱壳冒烟均已通过；余下：部署栈内 worker↔沙箱全链路实测 |
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
@@ -46,12 +46,14 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 | 日期 | 验证 | 结果 |
 |---|---|---|
 | 2026-09-28 | T46 定向测试（Linux 容器 python:3.12-slim + uv 0.10，`uv sync --all-packages --no-editable --group dev`） | `tests/binary_analysis` **54 passed / 3 skipped**（跳过项为 PostgreSQL opt-in，与基线一致）；`tests/sandbox_runner` + `tests/contracts` + `tests/tool_runtime` **44 passed / 1 skipped**（Docker runtime opt-in）；`ruff check .` 通过；`uv lock` 纳入 lief 0.17.6 / unipacker 1.0.8 / unicorn-unipacker 1.0.3b7 |
-| 2026-09-28 | pyright | 见本分支提交记录（后台执行中，若未通过将在提交信息中注明） |
+| 2026-09-28 | pyright（node:24-slim 容器，pyright 1.1.413） | **0 errors**（lief 无存根问题以 `importlib.import_module` 隔离；跨模块私有名已提升为公开助手名） |
+| 2026-09-28 | T46 全量测试 | `pytest -n 4`：401 passed / 2 failed（reporting 的 weasyprint 用例，装上 pango 后复跑 **10 passed**，纯环境缺失）/ 173 skipped（PG/Docker opt-in，本机临时容器无对应服务；定向四套件 98 passed） |
+| 2026-09-28 | T46 镜像与容器内端到端 | `vulnweaver-binary-tools:fixed` 构建成功（mono-complete + de4dotEx 3.10.0 net48 + `--extra unpack`）；容器内 `--mode unpack` 对自制 XOR 壳 ELF 实测：UPX 探测→not_upx_packed 降级→**xor-recovery 命中**，`unpacked.bin` 与内层 ELF sha256 逐字节一致（`316f0550…`），报告含完整 methods/tool_runs/digests |
 | 2026-09-11 | T45/T45-A~F 全量门禁 | `pytest` 556 passed / 5 skipped；ruff、pyright 0 错误；部署栈 UPX 加壳样本端到端通过（历史基线，栈现已清空） |
 
 ## 下一步
 
-1. **重建镜像与部署栈**（用户已授权自行重构）：`docker compose build binary-tools analysis-worker sandbox-runner …` → 起栈。binary-tools 构建含 mono/de4dotEx/Ghidra/DIE 下载，需网络可用；构建后先验证 `vulnweaver-binary-entrypoint --mode unpack` 在容器内可执行（shebang/LF/mono 路径）。
-2. **真实壳样本端到端**：投递一个 UPX 样本回归既有链路；再投递自制 XOR 壳 ELF（`tests/binary_analysis/samples.py` 的构造方式）验证 `xor-recovered-binary` 派生与后续分析切换；有条件时补 MPRESS/ConfuserEx 样本验证 unipacker/de4dot 路径。
+1. **重建其余镜像并起栈**（binary-tools 已构建并验证）：`docker compose build` 其余服务 → 起栈；注意 Q-021 的重启顺序（先 sandbox-runner 后 worker）。注意：本机 Windows 挂载卷对容器 uid 10001 只读，手工冒烟需 `--user root`，正式部署由 sandbox-runner 准备宿主目录，不受影响。
+2. **部署栈内全链路**：投递 UPX 样本回归既有链路；投递自制 XOR 壳 ELF 验证 worker→`binary-unpack` 沙箱→`xor-recovered-binary` 派生→后续分析切换的全链路（容器内脱壳逻辑已冒烟验证，worker↔沙箱协议尚待栈内实测）；有条件时补 MPRESS/ConfuserEx 样本验证 unipacker/de4dot 路径。
 3. pyright 若有新增错误，修复后再合并。
 4. 合并 `feat/unpacking-toolchain` → `main` 后清理本地分支。
