@@ -8,13 +8,13 @@
 
 系统定位已从课设验证升级为**面向真实世界样本的长线漏洞挖掘智能体系统**（见 `AGENTS.md` 与 ADR-028）。当前主线：补齐真实样本分析的第一道门槛——通用脱壳/重建工具链。
 
-**部署栈已被用户清空（容器与镜像全部删除）**，本分支的工作不依赖运行中的栈；重建步骤见「下一步」。
+部署栈已在本分支上**全部重建并运行**（postgres/redis/api/orchestrator/dispatcher/analysis-worker/sandbox-runner/web/binary-tools 全部 Up），模型经 Web 设置接入（DeepSeek），栈内端到端已通过（见验证记录）。
 
 ## 进行中
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
-| T46 分层脱壳工具链（UPX/de4dotEx/unipacker/XOR 恢复/LIEF 重建 + `binary-unpack` 沙箱工具） | ZCode / `feat/unpacking-toolchain` | 定向测试、ruff/pyright、镜像构建与容器内脱壳冒烟均已通过；余下：部署栈内 worker↔沙箱全链路实测 |
+| T46 分层脱壳工具链（UPX/de4dotEx/unipacker/XOR 恢复/LIEF 重建 + `binary-unpack` 沙箱工具） | ZCode / `feat/unpacking-toolchain` | **全部完成**：定向测试、ruff/pyright、镜像构建、容器内冒烟、部署栈内 worker→沙箱→派生工件→模型审计→报告 全链实测通过（`scripts/e2e_unpack_chain.py` 可复跑） |
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
@@ -45,6 +45,8 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-09-28 | T46 部署栈内全链 E2E（`code/scripts/e2e_unpack_chain.py`，连续三跑全绿） | 上传自制 XOR 壳 ELF → `import`/`semantic_audit`/`report` 三 Job 全部 succeeded；`xor-recovered-binary` 派生摘要与内层 ELF 逐字节一致；**analysis 的 parent 即脱壳镜像**；模型（deepseek-flash）驱动的语义审计与报告真实产出 |
+| 2026-09-28 | 部署栈重建 | 6 个服务镜像 + binary-tools 重建成功；期间修复**全新卷权限缺陷**：root 运行的一次性 migrate 服务初始化 CAS store 时把 `objects/sha256` 建成 root 所有，api(10001) 上传必 EACCES——artifact-init 现已预建该目录（compose.yaml），旧卷 chown 修复 |
 | 2026-09-28 | T46 定向测试（Linux 容器 python:3.12-slim + uv 0.10，`uv sync --all-packages --no-editable --group dev`） | `tests/binary_analysis` **54 passed / 3 skipped**（跳过项为 PostgreSQL opt-in，与基线一致）；`tests/sandbox_runner` + `tests/contracts` + `tests/tool_runtime` **44 passed / 1 skipped**（Docker runtime opt-in）；`ruff check .` 通过；`uv lock` 纳入 lief 0.17.6 / unipacker 1.0.8 / unicorn-unipacker 1.0.3b7 |
 | 2026-09-28 | pyright（node:24-slim 容器，pyright 1.1.413） | **0 errors**（lief 无存根问题以 `importlib.import_module` 隔离；跨模块私有名已提升为公开助手名） |
 | 2026-09-28 | T46 全量测试 | `pytest -n 4`：401 passed / 2 failed（reporting 的 weasyprint 用例，装上 pango 后复跑 **10 passed**，纯环境缺失）/ 173 skipped（PG/Docker opt-in，本机临时容器无对应服务；定向四套件 98 passed） |
@@ -53,7 +55,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 下一步
 
-1. **重建其余镜像并起栈**（binary-tools 已构建并验证）：`docker compose build` 其余服务 → 起栈；注意 Q-021 的重启顺序（先 sandbox-runner 后 worker）。注意：本机 Windows 挂载卷对容器 uid 10001 只读，手工冒烟需 `--user root`，正式部署由 sandbox-runner 准备宿主目录，不受影响。
-2. **部署栈内全链路**：投递 UPX 样本回归既有链路；投递自制 XOR 壳 ELF 验证 worker→`binary-unpack` 沙箱→`xor-recovered-binary` 派生→后续分析切换的全链路（容器内脱壳逻辑已冒烟验证，worker↔沙箱协议尚待栈内实测）；有条件时补 MPRESS/ConfuserEx 样本验证 unipacker/de4dot 路径。
-3. pyright 若有新增错误，修复后再合并。
-4. 合并 `feat/unpacking-toolchain` → `main` 后清理本地分支。
+1. **合并与推送**：`feat/unpacking-toolchain`（5 个提交）待用户确认后推送并合并入 `main`。
+2. **真实壳样本扩展验证**：MPRESS/PECompact 样本走 unipacker、ConfuserEx/.NET 样本走 de4dotEx——单测与合成样本已覆盖逻辑，真实壳的成功率需要真实样本回归。
+3. **长线分析能力**（目标主线）：多天尺度任务的检查点/断点续跑、任务级分析历史的增量深挖（Finding 驱动的二轮调查已具备，跨 Job 的长线编排是下一块拼图）。
+4. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
