@@ -58,7 +58,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 下一步
 
-1. **合并与推送**：`feat/unpacking-toolchain` 待用户确认后推送并合并入 `main`。
 2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
 3. **长线分析下一块**：检查点续跑已就位（ADR-029）；下一块是跨任务的分析记忆（同项目新任务复用既往调查结论）与 Q-025 根因修复。
-4. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+4. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；本地仅剩 `main`（worktree `课设-worktree-fe-opts` 已随分支清理移除）；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
+5. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
