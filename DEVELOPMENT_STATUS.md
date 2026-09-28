@@ -2,7 +2,7 @@
 
 > 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；历史课设阶段的任务明细见 Git 历史、PR 与 `code/docs/progress/`。
 
-更新时间：2026-09-28（Asia/Shanghai）
+更新时间：2026-09-28（Asia/Shanghai，第二轮更新）
 
 ## 当前焦点
 
@@ -14,7 +14,8 @@
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
-| T46 分层脱壳工具链（UPX/de4dotEx/unipacker/XOR 恢复/LIEF 重建 + `binary-unpack` 沙箱工具） | ZCode / `feat/unpacking-toolchain` | **全部完成**：定向测试、ruff/pyright、镜像构建、容器内冒烟、部署栈内 worker→沙箱→派生工件→模型审计→报告 全链实测通过（`scripts/e2e_unpack_chain.py` 可复跑） |
+| T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
+| T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
@@ -38,6 +39,8 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 经验教训（仍有效）
 
+- **提示词/字符串改写必须先过 ruff 再 build 镜像**：本轮一次转义损坏直接造成 worker 崩溃循环（SyntaxError），docker build 不做语法检查拦不住；修复后已恢复"改 packages 先 ruff/ast 后 build"纪律。
+- Q-025（新，待查）：`ReconfigurableRunner` 设置热重载后 registry 与 profiles 可分叉（`sandbox.image_identity_mismatch`，重启 runner 即愈）；根因待查，怀疑 refresh 时 docker CLI 解析瞬时失败。
 - Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，否则**静默用旧代码**。
 - Q-023：Windows 上新建脚本注意 CRLF（容器 shebang 会断）；本轮已将入口脚本规范化为 LF。
 
@@ -45,7 +48,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
-| 2026-09-28 | T46 部署栈内全链 E2E（`code/scripts/e2e_unpack_chain.py`，连续三跑全绿） | 上传自制 XOR 壳 ELF → `import`/`semantic_audit`/`report` 三 Job 全部 succeeded；`xor-recovered-binary` 派生摘要与内层 ELF 逐字节一致；**analysis 的 parent 即脱壳镜像**；模型（deepseek-flash）驱动的语义审计与报告真实产出 |
+| 2026-09-28 | T47 + 真实壳回归 | `tests/orchestrator`+`tests/binary_analysis` **90 passed**（新增 5 续跑用例，其中 2 个在栈内 PostgreSQL 实跑）；ruff 通过；**pyright 0 errors**；栈内 E2E 双绿：真实 UPX 壳经 unipacker（`emulated-unpacked-binary`、分析切到脱壳镜像）与 XOR 壳回归（新提示词/新 deadline 下 `semantic_audit` 真实模型审计 succeeded） || 2026-09-28 | T46 部署栈内全链 E2E（`code/scripts/e2e_unpack_chain.py`，连续三跑全绿） | 上传自制 XOR 壳 ELF → `import`/`semantic_audit`/`report` 三 Job 全部 succeeded；`xor-recovered-binary` 派生摘要与内层 ELF 逐字节一致；**analysis 的 parent 即脱壳镜像**；模型（deepseek-flash）驱动的语义审计与报告真实产出 |
 | 2026-09-28 | 部署栈重建 | 6 个服务镜像 + binary-tools 重建成功；期间修复**全新卷权限缺陷**：root 运行的一次性 migrate 服务初始化 CAS store 时把 `objects/sha256` 建成 root 所有，api(10001) 上传必 EACCES——artifact-init 现已预建该目录（compose.yaml），旧卷 chown 修复 |
 | 2026-09-28 | T46 定向测试（Linux 容器 python:3.12-slim + uv 0.10，`uv sync --all-packages --no-editable --group dev`） | `tests/binary_analysis` **54 passed / 3 skipped**（跳过项为 PostgreSQL opt-in，与基线一致）；`tests/sandbox_runner` + `tests/contracts` + `tests/tool_runtime` **44 passed / 1 skipped**（Docker runtime opt-in）；`ruff check .` 通过；`uv lock` 纳入 lief 0.17.6 / unipacker 1.0.8 / unicorn-unipacker 1.0.3b7 |
 | 2026-09-28 | pyright（node:24-slim 容器，pyright 1.1.413） | **0 errors**（lief 无存根问题以 `importlib.import_module` 隔离；跨模块私有名已提升为公开助手名） |
@@ -55,7 +58,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 下一步
 
-1. **合并与推送**：`feat/unpacking-toolchain`（5 个提交）待用户确认后推送并合并入 `main`。
-2. **真实壳样本扩展验证**：MPRESS/PECompact 样本走 unipacker、ConfuserEx/.NET 样本走 de4dotEx——单测与合成样本已覆盖逻辑，真实壳的成功率需要真实样本回归。
-3. **长线分析能力**（目标主线）：多天尺度任务的检查点/断点续跑、任务级分析历史的增量深挖（Finding 驱动的二轮调查已具备，跨 Job 的长线编排是下一块拼图）。
+1. **合并与推送**：`feat/unpacking-toolchain` 待用户确认后推送并合并入 `main`。
+2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
+3. **长线分析下一块**：检查点续跑已就位（ADR-029）；下一块是跨任务的分析记忆（同项目新任务复用既往调查结论）与 Q-025 根因修复。
 4. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
