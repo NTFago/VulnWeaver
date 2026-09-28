@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 from dataclasses import dataclass
 from typing import Protocol, cast
 
@@ -55,6 +56,11 @@ from vulnweaver_pair import build_call_path_steps, pseudocode_text
 from vulnweaver_persistence import Database, EntityConflict, Repositories
 
 from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
+from vulnweaver_orchestrator.investigation_memory import (
+    DatabaseInvestigationMemory,
+    InvestigationMemory,
+    build_memory_document,
+)
 from vulnweaver_orchestrator.pair_scopes import pair_version_scope
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
 
@@ -153,6 +159,9 @@ class AuditModel(Protocol):
     ) -> ModelCallResult: ...
 
 
+LOGGER = logging.getLogger("vulnweaver.semantic_audit")
+
+
 class FactLoader(Protocol):
     async def load(self, task_id: str, location: JsonObject) -> SourceReviewFacts: ...
 
@@ -168,12 +177,18 @@ class SemanticAuditor:
         *,
         fact_loader: FactLoader | None = None,
         agent: CodeAuditAgent | None = None,
+        memory: InvestigationMemory | None = None,
     ) -> None:
         self._database = database
         self._gateway = gateway
         self._store = store
         self._fact_loader = fact_loader or SourceReviewFactLoader(database, store)
         self._agent = agent
+        # Memory defaults on: every deployment gets a long-horizon audit agent
+        # without wiring, and tests that want isolation inject their own stub.
+        self._memory = memory if memory is not None else DatabaseInvestigationMemory(
+            database, store
+        )
 
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
@@ -187,8 +202,13 @@ class SemanticAuditor:
             # task aggregation running without inventing model output.
             return SemanticAuditOutcome(run_id, None, (), (), 0)
         if self._agent is not None:
+            prior_investigations = await self._load_prior_investigations(job["task_id"])
             agent_outcome = await self._run_agent(
-                job, run_id, source_version_id, binary_version_id
+                job,
+                run_id,
+                source_version_id,
+                binary_version_id,
+                prior_investigations=prior_investigations,
             )
             if agent_outcome is not None:
                 return agent_outcome
@@ -202,6 +222,8 @@ class SemanticAuditor:
         run_id: str,
         source_version_id: str,
         binary_version_id: str,
+        *,
+        prior_investigations: list[JsonObject] | None = None,
     ) -> SemanticAuditOutcome | None:
         """Investigate with the audit agent; ``None`` means "fall back".
 
@@ -218,6 +240,7 @@ class SemanticAuditor:
             attempt=int(job["attempt"]),
             run_id=f"{run_id}-agent",
             input_refs=tuple(job["input_refs"]),
+            prior_investigations=tuple(prior_investigations or ()),
         )
         if outcome.degraded:
             # The degraded run is still worth keeping: it records why the job
@@ -239,7 +262,7 @@ class SemanticAuditor:
         report_ref, report_digest = await self._store_report(
             run_id, job["task_id"], report, investigation=investigation
         )
-        finding_ids, evidence_ids, dropped = await self._project(
+        finding_ids, evidence_ids, dropped, dropped_documents = await self._project(
             job,
             source_version_id,
             binary_version_id,
@@ -248,6 +271,16 @@ class SemanticAuditor:
             report_digest,
             run_id,
             investigation=investigation,
+        )
+        await self._write_memory(
+            job,
+            run_id,
+            source_version_id,
+            binary_version_id,
+            report,
+            dropped_documents,
+            investigation,
+            outcome.completed,
         )
         await self._persist_run(dict(outcome.run))
         if not outcome.completed:
@@ -292,7 +325,7 @@ class SemanticAuditor:
             raise _AuditError(str(failure["code"]), FailureKind.DEPENDENCY)
         report_ref, report_digest = await self._store_report(run_id, task_id, report)
         run["result_refs"] = [report_ref]
-        finding_ids, evidence_ids, dropped = await self._project(
+        finding_ids, evidence_ids, dropped, _dropped_documents = await self._project(
             job, source_version_id, binary_version_id, report, report_ref, report_digest, run_id
         )
         await self._persist_run(run)
@@ -384,6 +417,64 @@ class SemanticAuditor:
             ) from error
         return stored.object_ref, stored.digest
 
+    async def _project_id(self, task_id: str) -> str:
+        async with self._database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            return str(task["project_id"])
+
+    async def _load_prior_investigations(self, task_id: str) -> list[JsonObject]:
+        """The project's recent investigation memory, newest first.
+
+        The memory is the agent's own prior conclusions; loading it into the
+        next audit is what turns per-task investigations into one continuous,
+        long-horizon dig.  Failures degrade to starting fresh.
+        """
+        try:
+            return await self._memory.latest(await self._project_id(task_id))
+        except Exception as error:  # memory must never block an audit
+            LOGGER.warning(
+                "investigation_memory_load_failed",
+                extra={"task_id": task_id, "error": str(error)[:200]},
+            )
+            return []
+
+    async def _write_memory(
+        self,
+        job: Job,
+        run_id: str,
+        source_version_id: str,
+        binary_version_id: str,
+        report: JsonObject,
+        dropped_documents: list[JsonObject],
+        investigation: list[JsonObject],
+        completed: bool,
+    ) -> None:
+        findings_value = report.get("findings")
+        findings = (
+            [cast(JsonObject, item) for item in findings_value if isinstance(item, dict)]
+            if isinstance(findings_value, list)
+            else []
+        )
+        project_id = await self._project_id(job["task_id"])
+        document = build_memory_document(
+            task_id=job["task_id"],
+            project_id=project_id,
+            run_id=run_id,
+            created_at=_now_from(job),
+            findings=findings,
+            dropped_candidates=dropped_documents,
+            investigation=investigation,
+            completed=completed,
+            source_version_id=source_version_id,
+            binary_version_id=binary_version_id,
+        )
+        await self._memory.write(
+            project_id=project_id,
+            parent_version_id=binary_version_id or source_version_id,
+            document=document,
+            produced_by=_AUDIT_TOOL,
+        )
+
     async def _project(
         self,
         job: Job,
@@ -395,9 +486,10 @@ class SemanticAuditor:
         run_id: str,
         *,
         investigation: list[JsonObject] | None = None,
-    ) -> tuple[tuple[str, ...], tuple[str, ...], int]:
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int, list[JsonObject]]:
         accepted: list[tuple[str, str]] = []
         dropped = 0
+        dropped_documents: list[JsonObject] = []
         raw_findings = report.get("findings")
         candidates = cast(list[JsonObject], raw_findings) if isinstance(raw_findings, list) else []
         async with self._database.transaction() as repositories:
@@ -408,6 +500,7 @@ class SemanticAuditor:
                 )
                 if anchor is None:
                     dropped += 1
+                    dropped_documents.append(candidate)
                     continue
                 location = anchor.location
                 call_path = await _call_path(repositories, anchor)
@@ -486,7 +579,7 @@ class SemanticAuditor:
                 accepted.append((finding_id, evidence_id))
         finding_ids = tuple(sorted({item[0] for item in accepted}))
         evidence_ids = tuple(sorted({item[1] for item in accepted}))
-        return finding_ids, evidence_ids, dropped
+        return finding_ids, evidence_ids, dropped, dropped_documents
 
     async def _persist_run(self, run: dict[str, object]) -> None:
         async with self._database.transaction() as repositories:
