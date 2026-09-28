@@ -15,7 +15,7 @@
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
 | T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
-| T48 项目级调查记忆（ADR-030） | ZCode / `feat/agent-investigation-memory` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
+| T48 项目级调查记忆（ADR-030） | ZCode / 已合并 `f6d354a` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
 | T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
