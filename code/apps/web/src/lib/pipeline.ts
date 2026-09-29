@@ -16,9 +16,9 @@ type StageDefinition = { key: string; name: string; description: string; kinds: 
 const definitions: StageDefinition[] = [
   { key: "input", name: "导入与解析", description: "登记样本、建立索引；二进制导入可包含识别与逆向处理。", kinds: ["validate", "import"] },
   { key: "analysis", name: "分析基线", description: "已调度的静态扫描或二进制分析作业。", kinds: ["source_analysis", "binary_analysis"] },
-  { key: "audit", name: "智能体审计", description: "按需读取函数、追踪调用并调查候选漏洞。", kinds: ["semantic_audit"] },
+  { key: "audit", name: "智能体审计", description: "智能体按需读码、追踪调用并调查候选；携带项目既往调查记忆，中断后可从检查点续跑。", kinds: ["semantic_audit"] },
   { key: "review", name: "独立复核", description: "核查候选结论、支持证据与反驳证据。", kinds: ["review"] },
-  { key: "fuzz", name: "模糊测试", description: "按项目设置与候选条件调度，源码可经 Harness 编译后执行。", kinds: ["fuzz"], dynamic: true },
+  { key: "fuzz", name: "模糊测试", description: "智能体可请求提前投放；其余候选在复核后按项目设置调度，源码可经 Harness 编译执行。", kinds: ["fuzz"], dynamic: true },
   { key: "verify", name: "漏洞验证", description: "概念验证与已授权的利用验证；是否执行取决于证据及策略。", kinds: ["proof", "exploit"] },
   { key: "report", name: "报告生成", description: "汇总扫描事实、证据与复核记录，登记报告工件。", kinds: ["report"] },
 ];

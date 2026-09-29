@@ -34,7 +34,7 @@
 
 <section class="panel finding-stats" aria-label="漏洞统计">
   <header class="panel-head">
-    <div><h2>漏洞统计</h2><p>等级分布排除已标记误报；待复核发现不代表已确认漏洞。</p></div>
+    <div><h2>漏洞统计</h2><p>所有发现均由智能体读码锚定，扫描器原始命中仅存为证据线索；等级分布排除已标记误报，待复核不代表已确认。</p></div>
     <span class="badge accent">{total} 个有效发现</span>
   </header>
   <div class="stats-body">
