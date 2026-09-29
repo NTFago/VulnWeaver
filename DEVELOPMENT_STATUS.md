@@ -42,6 +42,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 经验教训（仍有效）
 
+- Q-025（已修复，2026-09-29）：runner 热重载/镜像重建后 worker 缓存的旧 digest 导致 `image_identity_mismatch`。修复在 client 层：`SandboxRunnerClient.run` 遇该失败码时向 runner 重取权威 digest 重试一次（`tests/proof/test_runner_client.py` 带状态假 runner 覆盖）。另：`vulnweaver-afl-casr:fixed` 镜像已构建并注册（compose 新增 `fuzz-tool` 构建服务），fuzz 投放链路的结构性断点已消除；`angr_enabled` 已开启。
 - **提示词/字符串改写必须先过 ruff 再 build 镜像**：本轮一次转义损坏直接造成 worker 崩溃循环（SyntaxError），docker build 不做语法检查拦不住；修复后已恢复"改 packages 先 ruff/ast 后 build"纪律。
 - Q-025（新，待查）：`ReconfigurableRunner` 设置热重载后 registry 与 profiles 可分叉（`sandbox.image_identity_mismatch`，重启 runner 即愈）；根因待查，怀疑 refresh 时 docker CLI 解析瞬时失败。
 - Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，否则**静默用旧代码**。
