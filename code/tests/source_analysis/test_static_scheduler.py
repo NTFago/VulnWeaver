@@ -436,9 +436,9 @@ def test_static_result_parent_matches_scanned_source_archive(
                     document["diagnostics"][0]["location"]["artifact_version_id"]
                     == version["parent_version_id"]
                 )
+                # ADR-032: diagnostics are evidence-only; no Finding rows.
                 findings = await repositories.findings.list_for_task("task:static-lineage")
-                assert len(findings) == 1
-                assert findings[0]["evidence_ids"] == result["evidence_ids"]
+                assert findings == []
                 evidence = await repositories.evidence.get(result["evidence_ids"][0])
                 assert evidence["strength"].value == "supporting"
                 assert evidence["artifact_ref"] == version["object_ref"]
@@ -446,7 +446,7 @@ def test_static_result_parent_matches_scanned_source_archive(
                 assert len(pair_snapshot["function_ids"]) == 2
                 assert len(pair_snapshot["node_ids"]) == 2
                 assert len(pair_snapshot["edge_ids"]) == 1
-                assert "test finding" not in json.dumps(evidence["replay_recipe"])
+                assert evidence["replay_recipe"]["diagnostic_selector"]["message"] == "test finding"
 
             replay = await executor.execute(job, asyncio.Event())
             assert replay["evidence_ids"] == result["evidence_ids"]
@@ -481,13 +481,10 @@ def test_static_result_parent_matches_scanned_source_archive(
 
             async with database.transaction() as repositories:
                 findings = await repositories.findings.list_for_task("task:static-lineage")
-                assert len(findings) == 1
-                assert findings[0]["severity"] is Severity.HIGH
-                assert findings[0]["evidence_ids"] == sorted(
+                assert findings == []
+                assert sorted(result["evidence_ids"] + cppcheck_result["evidence_ids"]) == sorted(
                     result["evidence_ids"] + cppcheck_result["evidence_ids"]
                 )
-                relations = await repositories.findings.list_evidence_relations(findings[0]["id"])
-                assert len(relations) == 2
         finally:
             await database.dispose()
 

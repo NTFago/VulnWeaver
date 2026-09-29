@@ -18,14 +18,13 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from vulnweaver_artifact_store import ArtifactStore, ArtifactStoreError
 from vulnweaver_contracts import (
     ArtifactKind,
     ArtifactVersion,
     EvidenceType,
-    Finding,
     JsonObject,
     JsonValue,
     PairEdge,
@@ -34,7 +33,7 @@ from vulnweaver_contracts import (
     ResourceBudget,
 )
 from vulnweaver_pair import binary_address_of, build_call_path_steps, pseudocode_text
-from vulnweaver_persistence import Database, Repositories
+from vulnweaver_persistence import Database
 from vulnweaver_source_analysis import SourceExcerptReader, SourceImportError
 from vulnweaver_tool_runtime import ScheduledToolCall
 
@@ -560,33 +559,29 @@ class AuditWorkspace:
         return cast(JsonObject, {"candidates": candidates[: _MAX_FACTS_ITEMS]})
 
     async def static_leads(self) -> JsonObject:
-        """Static-scanner output, presented as leads to confirm or refute."""
+        """Static-scanner output, presented as leads to confirm or refute.
+
+        Diagnostics live as TOOL_OUTPUT evidence (ADR-032) -- never as Finding
+        rows -- so the leads come straight from the evidence layer, matched on
+        the task artifact versions the workspace already knows.
+        """
 
         async with self.database.transaction() as repositories:
-            findings = await repositories.findings.list_for_task(self.task_id)
             leads: list[JsonObject] = []
-            for finding in findings:
-                tools = await _tool_evidence(repositories, finding)
-                if not tools:
+            seen: set[str] = set()
+            for version in self._versions.values():
+                input_ref = str(version["object_ref"] or "")
+                if not input_ref:
                     continue
-                location = finding["location"]
-                leads.append(
-                    cast(
-                        JsonObject,
-                        {
-                            "finding_id": finding["id"],
-                            "cwe_id": finding["cwe_id"],
-                            "title": finding["title"],
-                            "severity": finding["severity"],
-                            "category": finding["category"],
-                            "status": finding["status"],
-                            "path": location.get("path"),
-                            "start_line": location.get("start_line"),
-                            "address": location.get("virtual_address"),
-                            "scanners": tools,
-                        },
-                    )
-                )
+                stored = await repositories.evidence.list_for_input(input_ref)
+                for evidence in stored:
+                    if evidence["id"] in seen:
+                        continue
+                    seen.add(evidence["id"])
+                    lead = _lead_from_evidence(evidence)
+                    if lead is not None:
+                        leads.append(lead)
+        leads.sort(key=lambda item: (str(item.get("path")), str(item.get("cwe_id"))))
         return cast(
             JsonObject,
             {
@@ -903,20 +898,45 @@ class AuditStepExecutor:
         return {"recorded": True, "total": len(self.reported)}
 
 
-async def _tool_evidence(repositories: Repositories, finding: Finding) -> list[str]:
-    """Which scanners contributed TOOL_OUTPUT evidence to this finding."""
 
-    relations = await repositories.findings.list_evidence_relations(finding["id"])
-    names: list[str] = []
-    for relation in relations:
-        evidence = await repositories.evidence.get(relation["evidence_id"])
-        if evidence["type"] is not EvidenceType.TOOL_OUTPUT:
-            continue
-        tool = evidence["tool"]
-        name = tool["name"] if tool else "unknown"
-        if name not in names:
-            names.append(name)
-    return names
+
+def _lead_from_evidence(evidence: Any) -> JsonObject | None:
+    """One scanner lead from its TOOL_OUTPUT diagnostic evidence, or None.
+
+    Older evidence rows predate the selector's severity/message fields; those
+    entries still surface with whatever the recipe carries.
+    """
+    if evidence["type"] is not EvidenceType.TOOL_OUTPUT:
+        return None
+    recipe = evidence["replay_recipe"]
+    if not isinstance(recipe, Mapping):
+        return None
+    recipe = cast(Mapping[str, object], recipe)
+    if recipe.get("kind") != "static_analysis_diagnostic":
+        return None
+    selector_raw = recipe.get("diagnostic_selector")
+    selector: Mapping[str, object] = {}
+    if isinstance(selector_raw, Mapping):
+        selector = cast(Mapping[str, object], selector_raw)
+    location_raw = selector.get("location")
+    location: Mapping[str, object] = {}
+    if isinstance(location_raw, Mapping):
+        location = cast(Mapping[str, object], location_raw)
+    tool = evidence["tool"]
+    tool_name = tool["name"] if tool else "unknown"
+    return cast(
+        JsonObject,
+        {
+            "cwe_id": selector.get("cwe_id"),
+            "scanner": tool_name,
+            "rule_id": selector.get("rule_id"),
+            "severity": selector.get("severity"),
+            "message": selector.get("message"),
+            "path": location.get("path"),
+            "start_line": location.get("start_line"),
+            "address": location.get("virtual_address"),
+        },
+    )
 
 
 def _function_summary(ref: AuditFunctionRef) -> JsonObject:

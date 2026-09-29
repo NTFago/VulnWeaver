@@ -512,21 +512,40 @@ def test_static_leads_are_leads_and_never_become_findings_by_themselves(
         async with database.transaction() as repositories:
             functions = await repositories.pair.list_functions(version_id)
             function_version = functions[0]["artifact_version_id"]
+            # Leads are matched on the task input version's object_ref, exactly
+            # as production evidence references it.
+            input_version = await repositories.artifacts.get_version(version_id)
+            input_ref = input_version["object_ref"]
             await repositories.evidence.create(
                 Evidence(
                     schema_version=SchemaVersion.VALUE_1_0_0,
                     id=f"evidence:{suffix}",
                     type=EvidenceType.TOOL_OUTPUT,
                     strength=EvidenceStrength.SUPPORTING,
-                    artifact_ref="cas://sha256/" + "d" * 64,
-                    digest="sha256:" + "d" * 64,
+                    artifact_ref=input_ref,
+                    digest=input_version["digest"],
                     tool=ToolIdentity(name="semgrep", version="1.0.0", image_digest=None),
-                    input_ref="cas://sha256/" + "d" * 64,
+                    input_ref=input_ref,
                     command_hash=None,
                     exit_code=0,
                     stdout_ref=None,
                     stderr_ref=None,
-                    replay_recipe={"kind": "static_analysis_diagnostic", "reproducible": False},
+                    replay_recipe={
+                        "kind": "static_analysis_diagnostic",
+                        "reproducible": False,
+                        "diagnostic_selector": {
+                            "tool_name": "semgrep",
+                            "rule_id": "py.command-injection",
+                            "cwe_id": "CWE-78",
+                            "severity": "high",
+                            "message": "subprocess call with request data",
+                            "location": {
+                                "artifact_version_id": function_version,
+                                "path": real_path,
+                                "start_line": 1,
+                            },
+                        },
+                    },
                     created_at=TIMESTAMP,
                 )
             )
@@ -593,7 +612,9 @@ def test_static_leads_are_leads_and_never_become_findings_by_themselves(
             leads = await workspace.static_leads()
             entries = cast(list[JsonObject], leads["leads"])
             assert [entry["cwe_id"] for entry in entries] == ["CWE-78"]
-            assert entries[0]["scanners"] == ["semgrep"]
+            assert entries[0]["scanner"] == "semgrep"
+            assert entries[0]["rule_id"] == "py.command-injection"
+            assert entries[0]["path"] == real_path
 
             agent = CodeAuditAgent(database, planner, LocalContentAddressedStore(tmp_path))
             outcome = await agent.audit(
