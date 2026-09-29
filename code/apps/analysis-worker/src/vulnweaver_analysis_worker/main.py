@@ -56,6 +56,7 @@ from vulnweaver_orchestrator import (
     CodeAuditAgent,
     CriticalLogicConfirmer,
     DatabaseAgentRunSink,
+    DeferredFuzzDispatcher,
     FuzzJobScheduler,
     FuzzTarget,
     IndependentModelReviewer,
@@ -175,12 +176,14 @@ async def _run() -> None:
             if binary_sandbox is not None and binary_digest is not None
             else None
         )
+        fuzz_dispatch_holder = DeferredFuzzDispatcher()
         review_executor, audit_executor, model_gateway = _model_executors(
             database,
             store,
             settings,
             symbolic_runner=symbolic_runner,
             audit_deadline_seconds=config.audit_deadline_seconds,
+            fuzz_dispatcher=fuzz_dispatch_holder,
         )
         proof_executor = _proof_executor(database, store, model_gateway, config)
         fuzz_executor = await _fuzz_executor(
@@ -195,6 +198,11 @@ async def _run() -> None:
             registry=tool_registry,
             harness_enabled=model_gateway is not None,
         )
+        # The audit settlement dispatches the agent's fuzz requests into this
+        # scheduler (ADR-031); the holder bridges the wiring-order gap because
+        # the scheduler needs the model gateway that the executors just built.
+        if fuzz_scheduler is not None:
+            fuzz_dispatch_holder.set(fuzz_scheduler)
         binary_planning_hook = (
             _ReversePlanningHook(
                 ReversePlanningAgent(
@@ -437,6 +445,7 @@ def _model_executors(
     *,
     symbolic_runner: object | None = None,
     audit_deadline_seconds: int | None = None,
+    fuzz_dispatcher: object | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
     """Build one gateway with an independent endpoint per configured tier.
 
@@ -484,6 +493,10 @@ def _model_executors(
         database,
         gateway,
         store,
+        fuzz_dispatcher=cast(Any, fuzz_dispatcher),
+        # The agent's verification_request=fuzz launches its campaign at audit
+        # settlement instead of waiting for review (ADR-031); every enforcement
+        # gate stays inside the scheduler and the project opt-in.
         # The sink is progress-aware, so the loop can flush a running snapshot
         # each round and the trajectory is visible while the audit is still in
         # flight; the auditor's final write advances the same row to terminal.

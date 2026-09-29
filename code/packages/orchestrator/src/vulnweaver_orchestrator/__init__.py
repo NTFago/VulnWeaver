@@ -75,6 +75,7 @@ from vulnweaver_orchestrator.reviews import (
     ReviewGateResult,
 )
 from vulnweaver_orchestrator.semantic_audit import (
+    DeferredFuzzDispatcher,
     SemanticAuditJobExecutor,
     SemanticAuditor,
     SemanticAuditOutcome,
@@ -138,7 +139,8 @@ __all__ = [
     "InvestigationMemory",
     "build_memory_document",
     "memory_context_entry",
-"CriticalLogicConfirmer",
+    "CriticalLogicConfirmer",
+    "DeferredFuzzDispatcher",
     "FuzzJobScheduler",
     "FuzzTarget",
     "FuzzTargetResolver",
