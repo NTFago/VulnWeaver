@@ -144,6 +144,45 @@ class SemanticAuditOutcome:
     dropped_findings: int
 
 
+class AgentFuzzDispatcher(Protocol):
+    """The slice of FuzzJobScheduler the agent's requests may drive."""
+
+    async def schedule_finding_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None: ...
+
+
+# One audit's agent may launch at most this many fuzz campaigns, however many
+# candidates it marks -- dynamic execution is expensive and the request signal
+# is "reading cannot settle this", which concentrates on few locations.
+_MAX_AGENT_FUZZ_DISPATCHES = 4
+
+
+class DeferredFuzzDispatcher:
+    """Forward to the scheduler the worker wires in after model assembly.
+
+    The fuzz scheduler needs the model gateway, which the same assembly builds
+    alongside this auditor; the holder bridges that ordering gap instead of
+    forcing a constructor reorder.  Dispatching before ``set`` is a no-op (it
+    cannot happen in a live deployment: wiring completes before any Job runs).
+    """
+
+    def __init__(self) -> None:
+        self._dispatcher: AgentFuzzDispatcher | None = None
+
+    def set(self, dispatcher: AgentFuzzDispatcher) -> None:
+        self._dispatcher = dispatcher
+
+    async def schedule_finding_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None:
+        if self._dispatcher is None:
+            return None
+        return await self._dispatcher.schedule_finding_in_transaction(
+            repositories, finding_id
+        )
+
+
 class AuditModel(Protocol):
     async def complete_structured(
         self,
@@ -178,12 +217,14 @@ class SemanticAuditor:
         fact_loader: FactLoader | None = None,
         agent: CodeAuditAgent | None = None,
         memory: InvestigationMemory | None = None,
+        fuzz_dispatcher: AgentFuzzDispatcher | None = None,
     ) -> None:
         self._database = database
         self._gateway = gateway
         self._store = store
         self._fact_loader = fact_loader or SourceReviewFactLoader(database, store)
         self._agent = agent
+        self._fuzz_dispatcher = fuzz_dispatcher
         # Memory defaults on: every deployment gets a long-horizon audit agent
         # without wiring, and tests that want isolation inject their own stub.
         self._memory = memory if memory is not None else DatabaseInvestigationMemory(
@@ -262,16 +303,19 @@ class SemanticAuditor:
         report_ref, report_digest = await self._store_report(
             run_id, job["task_id"], report, investigation=investigation
         )
-        finding_ids, evidence_ids, dropped, dropped_documents = await self._project(
-            job,
-            source_version_id,
-            binary_version_id,
-            report,
-            report_ref,
-            report_digest,
-            run_id,
-            investigation=investigation,
+        finding_ids, evidence_ids, dropped, dropped_documents, fuzz_requested = (
+            await self._project(
+                job,
+                source_version_id,
+                binary_version_id,
+                report,
+                report_ref,
+                report_digest,
+                run_id,
+                investigation=investigation,
+            )
         )
+        await self._dispatch_agent_fuzz(job, fuzz_requested)
         await self._write_memory(
             job,
             run_id,
@@ -325,7 +369,13 @@ class SemanticAuditor:
             raise _AuditError(str(failure["code"]), FailureKind.DEPENDENCY)
         report_ref, report_digest = await self._store_report(run_id, task_id, report)
         run["result_refs"] = [report_ref]
-        finding_ids, evidence_ids, dropped, _dropped_documents = await self._project(
+        (
+            finding_ids,
+            evidence_ids,
+            dropped,
+            _dropped_documents,
+            _fuzz_requested,
+        ) = await self._project(
             job, source_version_id, binary_version_id, report, report_ref, report_digest, run_id
         )
         await self._persist_run(run)
@@ -475,6 +525,35 @@ class SemanticAuditor:
             produced_by=_AUDIT_TOOL,
         )
 
+    async def _dispatch_agent_fuzz(self, job: Job, finding_ids: list[str]) -> None:
+        """Launch the fuzz campaigns the agent explicitly requested (ADR-031).
+
+        The agent's request jumps the queue -- dispatch happens at audit
+        settlement, before review -- because it means "reading cannot settle
+        this". Every enforcement gate stays: project dynamic-validation opt-in,
+        the per-audit cap, the scheduler's bounded target resolution and its
+        deterministic dedup (a later review-settlement dispatch no-ops).
+        """
+        dispatcher = self._fuzz_dispatcher
+        if dispatcher is None or not finding_ids:
+            return
+        try:
+            async with self._database.transaction() as repositories:
+                task = await repositories.tasks.get(job["task_id"])
+                project = await repositories.projects.get(task["project_id"])
+                if not project["exploit_validation_enabled"]:
+                    return
+                for finding_id in finding_ids[:_MAX_AGENT_FUZZ_DISPATCHES]:
+                    await dispatcher.schedule_finding_in_transaction(
+                        repositories, finding_id
+                    )
+        except Exception as error:  # dispatch failure must not fail the audit
+            LOGGER.warning(
+                "agent_fuzz_dispatch_failed task=%s: %s",
+                job["task_id"],
+                str(error)[:300],
+            )
+
     async def _project(
         self,
         job: Job,
@@ -486,10 +565,11 @@ class SemanticAuditor:
         run_id: str,
         *,
         investigation: list[JsonObject] | None = None,
-    ) -> tuple[tuple[str, ...], tuple[str, ...], int, list[JsonObject]]:
+    ) -> tuple[tuple[str, ...], tuple[str, ...], int, list[JsonObject], list[str]]:
         accepted: list[tuple[str, str]] = []
         dropped = 0
         dropped_documents: list[JsonObject] = []
+        agent_fuzz_requested: list[str] = []
         raw_findings = report.get("findings")
         candidates = cast(list[JsonObject], raw_findings) if isinstance(raw_findings, list) else []
         async with self._database.transaction() as repositories:
@@ -577,9 +657,15 @@ class SemanticAuditor:
                         )
                     )
                 accepted.append((finding_id, evidence_id))
+                if finding.get("verification_request") == "fuzz":
+                    # The agent judged that reading cannot settle this
+                    # memory-safety question: its request drives the fuzz
+                    # campaign directly (ADR-031), subject to the project's
+                    # dynamic-validation opt-in and the per-audit cap.
+                    agent_fuzz_requested.append(finding_id)
         finding_ids = tuple(sorted({item[0] for item in accepted}))
         evidence_ids = tuple(sorted({item[1] for item in accepted}))
-        return finding_ids, evidence_ids, dropped, dropped_documents
+        return finding_ids, evidence_ids, dropped, dropped_documents, agent_fuzz_requested
 
     async def _persist_run(self, run: dict[str, object]) -> None:
         async with self._database.transaction() as repositories:
