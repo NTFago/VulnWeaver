@@ -85,6 +85,43 @@ class SandboxRunnerClient:
             return cast(SandboxResult, _failure(request["id"], "sandbox.cancelled"))
         cancelled.cancel()
         await asyncio.gather(cancelled, return_exceptions=True)
+        result = await task
+        retry = await self._retry_on_identity_mismatch(request, result, cancellation)
+        return retry if retry is not None else result
+
+    async def _retry_on_identity_mismatch(
+        self,
+        request: SandboxRequest,
+        result: SandboxResult,
+        cancellation: asyncio.Event,
+    ) -> SandboxResult | None:
+        """Re-align with the Runner's registered digest and retry once (Q-025).
+
+        The Runner rebuilds its tool registry when installation settings change
+        or a fixed image is rebuilt; a worker that cached the previous digest
+        then fails every run with ``sandbox.image_identity_mismatch``.  The
+        Runner's registry is the authority, so on that exact failure the client
+        re-fetches the digest and retries a single time.
+        """
+        failure = result["failure"]
+        if failure is None or failure.get("code") != "sandbox.image_identity_mismatch":
+            return None
+        if cancellation.is_set():
+            return None
+        digest = await self.tool_digest(request["tool_name"], request["tool_version"])
+        if digest is None or digest == request["image_digest"]:
+            return None
+        realigned = cast(SandboxRequest, {**request, "image_digest": digest})
+        validate_contract("SandboxRequest", realigned)
+        task = asyncio.create_task(self._request(realigned))
+        cancelled = asyncio.create_task(cancellation.wait())
+        done, _ = await asyncio.wait({task, cancelled}, return_when=asyncio.FIRST_COMPLETED)
+        if cancelled in done and cancelled.result():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return cast(SandboxResult, _failure(request["id"], "sandbox.cancelled"))
+        cancelled.cancel()
+        await asyncio.gather(cancelled, return_exceptions=True)
         return await task
 
     async def _request(self, request: SandboxRequest) -> SandboxResult:

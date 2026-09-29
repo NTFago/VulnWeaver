@@ -8,6 +8,13 @@ services:
       dockerfile: apps/proof-tool/Dockerfile
     profiles: [tools]
 
+  fuzz-tool:
+    image: vulnweaver-afl-casr:fixed
+    build:
+      context: .
+      dockerfile: apps/fuzz-tool/Dockerfile
+    profiles: [tools]
+
   postgres:
     image: postgres:16-alpine
     environment:
