@@ -73,7 +73,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 1. **T52 收尾（接手入口）**：当前部署的 DeepSeek 仍走 legacy `model_tiers` 回退（功能不变）；在 Web 设置页用"从预设创建→DeepSeek 官方"重建供应商（填 Key、绑定四个智能体）即完成迁移；迁移后用固定样本跑一次真实审计 E2E 验证注册表路径（`scripts/e2e_investigation_memory.py` 可复用）。OpenAI Responses 线格式只有单测覆盖，未对真实 Responses 端点联调。
 2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。PG/Redis opt-in 环境变量：`VULNWEAVER_TEST_ADMIN_DATABASE_URL=postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/postgres`、`VULNWEAVER_TEST_REDIS_URL=redis://redis:6379/15`。
+3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。测试的 PG/Redis opt-in 默认值已指向栈内服务名（`postgres:5432`/`redis:6379`，2026-09-30），容器内跑 pytest 无需再传 `VULNWEAVER_TEST_*` 环境变量；其他环境用同名变量覆盖，连不上时相关用例优雅 skip。
 4. **长线下一块**：五块拼图+动态验证闭环已全部就位；候选方向：报告与工作台展示"线索→agent 结论"差异呈现、fuzz 崩溃证据经 ADR-027 §4 修订复核的运行时观察。
 5. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
 6. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
