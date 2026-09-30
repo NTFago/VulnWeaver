@@ -25,7 +25,7 @@ export type FindingCategory = "memory_corruption" | "injection" | "auth_or_busin
 
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
-export type EvidenceType = "model_explanation" | "tool_output" | "code_snippet" | "dataflow_path" | "crash_record" | "reproduction_result" | "exploit_record" | "review_conclusion" | "human_confirmation";
+export type EvidenceType = "model_explanation" | "tool_output" | "code_snippet" | "dataflow_path" | "crash_record" | "reproduction_result" | "poc_verification_result" | "exploit_record" | "review_conclusion" | "human_confirmation";
 
 export type EvidenceStrength = "contextual" | "supporting" | "strong";
 
