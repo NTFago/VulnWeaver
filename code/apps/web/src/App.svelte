@@ -31,7 +31,7 @@
   let busy = false;
   let error = "";
   let notice = "";
-  let view: View = "settings";
+  let view: View = "overview";
   let projects: Project[] = [];
   let selectedProject: Project | null = null;
   let artifacts: Artifact[] = [];
@@ -62,13 +62,28 @@
   let selectedFunctionId: string | null = null;
   let reportVersionIds: string[] = [];
 
+  function hashFor(current: View, projectId: string | null, taskId: string | null): string {
+    if (current === "project" && projectId) return `#/project/${encodeURIComponent(projectId)}`;
+    if (current === "task" && projectId && taskId)
+      return `#/task/${encodeURIComponent(projectId)}/${encodeURIComponent(taskId)}`;
+    if (current === "settings") return "#/settings";
+    return "#/projects";
+  }
+
+  // 视图状态写入地址 hash：F5 刷新后按 hash 恢复原视图，位置不丢。
+  // booting（会话恢复期间）不写：避免初始视图抢先覆盖待恢复的地址。
+  $: {
+    const hash = hashFor(view, selectedProject?.id ?? null, selectedTask?.id ?? null);
+    if (!booting && location.hash !== hash) history.replaceState(null, "", hash);
+  }
+
   onMount(() => {
     void (async () => {
       try {
         session = await api.me();
         if (!session.must_change_password) {
           await loadProjects();
-          goOverview();
+          if (!(await restoreFromHash())) goOverview();
         }
       } catch (caught) {
         if (caught instanceof ApiError && caught.status === 401) {
@@ -80,6 +95,33 @@
     })();
     return disconnectEvents;
   });
+
+  /** 按地址 hash 恢复刷新前的视图；项目或任务已不存在时回退项目总览。 */
+  async function restoreFromHash(): Promise<boolean> {
+    const match = location.hash.match(
+      /^#\/settings$|^#\/project\/([^/]+)$|^#\/task\/([^/]+)\/([^/]+)$/,
+    );
+    if (!match) return false;
+    if (match[0] === "#/settings") {
+      await openSettings();
+      return true;
+    }
+    if (match[1]) {
+      const project = projects.find((item) => item.id === decodeURIComponent(match[1]));
+      if (!project) return false;
+      await openProject(project);
+      return true;
+    }
+    const project = projects.find(
+      (item) => item.id === decodeURIComponent(match[2] ?? ""),
+    );
+    if (!project) return false;
+    await openProject(project);
+    const task = tasks.find((item) => item.id === decodeURIComponent(match[3] ?? ""));
+    if (!task) return true;
+    await openTask(task);
+    return true;
+  }
 
   function showError(caught: unknown): void {
     if (caught instanceof ApiError) {
