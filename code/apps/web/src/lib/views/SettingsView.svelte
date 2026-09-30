@@ -13,14 +13,13 @@
 </script>
 
 <script lang="ts">
-  import {
-    PROVIDER_PRESETS,
-    presetModelCatalog,
-    type PresetModel,
-    type ProviderPreset,
-  } from "../providers";
+  import { fade, fly } from "svelte/transition";
+  import { PROVIDER_PRESETS, presetModelCatalog, type PresetModel, type ProviderPreset } from "../providers";
   import { api, ApiError } from "../api";
-  /** 产品设置页：模型供应商注册表、智能体绑定、工具镜像与运行时配置。 */
+  /**
+   * 产品设置页：模型供应商（卡片 + 模型列表 + 添加模型弹窗）、智能体绑定、
+   * 工具镜像与运行时配置。表单字段状态在本组件维护。
+   */
 
   type TierName = "planning" | "audit" | "review" | "report";
   type ModelProviderEntry = ProductSettings["model_providers"][number];
@@ -43,6 +42,13 @@
     "anthropic-messages": "Anthropic Messages（/v1/messages）",
     "openai-responses": "OpenAI Responses（/responses）",
   };
+  const apiFormatShort: Record<ModelProviderEntry["api_format"], string> = {
+    "openai-chat": "OpenAI 兼容",
+    "anthropic-messages": "Anthropic",
+    "openai-responses": "Responses",
+  };
+
+  const presetCatalog = presetModelCatalog();
 
   let reviewApiKey = "";
   let clearReviewApiKey = false;
@@ -51,11 +57,77 @@
   let providerApiKeys: Record<string, string> = {};
   let clearProviderApiKeys: string[] = [];
   let expandedProvider: string | null = null;
-  let smartPicks: Record<string, string> = {};
+  let keyVisibility: Record<string, boolean> = {};
   let probeNotes: Record<string, { message: string; ok: boolean }> = {};
   let showAdvancedSettings = false;
 
-  const presetCatalog = presetModelCatalog();
+  /* 添加/编辑模型弹窗状态；index 为 null 表示新增。 */
+  let modelDialog: {
+    providerId: string;
+    index: number | null;
+    draft: ProviderModelEntry;
+    smart: boolean;
+    smartPick: string;
+  } | null = null;
+
+  function emptyModel(): ProviderModelEntry {
+    return {
+      model_id: "",
+      display_name: "",
+      context_window_tokens: 0,
+      max_output_tokens: 0,
+      thinking_mode: "off",
+      thinking_budget_tokens: 0,
+    };
+  }
+
+  function openAddModel(provider: ModelProviderEntry): void {
+    modelDialog = { providerId: provider.id, index: null, draft: emptyModel(), smart: false, smartPick: "" };
+  }
+
+  function openEditModel(provider: ModelProviderEntry, index: number): void {
+    modelDialog = {
+      providerId: provider.id,
+      index,
+      draft: { ...provider.models[index] },
+      smart: false,
+      smartPick: "",
+    };
+  }
+
+  function closeModelDialog(): void {
+    modelDialog = null;
+  }
+
+  function applySmartPick(raw: string): void {
+    if (!modelDialog) return;
+    modelDialog.smartPick = raw;
+    const pick = presetCatalog.find((entry) => `${entry.provider}::${entry.model.model_id}` === raw);
+    if (!pick) return;
+    modelDialog.draft = {
+      ...modelDialog.draft,
+      model_id: pick.model.model_id,
+      display_name: pick.model.note,
+      context_window_tokens: pick.model.context_window_tokens,
+      max_output_tokens: pick.model.max_output_tokens,
+    };
+  }
+
+  function submitModelDialog(): void {
+    if (!modelDialog) return;
+    const draft = { ...modelDialog.draft, model_id: modelDialog.draft.model_id.trim() };
+    if (!draft.model_id) return;
+    const provider = productSettings.model_providers.find((p) => p.id === modelDialog!.providerId);
+    if (!provider) return;
+    const models = [...provider.models];
+    if (modelDialog.index === null) {
+      models.push(draft);
+    } else {
+      models[modelDialog.index] = draft;
+    }
+    updateProvider(modelDialog.providerId, "models", models);
+    modelDialog = null;
+  }
 
   function providerKeyConfigured(providerId: string): boolean {
     return productSettings.providers_api_key_configured?.[providerId] ?? false;
@@ -69,35 +141,27 @@
     return `${base}-${index}`;
   }
 
-  function emptyProvider(id: string): ModelProviderEntry {
-    return {
+  function addProvider(preset?: ProviderPreset): void {
+    const id = nextProviderId(preset ? preset.id : `provider-${productSettings.model_providers.length + 1}`);
+    const provider: ModelProviderEntry = {
       id,
-      name: "",
-      base_url: "",
-      api_format: "openai-chat",
+      name: preset ? preset.label : "",
+      base_url: preset ? preset.base_url : "",
+      api_format: preset ? preset.api_format : "openai-chat",
       enabled: true,
       timeout_seconds: 0,
       max_attempts: 0,
-      models: [],
+      models: preset
+        ? preset.models.map((model) => ({
+            model_id: model.model_id,
+            display_name: model.note,
+            context_window_tokens: model.context_window_tokens,
+            max_output_tokens: model.max_output_tokens,
+            thinking_mode: "off",
+            thinking_budget_tokens: 0,
+          }))
+        : [],
     };
-  }
-
-  function addProvider(preset?: ProviderPreset): void {
-    const id = nextProviderId(preset ? preset.id : `provider-${productSettings.model_providers.length + 1}`);
-    const provider = emptyProvider(id);
-    if (preset) {
-      provider.name = preset.label;
-      provider.base_url = preset.base_url;
-      provider.api_format = preset.api_format;
-      provider.models = preset.models.map((model) => ({
-        model_id: model.model_id,
-        display_name: model.note,
-        context_window_tokens: model.context_window_tokens,
-        max_output_tokens: model.max_output_tokens,
-        thinking_mode: "off",
-        thinking_budget_tokens: 0,
-      }));
-    }
     productSettings = {
       ...productSettings,
       model_providers: [...productSettings.model_providers, provider],
@@ -105,33 +169,27 @@
     expandedProvider = id;
   }
 
+  function clearBindingsWhere(stale: (binding: NonNullable<ProductSettings["agent_model_bindings"][TierName]>) => boolean): void {
+    const next = { ...productSettings.agent_model_bindings };
+    for (const role of tierNames) {
+      if (next[role] && stale(next[role]!)) next[role] = null;
+    }
+    productSettings = { ...productSettings, agent_model_bindings: next };
+  }
+
   function removeProvider(providerId: string): void {
     productSettings = {
       ...productSettings,
       model_providers: productSettings.model_providers.filter((p) => p.id !== providerId),
     };
-    productSettings = {
-      ...productSettings,
-      agent_model_bindings: clearBindingsFor(productSettings.agent_model_bindings, (b) =>
-        b.provider_id === providerId ||
-        b.fallback_provider_id === providerId),
-    };
+    clearBindingsWhere(
+      (b) => b.provider_id === providerId || b.fallback_provider_id === providerId,
+    );
     delete providerApiKeys[providerId];
-    delete smartPicks[providerId];
+    delete keyVisibility[providerId];
     delete probeNotes[providerId];
     clearProviderApiKeys = clearProviderApiKeys.filter((id) => id !== providerId);
     if (expandedProvider === providerId) expandedProvider = null;
-  }
-
-  function clearBindingsFor(
-    bindings: ProductSettings["agent_model_bindings"],
-    stale: (binding: NonNullable<ProductSettings["agent_model_bindings"][TierName]>) => boolean,
-  ): ProductSettings["agent_model_bindings"] {
-    const next = { ...bindings };
-    for (const role of tierNames) {
-      if (next[role] && stale(next[role]!)) next[role] = null;
-    }
-    return next;
   }
 
   function updateProvider(providerId: string, key: keyof ModelProviderEntry, value: unknown): void {
@@ -143,51 +201,17 @@
     };
   }
 
-  function addModel(providerId: string, preset?: PresetModel): void {
-    const model: ProviderModelEntry = preset
-      ? {
-          model_id: preset.model_id,
-          display_name: preset.note,
-          context_window_tokens: preset.context_window_tokens,
-          max_output_tokens: preset.max_output_tokens,
-          thinking_mode: "off",
-          thinking_budget_tokens: 0,
-        }
-      : { model_id: "", display_name: "", context_window_tokens: 0, max_output_tokens: 0, thinking_mode: "off", thinking_budget_tokens: 0 };
-    productSettings = {
-      ...productSettings,
-      model_providers: productSettings.model_providers.map((provider) =>
-        provider.id === providerId ? { ...provider, models: [...provider.models, model] } : provider,
-      ),
-    };
-  }
-
-  function updateModel(providerId: string, index: number, key: keyof ProviderModelEntry, value: unknown): void {
-    productSettings = {
-      ...productSettings,
-      model_providers: productSettings.model_providers.map((provider) =>
-        provider.id === providerId
-          ? { ...provider, models: provider.models.map((m, i) => (i === index ? { ...m, [key]: value } : m)) }
-          : provider,
-      ),
-    };
-  }
-
   function removeModel(providerId: string, index: number): void {
-    const removed = productSettings.model_providers.find((p) => p.id === providerId)?.models[index];
-    productSettings = {
-      ...productSettings,
-      model_providers: productSettings.model_providers.map((provider) =>
-        provider.id === providerId ? { ...provider, models: provider.models.filter((_, i) => i !== index) } : provider,
-      ),
-    };
+    const provider = productSettings.model_providers.find((p) => p.id === providerId);
+    if (!provider) return;
+    const removed = provider.models[index];
+    updateProvider(providerId, "models", provider.models.filter((_, i) => i !== index));
     if (removed) {
-      productSettings = {
-        ...productSettings,
-        agent_model_bindings: clearBindingsFor(productSettings.agent_model_bindings, (b) =>
+      clearBindingsWhere(
+        (b) =>
           (b.provider_id === providerId && b.model_id === removed.model_id) ||
-          (b.fallback_provider_id === providerId && b.fallback_model_id === removed.model_id)),
-      };
+          (b.fallback_provider_id === providerId && b.fallback_model_id === removed.model_id),
+      );
     }
   }
 
@@ -214,20 +238,16 @@
         return;
       }
       const existing = new Set(provider.models.map((m) => m.model_id));
-      const additions: ProviderModelEntry[] = result.models
+      const additions = result.models
         .filter((modelId) => !existing.has(modelId))
-        .map((modelId) => ({
-          model_id: modelId,
-          display_name: "",
-          context_window_tokens: 0,
-          max_output_tokens: 0,
-          thinking_mode: "off",
-          thinking_budget_tokens: 0,
-        }));
+        .map((modelId) => ({ ...emptyModel(), model_id: modelId }));
       updateProvider(provider.id, "models", [...provider.models, ...additions]);
       probeNotes = {
         ...probeNotes,
-        [provider.id]: { message: `获取到 ${result.models.length} 个模型，新增 ${additions.length} 个。`, ok: true },
+        [provider.id]: {
+          message: additions.length ? `获取到 ${result.models.length} 个模型，已合并新增 ${additions.length} 个。` : "模型列表已是最新。",
+          ok: true,
+        },
       };
     } catch (caught) {
       const message = caught instanceof ApiError ? caught.message : "探测请求失败";
@@ -264,11 +284,7 @@
       if (kind === "primary") {
         bindings[role] = { provider_id: providerId, model_id: modelId };
       } else {
-        bindings[role] = {
-          ...current,
-          fallback_provider_id: providerId,
-          fallback_model_id: modelId,
-        };
+        bindings[role] = { ...current, fallback_provider_id: providerId, fallback_model_id: modelId };
       }
     }
     productSettings = { ...productSettings, agent_model_bindings: bindings };
@@ -280,8 +296,18 @@
       .flatMap((provider) =>
         provider.models
           .filter((model) => model.model_id)
-          .map((model) => ({ value: `${provider.id}|${model.model_id}`, label: `${provider.name || provider.id} / ${model.model_id}` })),
+          .map((model) => ({
+            value: `${provider.id}|${model.model_id}`,
+            label: `${provider.name || provider.id} / ${model.model_id}`,
+          })),
       );
+  }
+
+  function tokenLabel(value: number | undefined): string {
+    const tokens = value ?? 0;
+    if (!tokens) return "默认";
+    if (tokens >= 4096) return `${Math.round(tokens / 1024)}K`;
+    return String(tokens);
   }
 
   let currentPassword = "";
@@ -335,7 +361,13 @@
     const saved = await onUpdatePassword(currentPassword, newPassword);
     if (saved) currentPassword = newPassword = confirmPassword = "";
   }
+
+  function dialogAutofocus(node: HTMLInputElement): void {
+    node.focus();
+  }
 </script>
+
+<svelte:window on:keydown={(e) => { if (e.key === "Escape" && modelDialog) closeModelDialog(); }} />
 
 <section class="page-heading">
   <div>
@@ -359,110 +391,186 @@
             <h2>模型供应商</h2>
             <p>每个供应商承载一条连接（Base URL、API 格式、API Key）与自己的模型列表；开关关闭的供应商不参与调用。</p>
           </div>
-          <button type="button" class="secondary" on:click={() => addProvider()}>+ 添加供应商</button>
+          <button type="button" class="secondary" on:click={() => addProvider()}>＋ 新供应商</button>
         </header>
+
         <div class="preset-row" role="group" aria-label="供应商预设">
           <span class="preset-label">从预设创建</span>
           {#each PROVIDER_PRESETS as preset (preset.id)}
             <button type="button" class="preset-chip" on:click={() => addProvider(preset)}>{preset.label}</button>
           {/each}
-          <button type="button" class="preset-chip" on:click={() => addProvider()}>自定义</button>
         </div>
+
         {#if productSettings.model_providers.length === 0}
-          <p class="muted">当前没有配置供应商。从上方预设一键创建，或手动添加供应商后，把模型绑定给各个智能体。</p>
-        {/if}
-        <div class="tier-list">
-          {#each productSettings.model_providers as provider (provider.id)}
-            <div class="tier-group" class:open={expandedProvider === provider.id}>
-              <button type="button" class="tier-toggle" aria-expanded={expandedProvider === provider.id} on:click={() => (expandedProvider = expandedProvider === provider.id ? null : provider.id)}>
-                <b>{provider.name || provider.id}</b>
-                <span class="tier-state" class:enabled={provider.enabled && provider.models.length > 0}>
-                  {provider.enabled ? `${apiFormatLabels[provider.api_format]} · ${provider.models.length} 个模型` : "已停用"}
-                </span>
-                <span class="arrow" aria-hidden="true">▾</span>
-              </button>
-              {#if expandedProvider === provider.id}
-                <div class="tier-body">
-                  <div class="field-grid">
-                    <label>供应商 ID<small class="muted">（创建后不可改）</small><input value={provider.id} disabled /></label>
-                    <label>显示名称<input value={provider.name} on:change={(e) => updateProvider(provider.id, "name", e.currentTarget.value)} placeholder="例如 DeepSeek 官方" /></label>
-                    <label>Base URL<input value={provider.base_url} on:change={(e) => updateProvider(provider.id, "base_url", e.currentTarget.value)} placeholder="https://api.example.com/v1" /></label>
-                    <label>API 格式<select value={provider.api_format} on:change={(e) => updateProvider(provider.id, "api_format", e.currentTarget.value)}>
-                      {#each Object.entries(apiFormatLabels) as [format, label] (format)}<option value={format}>{label}</option>{/each}
-                    </select></label>
-                    <label>API Key<input value={providerApiKeys[provider.id] ?? ""} on:input={(e) => (providerApiKeys = { ...providerApiKeys, [provider.id]: e.currentTarget.value })} type="password" autocomplete="new-password" placeholder={providerKeyConfigured(provider.id) ? "留空以保留现有值" : "输入 API Key"} /></label>
-                    <label class="check"><input type="checkbox" checked={provider.enabled} on:change={(e) => updateProvider(provider.id, "enabled", e.currentTarget.checked)} /><span><b>启用该供应商</b></span></label>
-                  </div>
-                  {#if providerKeyConfigured(provider.id)}
-                    <label class="check"><input type="checkbox" checked={clearProviderApiKeys.includes(provider.id)} on:change={(e) => toggleProviderKey(provider.id, e.currentTarget.checked)} /><span><b>清除该供应商已保存的 API Key</b></span></label>
-                  {/if}
-                  <div class="model-head">
-                    <b>模型列表</b>
-                    <span class="model-head-actions">
-                      <select on:change={(e) => { const pick = presetCatalog.find((p) => `${p.provider}::${p.model.model_id}` === e.currentTarget.value); if (pick) { addModel(provider.id, pick.model); e.currentTarget.value = ""; } }}>
-                        <option value="">+ 智能配置（从预置目录选模型）</option>
-                        {#each presetCatalog as entry (entry.provider + entry.model.model_id)}
-                          <option value={`${entry.provider}::${entry.model.model_id}`}>{entry.provider} · {entry.model.model_id}（上下文 {entry.model.context_window_tokens} / 输出 {entry.model.max_output_tokens}）</option>
-                        {/each}
-                      </select>
-                      <button type="button" class="secondary" on:click={() => addModel(provider.id)}>+ 手动添加模型</button>
-                      <button type="button" class="secondary" disabled={busy} on:click={() => probeModels(provider)}>获取模型列表</button>
+          <div class="provider-empty">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8zm-9-2.7L18.6 8 12 11.7 5.4 8 12 5.3zM5 9.7l6 3.4v6.2l-6-3.3V9.7zm8 9.6v-6.2l6-3.4v6.3l-6 3.3z"/></svg>
+            <p>还没有供应商。从上方预设一键创建，或点「＋ 新供应商」手动添加。</p>
+          </div>
+        {:else}
+          <div class="provider-list">
+            {#each productSettings.model_providers as provider (provider.id)}
+              {@const expanded = expandedProvider === provider.id}
+              <article class="provider-card" class:open={expanded} class:off={!provider.enabled}>
+                <header class="provider-head">
+                  <button
+                    type="button"
+                    class="provider-disclose"
+                    aria-expanded={expanded}
+                    on:click={() => (expandedProvider = expanded ? null : provider.id)}
+                  >
+                    <svg class="provider-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8zm-9-2.7L18.6 8 12 11.7 5.4 8 12 5.3zM5 9.7l6 3.4v6.2l-6-3.3V9.7zm8 9.6v-6.2l6-3.4v6.3l-6 3.3z"/></svg>
+                    <span class="provider-name">{provider.name || provider.id}</span>
+                    <span class="provider-id">{provider.id}</span>
+                    <span class="badge muted">{apiFormatShort[provider.api_format]}</span>
+                    <span class="provider-meta">
+                      {provider.enabled ? `${provider.models.length} 个模型` : "已停用"}
                     </span>
-                  </div>
-                  {#if probeNotes[provider.id]}<p class="muted" class:probe-error={!probeNotes[provider.id].ok}>{probeNotes[provider.id].message}</p>{/if}
-                  {#if provider.models.length === 0}
-                    <p class="muted">当前没有配置模型，添加模型后才能绑定给智能体使用。</p>
-                  {:else}
-                    <div class="model-table">
-                      {#each provider.models as model, mIndex (mIndex)}
-                        <div class="model-row">
-                          <label>模型 ID<input value={model.model_id} on:change={(e) => updateModel(provider.id, mIndex, "model_id", e.currentTarget.value)} placeholder="model-id" /></label>
-                          <label>上下文窗口（token，0=默认）<input value={model.context_window_tokens ?? 0} on:change={(e) => updateModel(provider.id, mIndex, "context_window_tokens", Number(e.currentTarget.value))} type="number" min="0" /></label>
-                          <label>最大输出（token，0=默认）<input value={model.max_output_tokens ?? 0} on:change={(e) => updateModel(provider.id, mIndex, "max_output_tokens", Number(e.currentTarget.value))} type="number" min="0" /></label>
-                          <label>思考模式<select value={model.thinking_mode ?? "off"} on:change={(e) => updateModel(provider.id, mIndex, "thinking_mode", e.currentTarget.value)}>
-                            <option value="off">关闭</option>
-                            <option value="default">开启（供应商默认预算）</option>
-                            <option value="custom">自定义预算</option>
-                          </select></label>
-                          {#if model.thinking_mode === "custom"}
-                            <label>思考预算（token，≥1024）<input value={model.thinking_budget_tokens ?? 0} on:change={(e) => updateModel(provider.id, mIndex, "thinking_budget_tokens", Number(e.currentTarget.value))} type="number" min="1024" /></label>
-                          {/if}
-                          <button type="button" class="secondary model-remove" on:click={() => removeModel(provider.id, mIndex)}>删除</button>
-                        </div>
-                      {/each}
+                    <svg class="provider-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5z"/></svg>
+                  </button>
+                  <label class="switch" data-tip={provider.enabled ? "停用该供应商" : "启用该供应商"}>
+                    <input type="checkbox" checked={provider.enabled} on:change={(e) => updateProvider(provider.id, "enabled", e.currentTarget.checked)} />
+                    <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+                    <span class="sr-only">启用 {provider.name || provider.id}</span>
+                  </label>
+                </header>
+
+                {#if expanded}
+                  <div class="provider-body" transition:fade={{ duration: 120 }}>
+                    <div class="provider-fields">
+                      <label>显示名称
+                        <input value={provider.name} on:change={(e) => updateProvider(provider.id, "name", e.currentTarget.value)} placeholder="例如 DeepSeek 官方" />
+                      </label>
+                      <label>Base URL
+                        <input class="mono" value={provider.base_url} on:change={(e) => updateProvider(provider.id, "base_url", e.currentTarget.value)} placeholder="https://api.example.com/v1" />
+                      </label>
+                      <label>API 格式
+                        <select value={provider.api_format} on:change={(e) => updateProvider(provider.id, "api_format", e.currentTarget.value)}>
+                          {#each Object.entries(apiFormatLabels) as [format, label] (format)}<option value={format}>{label}</option>{/each}
+                        </select>
+                      </label>
+                      <label>API Key
+                        <span class="key-input">
+                          <input
+                            class="mono"
+                            type={keyVisibility[provider.id] ? "text" : "password"}
+                            value={providerApiKeys[provider.id] ?? ""}
+                            on:input={(e) => (providerApiKeys = { ...providerApiKeys, [provider.id]: e.currentTarget.value })}
+                            autocomplete="new-password"
+                            placeholder={providerKeyConfigured(provider.id) ? "留空以保留现有值" : "输入 API Key"}
+                          />
+                          <button
+                            type="button"
+                            class="key-eye"
+                            aria-label={keyVisibility[provider.id] ? "隐藏 API Key" : "显示 API Key"}
+                            on:click={() => (keyVisibility = { ...keyVisibility, [provider.id]: !keyVisibility[provider.id] })}
+                          >
+                            {#if keyVisibility[provider.id]}
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6a9.8 9.8 0 018.8 5.5 1 1 0 010 .9A9.8 9.8 0 0112 18a9.8 9.8 0 01-8.8-5.5 1 1 0 010-.9A9.8 9.8 0 0112 6zm0 2.2a3.3 3.3 0 100 6.6 3.3 3.3 0 000-6.6z"/></svg>
+                            {:else}
+                              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.1 3.5l1.3-1.2 17.5 18.2-1.3 1.2-3-3.1A10.7 10.7 0 0112 20a9.8 9.8 0 01-8.8-5.5 1 1 0 010-.9 10 10 0 013.7-4L2.1 3.5zM12 6c1.4 0 2.8.3 4 .9l-1.6 1.6a3.3 3.3 0 00-4.4 4.4l-1.9-2A3.3 3.3 0 0112 8.2zm0-2a9.8 9.8 0 018.8 5.5 1 1 0 010 .9 10.3 10.3 0 01-2.4 3l-1.5-1.5A8.2 8.2 0 0018.7 10 7.8 7.8 0 0012 6z"/></svg>
+                            {/if}
+                          </button>
+                        </span>
+                        <small class="field-note">
+                          {providerKeyConfigured(provider.id)
+                            ? (clearProviderApiKeys.includes(provider.id) ? "保存后删除已存密钥。" : "已配置。勾选下方可清除。")
+                            : "未配置。"}
+                        </small>
+                      </label>
+                      {#if providerKeyConfigured(provider.id)}
+                        <label class="check key-clear">
+                          <input type="checkbox" checked={clearProviderApiKeys.includes(provider.id)} on:change={(e) => toggleProviderKey(provider.id, e.currentTarget.checked)} />
+                          <span><b>清除已保存的 API Key</b></span>
+                        </label>
+                      {/if}
+                      <div class="provider-advanced">
+                        <label>单次请求超时（秒，0=全局默认）
+                          <input class="mono" value={provider.timeout_seconds ?? 0} on:change={(e) => updateProvider(provider.id, "timeout_seconds", Number(e.currentTarget.value))} type="number" min="0" max="3600" />
+                        </label>
+                        <label>最大尝试（0=全局默认）
+                          <input class="mono" value={provider.max_attempts ?? 0} on:change={(e) => updateProvider(provider.id, "max_attempts", Number(e.currentTarget.value))} type="number" min="0" max="8" />
+                        </label>
+                      </div>
                     </div>
-                  {/if}
-                  <div class="field-grid cols-4">
-                    <label>单次请求超时（秒，0=全局默认）<input value={provider.timeout_seconds ?? 0} on:change={(e) => updateProvider(provider.id, "timeout_seconds", Number(e.currentTarget.value))} type="number" min="0" max="3600" /></label>
-                    <label>最大尝试（0=全局默认）<input value={provider.max_attempts ?? 0} on:change={(e) => updateProvider(provider.id, "max_attempts", Number(e.currentTarget.value))} type="number" min="0" max="8" /></label>
+
+                    <div class="model-section">
+                      <header class="model-section-head">
+                        <b>模型列表</b>
+                        <span class="model-count">{provider.models.length ? `${provider.models.length} 个模型` : ""}</span>
+                        <span class="model-section-actions">
+                          <button type="button" class="text-button" disabled={busy} on:click={() => probeModels(provider)}>获取模型列表</button>
+                          <button type="button" class="add-model" on:click={() => openAddModel(provider)}>＋ 添加模型</button>
+                        </span>
+                      </header>
+
+                      {#if probeNotes[provider.id]}
+                        <p class="probe-note" class:bad={!probeNotes[provider.id].ok}>{probeNotes[provider.id].message}</p>
+                      {/if}
+
+                      {#if provider.models.length === 0}
+                        <div class="model-empty">
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4.2a1.2 1.2 0 110 2.4 1.2 1.2 0 010-2.4zM11 10h2v7h-2v-7z"/></svg>
+                          <p>当前没有配置模型，添加模型后可绑定给智能体使用。</p>
+                        </div>
+                      {:else}
+                        <ul class="model-list">
+                          {#each provider.models as model, mIndex (mIndex)}
+                            <li class="model-item">
+                              <div class="model-id">
+                                {#if model.model_id}<span class="mono">{model.model_id}</span>{:else}<span class="mono"><em>未命名模型</em></span>{/if}
+                                {#if model.display_name}<span class="model-display">{model.display_name}</span>{/if}
+                              </div>
+                              <div class="model-tags">
+                                <span class="tag" data-tip="上下文窗口（Token）；0 表示交由供应商默认">上下文 {tokenLabel(model.context_window_tokens)}</span>
+                                <span class="tag" data-tip="单次回复输出上限（Token）；0 表示交由供应商默认">输出 {tokenLabel(model.max_output_tokens)}</span>
+                                {#if model.thinking_mode !== "off"}
+                                  <span class="tag accent" data-tip="扩展思考">思考{model.thinking_mode === "custom" ? ` ${Math.round((model.thinking_budget_tokens || 0) / 1024)}K` : ""}</span>
+                                {/if}
+                              </div>
+                              <div class="model-actions">
+                                <button type="button" class="text-button" on:click={() => openEditModel(provider, mIndex)}>编辑</button>
+                                <button type="button" class="text-button danger-text" on:click={() => removeModel(provider.id, mIndex)}>删除</button>
+                              </div>
+                            </li>
+                          {/each}
+                        </ul>
+                      {/if}
+                    </div>
+
+                    <footer class="provider-foot">
+                      <button type="button" class="text-button danger-text" on:click={() => removeProvider(provider.id)}>删除该供应商</button>
+                    </footer>
                   </div>
-                  <button type="button" class="secondary provider-delete" on:click={() => removeProvider(provider.id)}>删除该供应商</button>
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
+                {/if}
+              </article>
+            {/each}
+          </div>
+        {/if}
       </section>
 
       <section class="panel" id="sec-agent-bindings">
         <header class="panel-head">
           <div>
             <h2>智能体模型绑定</h2>
-            <p>为每个智能体选择一个供应商模型，可另配备用模型；主模型调用失败且可重试时自动切换备用。未绑定的智能体无法使用模型。</p>
+            <p>为每个智能体选择一个供应商模型，可另配备用模型；主模型失败且可重试时自动切换备用。未绑定的智能体无法使用模型。</p>
           </div>
         </header>
         <div class="binding-list">
           {#each tierNames as role (role)}
             <div class="binding-row">
               <b>{tierLabels[role]}</b>
-              <label>主模型<select value={bindingValue(role)} on:change={(e) => setBinding(role, e.currentTarget.value, "primary")}>
-                <option value="">未绑定</option>
-                {#each roleOptions() as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
-              </select></label>
-              <label>备用模型<select value={fallbackValue(role)} on:change={(e) => setBinding(role, e.currentTarget.value, "fallback")}>
-                <option value="">无</option>
-                {#each roleOptions() as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
-              </select></label>
+              <label>主模型
+                <select value={bindingValue(role)} on:change={(e) => setBinding(role, e.currentTarget.value, "primary")}>
+                  <option value="">未绑定</option>
+                  {#each roleOptions() as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
+                </select>
+              </label>
+              <label>备用模型
+                <select value={fallbackValue(role)} on:change={(e) => setBinding(role, e.currentTarget.value, "fallback")}>
+                  <option value="">无</option>
+                  {#each roleOptions() as option (option.value)}<option value={option.value}>{option.label}</option>{/each}
+                </select>
+              </label>
             </div>
           {/each}
         </div>
@@ -525,52 +633,354 @@
   </div>
 </div>
 
+{#if modelDialog}
+  <div class="dialog-backdrop" transition:fade={{ duration: 120 }} on:click|self={closeModelDialog} role="presentation">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label={modelDialog.index === null ? "添加模型" : "编辑模型"} transition:fly={{ y: 14, duration: 160 }}>
+      <header class="dialog-head">
+        <h3>{modelDialog.index === null ? "添加模型" : "编辑模型"}</h3>
+        <button type="button" class="text-button dialog-close" aria-label="关闭" on:click={closeModelDialog}>✕</button>
+      </header>
+
+      <label class="check dialog-smart">
+        <input type="checkbox" bind:checked={modelDialog.smart} />
+        <span><b>智能配置</b><small>从内置预设目录带入模型 ID 与推荐元数据，保存前可再修改。</small></span>
+      </label>
+      {#if modelDialog.smart}
+        <label class="dialog-field">从预设选择
+          <select value={modelDialog.smartPick} on:change={(e) => applySmartPick(e.currentTarget.value)}>
+            <option value="">选择预设模型…</option>
+            {#each presetCatalog as entry (entry.provider + entry.model.model_id)}
+              <option value={`${entry.provider}::${entry.model.model_id}`}>
+                {entry.provider} · {entry.model.model_id}（上下文 {tokenLabel(entry.model.context_window_tokens)} / 输出 {tokenLabel(entry.model.max_output_tokens)}）
+              </option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      <label class="dialog-field">模型 ID
+        <input class="mono" bind:value={modelDialog.draft.model_id} use:dialogAutofocus placeholder="model-id" />
+      </label>
+      <label class="dialog-field">显示名称（可选）
+        <input bind:value={modelDialog.draft.display_name} placeholder="例如 通用对话，指向最新 V 系列" />
+      </label>
+      <div class="dialog-cols">
+        <label class="dialog-field">上下文窗口
+          <span class="tip-anchor">
+            <input class="mono" bind:value={modelDialog.draft.context_window_tokens} type="number" min="0" placeholder="0" />
+            <span class="tip-mark" data-tip="模型一次可处理的上下文容量，单位为 Token；网关据此自动裁剪超长输入。请勿超过模型的实际上限。0 表示交由供应商默认。">?</span>
+          </span>
+        </label>
+        <label class="dialog-field">最大输出 Tokens
+          <span class="tip-anchor">
+            <input class="mono" bind:value={modelDialog.draft.max_output_tokens} type="number" min="0" placeholder="0" />
+            <span class="tip-mark" data-tip="单次回复的输出上限，单位为 Token；决定 Anthropic max_tokens 缺省与上下文预留。0 表示交由供应商默认。">?</span>
+          </span>
+        </label>
+      </div>
+      <div class="dialog-cols">
+        <label class="dialog-field">思考模式
+          <select bind:value={modelDialog.draft.thinking_mode}>
+            <option value="off">关闭</option>
+            <option value="default">开启（供应商默认预算）</option>
+            <option value="custom">自定义预算</option>
+          </select>
+        </label>
+        {#if modelDialog.draft.thinking_mode === "custom"}
+          <label class="dialog-field">思考预算（Token，≥1024）
+            <input class="mono" bind:value={modelDialog.draft.thinking_budget_tokens} type="number" min="1024" />
+          </label>
+        {/if}
+      </div>
+
+      <footer class="dialog-foot">
+        <button type="button" class="secondary" on:click={closeModelDialog}>取消</button>
+        <button type="button" class="primary" disabled={!modelDialog.draft.model_id.trim()} on:click={submitModelDialog}>
+          {modelDialog.index === null ? "添加" : "保存"}
+        </button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
 <style>
-  /* 供应商卡片与模型行：复用设置页既有面板风格，补充少量局部布局。 */
-  .model-head {
+  /* ---------- 供应商卡片 ---------- */
+  .provider-list { display: grid; gap: 12px; margin-top: 18px; }
+  .provider-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-m);
+    background: var(--field);
+    overflow: hidden;
+    transition: border-color 0.16s var(--ease);
+  }
+  .provider-card:hover { border-color: var(--line-strong); }
+  .provider-card.open { border-color: rgba(201, 244, 59, 0.35); }
+  .provider-card.off .provider-name,
+  .provider-card.off .provider-glyph { opacity: 0.45; }
+
+  .provider-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    margin: 0.75rem 0 0.5rem;
+    gap: 10px;
+    padding: 10px 12px 10px 6px;
   }
-  .model-head-actions {
+  .provider-disclose {
     display: flex;
-    gap: 0.5rem;
     align-items: center;
+    gap: 10px;
+    flex: 1 1 auto;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-s);
+    padding: 8px 10px;
+    color: var(--text);
+    text-align: left;
   }
-  .model-table {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+  .provider-disclose:hover { background: var(--panel-2); }
+  .provider-glyph { width: 20px; height: 20px; flex: 0 0 auto; fill: var(--accent); opacity: 0.9; }
+  .provider-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .provider-id { font: 500 11.5px/1 var(--font-mono); color: var(--muted); white-space: nowrap; }
+  .provider-meta { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .provider-card.open .provider-meta { color: var(--text-2); }
+  .provider-arrow { width: 18px; height: 18px; flex: 0 0 auto; fill: var(--muted); transition: transform 0.2s var(--ease); }
+  .provider-card.open .provider-arrow { transform: rotate(180deg); fill: var(--accent); }
+
+  /* 启用开关 */
+  .switch { display: inline-flex; align-items: center; cursor: pointer; flex: 0 0 auto; padding: 4px; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch-track {
+    display: block;
+    width: 34px;
+    height: 20px;
+    border-radius: 999px;
+    background: var(--line-strong);
+    position: relative;
+    transition: background 0.16s var(--ease);
   }
-  .model-row {
+  .switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-2);
+    transition: transform 0.16s var(--ease), background 0.16s var(--ease);
+  }
+  .switch input:checked + .switch-track { background: var(--accent); }
+  .switch input:checked + .switch-track .switch-thumb { transform: translateX(14px); background: var(--accent-ink); }
+  .switch input:focus-visible + .switch-track { box-shadow: var(--ring); }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    margin: -1px; padding: 0; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* 展开体 */
+  .provider-body { border-top: 1px dashed var(--line); padding: 16px 16px 12px; }
+  .provider-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+  .provider-fields label { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+  .provider-fields .key-clear { align-self: end; }
+  .field-note { color: var(--muted); font-size: 11.5px; }
+  .provider-advanced { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+
+  .key-input { position: relative; display: block; }
+  .key-input input { width: 100%; padding-right: 40px; }
+  .key-eye {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    width: 30px;
+    height: 30px;
     display: grid;
-    grid-template-columns: minmax(180px, 1.4fr) 1fr 1fr 1fr auto;
-    gap: 0.5rem;
-    align-items: end;
-    border: 1px solid var(--border, #e2e2e2);
-    border-radius: 8px;
-    padding: 0.5rem;
+    place-items: center;
+    border-radius: 6px;
   }
-  .model-remove {
-    height: fit-content;
-  }
-  .probe-error {
-    color: var(--danger, #b3261e);
-  }
-  .provider-delete {
-    margin-top: 0.75rem;
-  }
-  .binding-list {
+  .key-eye:hover { color: var(--text); background: var(--panel-2); }
+  .key-eye svg { width: 17px; height: 17px; fill: currentColor; }
+
+  /* 模型列表 */
+  .model-section { margin-top: 16px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--panel); }
+  .model-section-head {
     display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
   }
+  .model-section-head b { font-size: 13px; }
+  .model-count { font-size: 12px; color: var(--muted); }
+  .model-section-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+  .add-model {
+    border: 1px solid rgba(201, 244, 59, 0.55);
+    background: rgba(201, 244, 59, 0.08);
+    color: var(--accent);
+    border-radius: var(--radius-s);
+    padding: 6px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .add-model:hover { background: rgba(201, 244, 59, 0.16); }
+
+  .probe-note { margin: 10px 12px 0; font-size: 12px; color: var(--ok); }
+  .probe-note.bad { color: var(--danger); }
+
+  .model-empty {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px;
+    padding: 18px 14px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-s);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .model-empty svg { width: 22px; height: 22px; fill: var(--muted); flex: 0 0 auto; }
+
+  .model-list { list-style: none; margin: 0; padding: 4px 0; }
+  .model-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 9px 12px;
+  }
+  .model-item:hover { background: var(--panel-2); }
+  .model-item + .model-item { border-top: 1px solid var(--line); }
+  .model-id { min-width: 0; flex: 1 1 30%; display: grid; }
+  .model-id .mono { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-id em { color: var(--muted); font-style: normal; }
+  .model-display { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .model-tags { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  .tag {
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font: 500 11px/1.4 var(--font-mono);
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .tag.accent { color: var(--accent); border-color: rgba(201, 244, 59, 0.4); background: rgba(201, 244, 59, 0.07); }
+  .model-actions { display: inline-flex; gap: 2px; flex: 0 0 auto; }
+  .danger-text:hover { color: var(--danger); }
+
+  .provider-foot { display: flex; justify-content: flex-end; padding: 8px 4px 2px; }
+
+  .provider-empty {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    padding: 26px 16px;
+    border: 1px dashed var(--line-strong);
+    border-radius: var(--radius-m);
+    color: var(--muted);
+    font-size: 13.5px;
+  }
+  .provider-empty svg { width: 26px; height: 26px; fill: var(--muted); flex: 0 0 auto; }
+
+  /* ---------- 绑定 ---------- */
+  .binding-list { display: grid; gap: 10px; margin-top: 18px; }
   .binding-row {
     display: grid;
-    grid-template-columns: 10rem minmax(200px, 1fr) minmax(200px, 1fr);
-    gap: 0.75rem;
+    grid-template-columns: 9.5rem minmax(0, 1fr) minmax(0, 1fr);
+    gap: 14px;
     align-items: center;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-s);
+    background: var(--field);
+    padding: 10px 14px;
+  }
+  .binding-row b { font-size: 13px; }
+  .binding-row label { display: grid; gap: 4px; font-size: 11.5px; color: var(--muted); }
+
+  /* ---------- 添加模型弹窗 ---------- */
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(5, 7, 5, 0.66);
+    backdrop-filter: blur(3px);
+    display: grid;
+    place-items: center;
+    padding: 20px;
+  }
+  .dialog {
+    width: min(520px, 100%);
+    max-height: min(86dvh, 720px);
+    overflow: auto;
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-m);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    padding: 18px 20px 20px;
+  }
+  .dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .dialog-head h3 { margin: 0; font-size: 16px; }
+  .dialog-close { font-size: 14px; }
+  .dialog-smart { margin: 6px 0 4px; }
+  .dialog-field { display: grid; gap: 6px; font-size: 12.5px; color: var(--text-2); margin-top: 14px; }
+  .dialog-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .tip-anchor { position: relative; display: flex; align-items: center; gap: 8px; }
+  .tip-anchor input { flex: 1 1 auto; }
+  .tip-mark {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 1px solid var(--line-strong);
+    color: var(--muted);
+    font: 600 11px/1 var(--font-sans);
+    cursor: help;
+    position: relative;
+  }
+  .tip-mark:hover, .tip-mark:focus-visible { color: var(--accent); border-color: rgba(201, 244, 59, 0.55); }
+  .tip-mark[data-tip]:hover::after, .tip-mark[data-tip]:focus-visible::after {
+    content: attr(data-tip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%);
+    width: 240px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-s);
+    color: var(--text-2);
+    font: 400 12px/1.5 var(--font-sans);
+    padding: 8px 10px;
+    white-space: normal;
+    z-index: 5;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  }
+  .dialog-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+  [data-tip] { position: relative; }
+  .switch[data-tip]:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 6px);
+    background: var(--panel-2);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-s);
+    color: var(--text-2);
+    font-size: 12px;
+    padding: 5px 9px;
+    white-space: nowrap;
+    z-index: 5;
+  }
+
+  @media (max-width: 900px) {
+    .provider-fields, .provider-advanced, .dialog-cols { grid-template-columns: 1fr; }
+    .binding-row { grid-template-columns: 1fr; }
+    .model-item { flex-wrap: wrap; }
+    .model-id { flex-basis: 100%; }
   }
 </style>
