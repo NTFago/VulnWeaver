@@ -177,6 +177,11 @@
       review_model_context_window_tokens: raw.review_model_context_window_tokens ?? 0,
       model_tiers: tiers,
       tier_api_keys_configured: raw.tier_api_keys_configured ?? {},
+      model_providers: raw.model_providers ?? [],
+      providers_api_key_configured: raw.providers_api_key_configured ?? {},
+      agent_model_bindings: raw.agent_model_bindings ?? {
+        planning: null, audit: null, review: null, report: null,
+      },
       tool_image_digests: raw.tool_image_digests ?? { binary_tools: null, proof_tool: null, afl_casr: null },
       sandbox_budgets: raw.sandbox_budgets ?? {
         afl: { cpu_millis: 0, memory_bytes: 0, disk_bytes: 0, timeout_seconds: 0 },
@@ -205,13 +210,15 @@
     if (!productSettings) return false;
     begin();
     try {
-      const { schema_version: _schema, api_key_configured: _configured, tier_api_keys_configured: _tierKeys, ...values } = payload.settings;
+      const { schema_version: _schema, api_key_configured: _configured, tier_api_keys_configured: _tierKeys, providers_api_key_configured: _providerKeys, ...values } = payload.settings;
       productSettings = withDeploymentDefaults(await api.updateSettings({
         ...values,
         review_model_api_key: payload.reviewApiKey || null,
         clear_review_model_api_key: payload.clearReviewApiKey,
         tier_api_keys: payload.tierApiKeys,
         clear_tier_api_keys: payload.clearTierApiKeys,
+        provider_api_keys: payload.providerApiKeys,
+        clear_provider_api_keys: payload.clearProviderApiKeys,
       }));
       done("设置已保存；模型与执行配置由 Worker 在下一次任务时自动生效");
       return true;
