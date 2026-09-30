@@ -3,17 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 
 from vulnweaver_contracts import (
     SCHEMA_VERSION,
     ArtifactKind,
+    Evidence,
+    EvidenceRelation,
+    EvidenceStrength,
+    EvidenceType,
     FailureKind,
+    FindingEvidence,
     FindingStatus,
     Job,
     JobKind,
     JobStatus,
+    JsonObject,
+    JsonValue,
     Poc,
     PocKind,
     PocResult,
@@ -30,12 +40,23 @@ from vulnweaver_contracts import (
 from vulnweaver_domain import evaluate_exploit_eligibility
 from vulnweaver_persistence import Database
 
-from .auto_exploit import AutoExploitError, ExploitScriptGenerator
+from .auto_exploit import (
+    POC_VERIFICATION_BASELINE,
+    AutoExploitError,
+    ExploitScriptGenerator,
+    stable_id,
+)
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 
 
 class ProofSandbox(Protocol):
     async def run(self, request: SandboxRequest, cancellation: asyncio.Event) -> SandboxResult: ...
+
+
+class OutputStore(Protocol):
+    """Read-only view of the artifact store used to recover sandbox stdout."""
+
+    def open(self, object_ref: str) -> AbstractContextManager[BinaryIO]: ...
 
 
 class ProofExecutionError(ValueError):
@@ -51,10 +72,12 @@ class ProofJobExecutor:
         service: ProofExecutionService,
         *,
         script_generator: ExploitScriptGenerator | None = None,
+        output_store: OutputStore | None = None,
     ) -> None:
         self._database = database
         self._service = service
         self._script_generator = script_generator
+        self._output_store = output_store
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] not in {JobKind.PROOF, JobKind.EXPLOIT}:
@@ -62,6 +85,9 @@ class ProofJobExecutor:
         arguments = job.get("arguments")
         raw_request = arguments.get("proof_request") if isinstance(arguments, dict) else None
         raw_auto = arguments.get("auto_exploit") if isinstance(arguments, dict) else None
+        raw_poc = (
+            arguments.get(POC_VERIFICATION_BASELINE) if isinstance(arguments, dict) else None
+        )
         kind = PocKind.EXPLOIT if job["kind"] is JobKind.EXPLOIT else PocKind.PROOF_OF_CONCEPT
         try:
             if isinstance(raw_auto, dict):
@@ -71,6 +97,14 @@ class ProofJobExecutor:
                     )
                 request = await self._prepare_auto_request(
                     job, cast(dict[str, object], raw_auto)
+                )
+            elif isinstance(raw_poc, dict):
+                if job["kind"] is not JobKind.PROOF:
+                    return _worker_failure(
+                        job, "proof.poc_verification_requires_proof_kind", FailureKind.VALIDATION
+                    )
+                request = await self._prepare_poc_verification_request(
+                    job, cast(dict[str, object], raw_poc)
                 )
             else:
                 if not isinstance(raw_request, dict):
@@ -97,6 +131,14 @@ class ProofJobExecutor:
             )
             async with self._database.transaction() as repositories:
                 await repositories.pocs.create(poc)
+            evidence_ids: list[str] = []
+            if isinstance(raw_poc, dict) and poc["status"] is PocStatus.COMPLETED:
+                # A completed reproduction run turns the harness-captured marker
+                # line into strong reproducible evidence, which re-opens review
+                # through the settlement hook's evidence trigger.
+                evidence_ids = await self._persist_poc_evidence(
+                    job, request, poc
+                )
         except ScriptRefOwnershipError as error:
             return _worker_failure(
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
@@ -113,7 +155,7 @@ class ProofJobExecutor:
             job_id=job["id"],
             status=status,
             produced_artifact_version_ids=[],
-            evidence_ids=[],
+            evidence_ids=evidence_ids,
             failure=None if status is not JobStatus.FAILED else StructuredFailure(
                 code=f"proof.{poc['result'] or 'failed'}",
                 kind=(
@@ -126,6 +168,102 @@ class ProofJobExecutor:
                 details={},
             ),
         )
+
+    async def _prepare_poc_verification_request(
+        self,
+        job: Job,
+        poc: dict[str, object],
+    ) -> ProofRequest:
+        """Validate candidate-stage policy, generate the script, build the request."""
+        finding_id = poc.get("finding_id")
+        image_digest = poc.get("image_digest")
+        if not isinstance(finding_id, str) or not finding_id:
+            raise AutoExploitError("poc_verification.finding_id_required", FailureKind.VALIDATION)
+        if not isinstance(image_digest, str) or not image_digest.startswith("sha256:"):
+            raise AutoExploitError("poc_verification.image_digest_required", FailureKind.VALIDATION)
+        if self._script_generator is None:
+            raise AutoExploitError("poc_verification.model_unconfigured", FailureKind.DEPENDENCY)
+        async with self._database.transaction() as repositories:
+            finding = await repositories.findings.get(finding_id)
+            task = await repositories.tasks.get(finding["task_id"])
+            project = await repositories.projects.get(task["project_id"])
+            if (
+                finding["status"] is not FindingStatus.CANDIDATE
+                or not project["exploit_validation_enabled"]
+            ):
+                raise AutoExploitError("poc_verification.policy_denied", FailureKind.POLICY)
+            permission_mode = project["permission_mode"]
+        generated = await self._script_generator.generate(
+            job, finding_id, baseline=POC_VERIFICATION_BASELINE
+        )
+        budget = job["resource_budget"]
+        return cast(
+            ProofRequest,
+            {
+                "schema_version": SchemaVersion.VALUE_1_0_0,
+                "id": f"poc:{job['id']}",
+                "job_id": job["id"],
+                "finding_id": finding_id,
+                "script_ref": generated.script_ref,
+                "image_digest": image_digest,
+                "permission_mode": permission_mode,
+                "resource_budget": dict(budget),
+                "timeout_seconds": int(budget["timeout_seconds"]),
+            },
+        )
+
+    async def _persist_poc_evidence(
+        self, job: Job, request: ProofRequest, poc: Poc
+    ) -> list[str]:
+        if self._output_store is None or not poc["run_log_ref"]:
+            return []
+        stdout = await asyncio.to_thread(_read_ref_text, self._output_store, poc["run_log_ref"])
+        markers = _parse_poc_markers(stdout)
+        if markers is None:
+            # No harness-captured marker line: the run completed but never
+            # demonstrated anything structured, so it stays out of the record.
+            return []
+        digest = "sha256:" + hashlib.sha256(stdout.encode("utf-8")).hexdigest()
+        evidence_id = stable_id("evidence", "poc-verification", job["id"])
+        async with self._database.transaction() as repositories:
+            await repositories.evidence.create(
+                Evidence(
+                    schema_version=SchemaVersion.VALUE_1_0_0,
+                    id=evidence_id,
+                    type=EvidenceType.POC_VERIFICATION_RESULT,
+                    strength=EvidenceStrength.STRONG,
+                    artifact_ref=request["script_ref"],
+                    digest=digest,
+                    tool=None,
+                    input_ref=request["script_ref"],
+                    command_hash=None,
+                    exit_code=None,
+                    stdout_ref=poc["run_log_ref"],
+                    stderr_ref=None,
+                    replay_recipe=cast(
+                        JsonObject,
+                        {
+                            "kind": "poc_reproduction",
+                            "reproducible": True,
+                            "markers": markers,
+                            "run_log_ref": poc["run_log_ref"],
+                        },
+                    ),
+                    created_at=poc["created_at"],
+                )
+            )
+            await repositories.findings.link_evidence(
+                FindingEvidence(
+                    schema_version=SchemaVersion.VALUE_1_0_0,
+                    finding_id=request["finding_id"],
+                    evidence_id=evidence_id,
+                    relation=EvidenceRelation.SUPPORTS,
+                    weight=1.0,
+                    created_by="vulnweaver-poc-verification",
+                    created_at=poc["created_at"],
+                )
+            )
+        return [evidence_id]
 
     async def _prepare_auto_request(
         self,
@@ -167,6 +305,43 @@ class ProofJobExecutor:
                 "timeout_seconds": int(budget["timeout_seconds"]),
             },
         )
+
+
+def _read_ref_text(store: OutputStore, object_ref: str, *, max_bytes: int = 256 * 1024) -> str:
+    with store.open(object_ref) as handle:
+        return handle.read(max_bytes).decode("utf-8", errors="replace")
+
+
+_MARKER_PREFIX = "POC_MARKERS:"
+
+
+def _parse_poc_markers(stdout: str) -> JsonObject | None:
+    """Extract and sanitize the last harness-captured marker line, if any."""
+    for line in reversed(stdout.splitlines()):
+        stripped = line.strip()
+        if not stripped.startswith(_MARKER_PREFIX):
+            continue
+        try:
+            payload: JsonValue = json.loads(stripped[len(_MARKER_PREFIX):])
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        markers: dict[str, JsonValue] = {}
+        sink_reached = payload.get("sink_reached")
+        if isinstance(sink_reached, bool):
+            markers["sink_reached"] = sink_reached
+        for key in ("source", "sink", "behavior_difference"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                markers[key] = value
+        protections = payload.get("protections_observed")
+        if isinstance(protections, list):
+            cleaned = [item for item in protections if isinstance(item, str) and item]
+            if cleaned:
+                markers["protections_observed"] = cast(list[JsonValue], cleaned)
+        return markers
+    return None
 
 
 def _worker_failure(
