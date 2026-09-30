@@ -574,10 +574,10 @@
     </header>
     <aside class="sidebar">
       <nav aria-label="主导航">
-        <button disabled={busy} class:active={view === "settings"} on:click={() => void openSettings()}>设置</button>
         <button disabled={busy} class:active={view === "overview"} on:click={goOverview}>项目</button>
         {#if selectedProject}<button disabled={busy} class:active={view === "project"} on:click={() => openProject(selectedProject!)}>样本与任务</button>{/if}
         {#if selectedTask}<button disabled={busy} class:active={view === "task"} on:click={() => openTask(selectedTask!)}>执行轨迹</button>{/if}
+        <button disabled={busy} class:active={view === "settings"} on:click={() => void openSettings()}>设置</button>
       </nav>
       <div class="sidebar-note"><span>安全边界</span><p>动态执行只允许经策略校验后进入一次性沙箱。</p></div>
     </aside>
