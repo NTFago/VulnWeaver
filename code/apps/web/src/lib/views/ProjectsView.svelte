@@ -12,6 +12,7 @@
 <script lang="ts">
   import type { Project } from "@vulnweaver/contracts";
   import { formatDate } from "../format";
+  import ConfirmDialog from "../components/ConfirmDialog.svelte";
 
   /** 项目总览页：项目统计、创建项目表单与项目列表。 */
 
@@ -22,10 +23,12 @@
   export let onShowError: (message: string) => void = () => {};
   export let onDeleteProject: (project: Project) => Promise<void> = async () => {};
 
-  function confirmDeleteProject(project: Project): void {
-    if (window.confirm(`确定删除项目「${project.name}」？其样本、任务与执行记录将被一并删除，且不可恢复。`)) {
-      void onDeleteProject(project);
-    }
+  let pendingDelete: Project | null = null;
+
+  function confirmDelete(project: Project | null): void {
+    if (!project) return;
+    pendingDelete = null;
+    void onDeleteProject(project);
   }
 
   let showProjectForm = false;
@@ -52,7 +55,7 @@
 </script>
 
 <section class="page-heading">
-  <div><h1>项目与分析范围</h1><p>每个项目隔离样本、任务和证据链，运行前明确授权边界。</p></div>
+  <div><h1>项目与分析范围</h1><p>每个项目隔离样本、任务和证据链。</p></div>
   <button class="primary" on:click={() => showProjectForm = !showProjectForm}>{showProjectForm ? "收起表单" : "新建项目"}</button>
 </section>
 <section class="metric-strip" aria-label="项目统计">
@@ -62,7 +65,7 @@
 </section>
 {#if showProjectForm}
   <form class="panel project-form" on:submit|preventDefault={createProject}>
-    <header class="panel-head"><div><h2>创建项目</h2><p>为一次分析定义授权范围与运行模式。</p></div></header>
+    <header class="panel-head"><div><h2>创建项目</h2></div></header>
     <div class="field-grid">
       <label>项目名称<input bind:value={projectName} placeholder="例：网关 2.4 安全复核" required /></label>
       <label>授权范围<input bind:value={projectScope} required /></label>
@@ -95,10 +98,21 @@
             title="删除项目"
             aria-label={`删除项目 ${project.name}`}
             disabled={busy}
-            on:click={() => confirmDeleteProject(project)}
+            on:click={() => (pendingDelete = project)}
           >✕</button>
         </div>
       {/each}
     </div>
   </section>
+{/if}
+
+{#if pendingDelete}
+  <ConfirmDialog
+    title="删除项目"
+    body={`删除「${pendingDelete.name}」？其样本、任务与执行记录将一并删除，不可恢复。`}
+    confirmLabel="删除"
+    {busy}
+    onConfirm={() => confirmDelete(pendingDelete)}
+    onCancel={() => (pendingDelete = null)}
+  />
 {/if}

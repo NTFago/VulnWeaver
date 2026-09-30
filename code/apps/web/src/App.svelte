@@ -68,7 +68,7 @@
         session = await api.me();
         if (!session.must_change_password) {
           await loadProjects();
-          await openSettings();
+          goOverview();
         }
       } catch (caught) {
         if (caught instanceof ApiError && caught.status === 401) {
@@ -106,7 +106,7 @@
       session = await api.login(username, password);
       if (!session.must_change_password) {
         await loadProjects();
-        await openSettings();
+        goOverview();
       }
       done();
     } catch (caught) { busy = false; showError(caught); }
@@ -220,7 +220,7 @@
         provider_api_keys: payload.providerApiKeys,
         clear_provider_api_keys: payload.clearProviderApiKeys,
       }));
-      done("设置已保存；模型与执行配置由 Worker 在下一次任务时自动生效");
+      done("设置已保存，下次任务生效");
       return true;
     } catch (caught) { busy = false; showError(caught); return false; }
   }
@@ -519,7 +519,7 @@
   }
 
   function goHome(): void {
-    void openSettings();
+    goOverview();
   }
 
   /**

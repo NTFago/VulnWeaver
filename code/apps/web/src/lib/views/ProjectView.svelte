@@ -2,6 +2,7 @@
   import type { Artifact, ArtifactKind, ArtifactVersion, Project, Task } from "@vulnweaver/contracts";
   import { formatDate, shortId } from "../format";
   import { taskStatusLabels, taskResultLabels } from "../i18n";
+  import ConfirmDialog from "../components/ConfirmDialog.svelte";
 
   /** 项目详情页：样本导入、任务创建与最近任务列表。 */
 
@@ -22,10 +23,12 @@
   let selectedVersionIds: string[] = [];
   let sampleListExpanded = false;
 
-  function confirmDeleteTask(task: Task): void {
-    if (window.confirm(`确定删除该任务（${shortId(task.id)}）？其作业、Finding 与证据记录将被一并删除，且不可恢复。`)) {
-      void onDeleteTask(task);
-    }
+  let pendingDeleteTask: Task | null = null;
+
+  function confirmDeleteTask(task: Task | null): void {
+    if (!task) return;
+    pendingDeleteTask = null;
+    void onDeleteTask(task);
   }
   const uploadAccept: Partial<Record<ArtifactKind, string>> = { source_archive: ".zip,.tar,.gz,.tgz,.bz2,.xz", pe: ".exe,.dll,.sys" };
 
@@ -70,7 +73,7 @@
 </section>
 <section class="split-grid">
   <section class="panel">
-    <header class="panel-head"><div><h2>导入样本</h2><p>原始工件不可变，登记后生成内容寻址版本。</p></div></header>
+    <header class="panel-head"><div><h2>导入样本</h2><p>样本登记后不可修改。</p></div></header>
     <div class="upload-box">
       <label>样本类型<select bind:value={uploadKind}><option value="source_archive">源码压缩包</option><option value="elf">ELF 二进制</option><option value="pe">PE 二进制</option></select></label>
       <label class="file-picker" for="sample-file">
@@ -117,9 +120,20 @@
             <time>{formatDate(task.updated_at)}</time>
             <span class="arrow" aria-hidden="true">→</span>
           </button>
-          <button class="row-delete" title="删除任务" aria-label={`删除任务 ${shortId(task.id)}`} disabled={busy} on:click={() => confirmDeleteTask(task)}>✕</button>
+          <button class="row-delete" title="删除任务" aria-label={`删除任务 ${shortId(task.id)}`} disabled={busy} on:click={() => (pendingDeleteTask = task)}>✕</button>
         </div>
       {/each}
     </div>
   {/if}
 </section>
+
+{#if pendingDeleteTask}
+  <ConfirmDialog
+    title="删除任务"
+    body={`删除任务 ${shortId(pendingDeleteTask.id)}？其作业、Finding 与证据记录将一并删除，不可恢复。`}
+    confirmLabel="删除"
+    {busy}
+    onConfirm={() => confirmDeleteTask(pendingDeleteTask)}
+    onCancel={() => (pendingDeleteTask = null)}
+  />
+{/if}
