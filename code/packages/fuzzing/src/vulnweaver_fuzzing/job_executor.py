@@ -95,7 +95,10 @@ class FuzzJobExecutor:
                         "sandbox_request": {
                             **request["sandbox_request"],
                             "input_ref": built.compiled_ref,
-                            "artifact_kind": ArtifactKind.ELF,
+                            # The compiled harness bundle is a derived artifact
+                            # of the compile sandbox, and the afl ToolSpec only
+                            # accepts derived inputs (ADR-031 chain).
+                            "artifact_kind": ArtifactKind.DERIVED,
                         },
                     },
                 )

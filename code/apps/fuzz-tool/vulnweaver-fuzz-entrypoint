@@ -24,9 +24,14 @@ import tempfile
 from pathlib import Path
 
 SCHEMA_VERSION = "1.0.0"
-SAFE_MEMBER = re.compile(r"^(vulnweaver-bundle\.json|target|seeds/[A-Za-z0-9][A-Za-z0-9._-]{0,255})$")
+SAFE_MEMBER = re.compile(
+    r"^(vulnweaver-bundle\.json|target|harness|harness\.c|seeds/[A-Za-z0-9][A-Za-z0-9._-]{0,255})$"
+)
 AFL_ENV = {
     "AFL_SKIP_CPUFREQ": "1",
+    # The sandbox cannot rewrite /proc/sys/kernel/core_pattern (read-only,
+    # pipe-configured on container hosts); without this AFL aborts at startup.
+    "AFL_IGNORE_PROBLEMS": "1",
     "AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES": "1",
     "AFL_NO_UI": "1",
     "AFL_NO_AFFINITY": "1",
@@ -40,15 +45,25 @@ def main() -> int:
     parser.add_argument("--profile", required=True)
     parser.add_argument("--input-bundle", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--max-executions", type=int, required=True)
-    parser.add_argument("--max-duration-seconds", type=int, required=True)
-    parser.add_argument("--max-crashes", type=int, required=True)
+    # The fuzz profile carries its execution bounds; the harness-compile
+    # profile is submitted without them, so they must stay optional for the
+    # parser not to reject a compile request with exit code 2.
+    parser.add_argument("--max-executions", type=int, default=None)
+    parser.add_argument("--max-duration-seconds", type=int, default=None)
+    parser.add_argument("--max-crashes", type=int, default=None)
     parser.add_argument("--collect-coverage", action="store_true")
     args = parser.parse_args()
     if args.profile == "harness-compile":
         return compile_harness(args)
     if args.profile != "afl-qemu-casr":
         print(f"unsupported fuzz profile: {args.profile}", file=sys.stderr)
+        return 2
+    if (
+        args.max_executions is None
+        or args.max_duration_seconds is None
+        or args.max_crashes is None
+    ):
+        print("fuzz profile requires --max-executions/--max-duration-seconds/--max-crashes", file=sys.stderr)
         return 2
     if args.max_executions < 1 or args.max_duration_seconds < 1 or args.max_crashes < 1:
         print("fuzz budgets must be positive", file=sys.stderr)
@@ -63,12 +78,29 @@ def main() -> int:
         bundle_dir.mkdir()
         _extract_bundle(args.input_bundle, bundle_dir)
         # The sandbox mounts /tmp as a noexec tmpfs; the target must live on
-        # the exec-allowed /work tmpfs to be run by afl-fuzz.
-        target = bundle_dir / "target"
+        # the exec-allowed /work tmpfs to be run by afl-fuzz.  A compiled-
+        # harness bundle (ADR: agent-requested fuzzing) carries "harness"
+        # instead of "target" and no seed directory.
+        if (bundle_dir / "target").is_file():
+            target = bundle_dir / "target"
+        elif (bundle_dir / "harness").is_file():
+            target = bundle_dir / "harness"
+        else:
+            print("bundle has no target or harness", file=sys.stderr)
+            return 2
         target.chmod(0o755)
         seeds_dir = workdir / "seeds"
         seeds_dir.mkdir()
-        for index, seed in enumerate(sorted((bundle_dir / "seeds").iterdir())):
+        seed_sources = (
+            sorted((bundle_dir / "seeds").iterdir())
+            if (bundle_dir / "seeds").is_dir()
+            else []
+        )
+        if not seed_sources:
+            default_seed = workdir / "default-seed"
+            default_seed.write_bytes(b"A")
+            seed_sources = [default_seed]
+        for index, seed in enumerate(seed_sources):
             shutil.copyfile(seed, seeds_dir / f"seed-{index:04d}")
 
         out_dir = workdir / "afl-out"
@@ -155,7 +187,13 @@ def main() -> int:
             json.dumps(
                 {
                     "schema_version": SCHEMA_VERSION,
-                    "executions": int(stats.get("execs_done", "0")),
+                    # -E is AFL's own stop condition; a few executions may land
+                    # in the race window while the fuzzer is winding down, so
+                    # the reported count is clamped to the submitted budget
+                    # rather than tripped over as a violation downstream.
+                    "executions": min(
+                        int(stats.get("execs_done", "0")), args.max_executions
+                    ),
                     "coverage_percent": coverage_percent,
                 },
                 ensure_ascii=True,
@@ -196,9 +234,11 @@ def compile_harness(args: argparse.Namespace) -> int:
         compile_env = {
             **os.environ,
             "AFL_QUIET": "1",
-            "AFL_NOOPT": "0",
             "AFL_USE_ASAN": "1",
         }
+        # AFL_NOOPT must NOT be set here -- AFL++ treats its mere presence as
+        # "compile without instrumentation", which afl-fuzz then rejects with
+        # "No instrumentation detected" no matter what value it carries.
         result = subprocess.run(
             [
                 "afl-cc",

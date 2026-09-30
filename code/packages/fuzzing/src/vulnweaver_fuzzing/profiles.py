@@ -52,12 +52,22 @@ def afl_casr_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> To
             {
                 "type": "object",
                 "additionalProperties": False,
-                "required": [
-                    "profile",
-                    "max_executions",
-                    "max_duration_seconds",
-                    "max_crashes",
-                    "collect_coverage",
+                "required": ["profile"],
+                "allOf": [
+                    {
+                        # The fuzz profile carries its execution bounds; the
+                        # harness-compile profile is parameter-free beyond the
+                        # selector (the compiler submits source only).
+                        "if": {"properties": {"profile": {"const": AFL_CASR_PROFILE}}},
+                        "then": {
+                            "required": [
+                                "max_executions",
+                                "max_duration_seconds",
+                                "max_crashes",
+                                "collect_coverage",
+                            ],
+                        },
+                    }
                 ],
                 "properties": {
                     "profile": {
