@@ -931,6 +931,10 @@ export interface ProductSettings {
   model_tiers?: ModelTierSettings;
   tier_api_keys?: TierApiKeys;
   clear_tier_api_keys?: Array<"planning" | "audit" | "review" | "report">;
+  model_providers?: Array<ModelProviderEntry>;
+  provider_api_keys?: ProviderApiKeys;
+  clear_provider_api_keys?: Array<string>;
+  agent_model_bindings?: AgentModelBindings;
   sandbox_budgets?: SandboxBudgets;
   fuzz_budgets?: FuzzBudgets;
   agent_loop_budgets?: AgentLoopBudgets;
@@ -968,6 +972,42 @@ export interface AgentLoopBudgets {
   audit_deadline_seconds?: number;
   reverse_planning_deadline_seconds?: number;
 }
+
+export interface ModelProviderEntry {
+  id: string;
+  name: string;
+  base_url: string;
+  api_format: "openai-chat" | "anthropic-messages" | "openai-responses";
+  enabled: boolean;
+  timeout_seconds?: number;
+  max_attempts?: number;
+  models: Array<ProviderModelEntry>;
+}
+
+export interface ProviderModelEntry {
+  model_id: string;
+  display_name?: string;
+  context_window_tokens?: number;
+  max_output_tokens?: number;
+  thinking_mode?: "off" | "default" | "custom";
+  thinking_budget_tokens?: number;
+}
+
+export interface AgentModelBinding {
+  provider_id: string;
+  model_id: string;
+  fallback_provider_id?: string | null;
+  fallback_model_id?: string | null;
+}
+
+export interface AgentModelBindings {
+  planning?: AgentModelBinding | null;
+  audit?: AgentModelBinding | null;
+  review?: AgentModelBinding | null;
+  report?: AgentModelBinding | null;
+}
+
+export type ProviderApiKeys = Record<string, string>;
 
 export interface ModelTierSettings {
   planning?: TierModelConfig;

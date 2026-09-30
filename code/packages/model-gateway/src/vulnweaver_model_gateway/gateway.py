@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol, cast
+from typing import ClassVar, Protocol, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -68,10 +68,16 @@ class ThinkingConfig:
 class ModelEndpoint:
     """One remote or local chat endpoint.
 
-    ``protocol`` selects the wire format: ``openai`` (``/chat/completions``)
-    or ``anthropic`` (``/v1/messages``). ``base_url`` may point at a provider's
-    ``/v1`` root or directly at the chat endpoint. The endpoint name is safe
-    metadata and must not contain credentials.
+    ``protocol`` selects the wire format: ``openai`` (``/chat/completions``,
+    alias ``openai-chat``), ``anthropic`` (``/v1/messages``, alias
+    ``anthropic-messages``) or ``openai-responses`` (``/responses``).
+    ``base_url`` may point at a provider's ``/v1`` root or directly at the chat
+    endpoint. The endpoint name is safe metadata and must not contain
+    credentials.
+
+    ``max_output_tokens`` is the model's configured output ceiling (0 = let the
+    provider default decide). It shapes the Anthropic ``max_tokens`` default and
+    the context-window reserve; it is never a task-level quota.
     """
 
     name: str
@@ -84,7 +90,16 @@ class ModelEndpoint:
     max_response_bytes: int = 4 * 1024 * 1024
     protocol: str = "openai"
     context_window_tokens: int = 0
+    max_output_tokens: int = 0
     thinking: ThinkingConfig | None = None
+
+    _PROTOCOL_ALIASES: ClassVar[Mapping[str, str]] = {
+        "openai": "openai",
+        "openai-chat": "openai",
+        "anthropic": "anthropic",
+        "anthropic-messages": "anthropic",
+        "openai-responses": "openai-responses",
+    }
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.base_url)
@@ -94,8 +109,11 @@ class ModelEndpoint:
             raise ValueError("model endpoint URL must use http or https")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("model endpoint URL must not contain credentials or query data")
-        if self.timeout_seconds <= 0 or self.timeout_seconds > 600:
-            raise ValueError("model timeout must be between 0 and 600 seconds")
+        # Long-horizon reasoning models routinely think for tens of minutes; the
+        # ceiling protects a hung connection, not the task (loops carry their own
+        # wall-clock deadline).
+        if self.timeout_seconds <= 0 or self.timeout_seconds > 3600:
+            raise ValueError("model timeout must be between 0 and 3600 seconds")
         if self.max_attempts < 1 or self.max_attempts > 8:
             raise ValueError("model attempts must be between 1 and 8")
         if self.retry_backoff_seconds < 0 or self.retry_backoff_seconds > 60:
@@ -107,8 +125,12 @@ class ModelEndpoint:
         for tier, model in self.models.items():
             if not str(tier) or not model or len(model) > 256:
                 raise ValueError("model names must be non-empty and at most 256 chars")
-        if self.protocol not in {"openai", "anthropic"}:
-            raise ValueError("model endpoint protocol must be openai or anthropic")
+        if self.wire_protocol is None:
+            raise ValueError(
+                "model endpoint protocol must be openai, anthropic or openai-responses"
+            )
+        if self.max_output_tokens < 0:
+            raise ValueError("max output tokens must not be negative")
         if self.context_window_tokens < 0:
             raise ValueError("context window must not be negative")
         if self.thinking is not None:
@@ -120,6 +142,10 @@ class ModelEndpoint:
                 and budget >= self.context_window_tokens
             ):
                 raise ValueError("thinking budget must stay below the context window")
+
+    @property
+    def wire_protocol(self) -> str | None:
+        return self._PROTOCOL_ALIASES.get(self.protocol)
 
     @property
     def chat_completions_url(self) -> str:
@@ -134,6 +160,13 @@ class ModelEndpoint:
         if base.endswith("/messages"):
             return base
         return f"{base}/messages"
+
+    @property
+    def responses_url(self) -> str:
+        base = self.base_url.rstrip("/")
+        if base.endswith("/responses"):
+            return base
+        return f"{base}/responses"
 
 
     def model_for(self, tier: ModelTier) -> str:
@@ -611,8 +644,12 @@ class ModelGateway:
         messages: Sequence[Mapping[str, str]],
         max_output_tokens: int | None,
     ) -> _RequestOutcome:
-        if endpoint.protocol == "anthropic":
+        if endpoint.wire_protocol == "anthropic":
             payload, url, headers = _anthropic_request(endpoint, model, messages, max_output_tokens)
+        elif endpoint.wire_protocol == "openai-responses":
+            payload, url, headers = _openai_responses_request(
+                endpoint, model, messages, max_output_tokens
+            )
         else:
             payload, url, headers = _openai_request(endpoint, model, messages, max_output_tokens)
         decisions: list[tuple[str, str]] = []
@@ -657,8 +694,10 @@ class ModelGateway:
             if 200 <= response.status_code < 300:
                 try:
                     body = _response_object(response.body)
-                    if endpoint.protocol == "anthropic":
+                    if endpoint.wire_protocol == "anthropic":
                         content, usage = _extract_anthropic_response(body)
+                    elif endpoint.wire_protocol == "openai-responses":
+                        content, usage = _extract_openai_responses_response(body)
                     else:
                         content, usage = _extract_response(body)
                 except ModelGatewayError as error:
@@ -735,7 +774,11 @@ def _fit_context_window(
     window = endpoint.context_window_tokens
     if window <= 0:
         return messages_out, ()
-    reserve = max_output_tokens or window // _OUTPUT_RESERVE_FRACTION
+    reserve = (
+        max_output_tokens
+        or endpoint.max_output_tokens
+        or window // _OUTPUT_RESERVE_FRACTION
+    )
     budget_chars = max(0, window - reserve) * _CHARS_PER_TOKEN
     if budget_chars == 0:
         # Reserve consumed the whole window: keep a minimal workable slice and let
@@ -860,6 +903,7 @@ def _anthropic_request(
     payload: dict[str, object] = {
         "model": model,
         "max_tokens": max_output_tokens
+        or endpoint.max_output_tokens
         or (endpoint.context_window_tokens // 4 if endpoint.context_window_tokens else 4096),
         "messages": chat_messages,
     }
@@ -876,6 +920,79 @@ def _anthropic_request(
     if endpoint.api_key:
         headers["x-api-key"] = endpoint.api_key
     return cast(JsonObject, payload), endpoint.messages_url, headers
+
+
+def _openai_responses_request(
+    endpoint: ModelEndpoint,
+    model: str,
+    messages: Sequence[Mapping[str, str]],
+    max_output_tokens: int | None,
+) -> tuple[JsonObject, str, dict[str, str]]:
+    """Build a ``/responses`` payload from the neutral chat messages."""
+
+    system_parts = [
+        str(message["content"])
+        for message in messages
+        if str(message.get("role", "")) == "system"
+    ]
+    input_items = [
+        {"role": str(message["role"]), "content": str(message["content"])}
+        for message in messages
+        if str(message.get("role", "")) != "system"
+    ]
+    payload: dict[str, object] = {
+        "model": model,
+        "input": input_items,
+        "text": {"format": {"type": "json_object"}},
+    }
+    if system_parts:
+        payload["instructions"] = "\n\n".join(system_parts)
+    output_limit = max_output_tokens or endpoint.max_output_tokens
+    if output_limit:
+        payload["max_output_tokens"] = output_limit
+    effort = _reasoning_effort(endpoint)
+    if effort is not None:
+        payload["reasoning"] = {"effort": effort}
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if endpoint.api_key:
+        headers["Authorization"] = f"Bearer {endpoint.api_key}"
+    return cast(JsonObject, payload), endpoint.responses_url, headers
+
+
+def _extract_openai_responses_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
+    status = body.get("status")
+    if status == "incomplete":
+        raise ModelProtocolError(
+            "model response is incomplete (output budget exhausted before JSON completed)",
+            details={"status": "incomplete"},
+            retryable=False,
+        )
+    output_blocks = body.get("output")
+    if not isinstance(output_blocks, list) or not output_blocks:
+        raise ModelProtocolError("model response did not contain output", retryable=True)
+    parts: list[str] = []
+    for block in cast(list[object], output_blocks):
+        if not isinstance(block, Mapping):
+            continue
+        block_mapping = cast(Mapping[str, object], block)
+        if block_mapping.get("type") != "message":
+            # Reasoning and tool-call items carry no answer text; skip them.
+            continue
+        content_blocks = block_mapping.get("content")
+        if not isinstance(content_blocks, list):
+            continue
+        for content_block in cast(list[object], content_blocks):
+            if not isinstance(content_block, Mapping):
+                continue
+            content_mapping = cast(Mapping[str, object], content_block)
+            if content_mapping.get("type") == "output_text" and isinstance(
+                content_mapping.get("text"), str
+            ):
+                parts.append(str(content_mapping["text"]))
+    if not parts:
+        raise ModelProtocolError("model response contained no text output", retryable=True)
+    usage = _parse_usage(body.get("usage"))
+    return "".join(parts), usage
 
 
 def _extract_anthropic_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:

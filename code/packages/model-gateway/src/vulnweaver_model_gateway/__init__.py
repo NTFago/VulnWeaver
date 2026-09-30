@@ -22,12 +22,20 @@ from vulnweaver_model_gateway.gateway import (
     ThinkingConfig,
     TransportResponse,
 )
+from vulnweaver_model_gateway.registry import (
+    AgentBinding,
+    ModelAccessConfig,
+    ModelProvider,
+    ProviderModel,
+)
 
 __all__ = [
+    "AgentBinding",
     "AgentRunConflict",
     "ChatTransport",
     "HttpxChatTransport",
     "InMemoryAgentRunRecorder",
+    "ModelAccessConfig",
     "ModelCallResult",
     "ModelConfigurationError",
     "ModelEndpoint",
@@ -36,9 +44,11 @@ __all__ = [
     "ModelGatewaySettings",
     "ModelOutputError",
     "ModelProtocolError",
+    "ModelProvider",
     "ModelRoute",
     "ModelTier",
     "ModelTransportError",
+    "ProviderModel",
     "RedactionPolicy",
     "ThinkingConfig",
     "TransportResponse",

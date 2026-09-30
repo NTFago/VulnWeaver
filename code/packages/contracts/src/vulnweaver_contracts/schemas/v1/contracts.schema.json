@@ -1423,7 +1423,7 @@
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "review_model_base_url": {"type": "string", "maxLength": 2048},
         "review_model_name": {"type": "string", "maxLength": 256},
-        "review_model_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 600},
+        "review_model_timeout_seconds": {"type": "number", "minimum": 1, "maximum": 3600},
         "review_model_max_attempts": {"type": "integer", "minimum": 1, "maximum": 8},
         "review_model_repair_attempts": {"type": "integer", "minimum": 0, "maximum": 3},
         "review_model_min_interval_seconds": {"type": "number", "minimum": 0, "maximum": 60},
@@ -1438,6 +1438,10 @@
           "uniqueItems": true,
           "items": {"type": "string", "enum": ["planning", "audit", "review", "report"]}
         },
+        "model_providers": {"type": "array", "items": {"$ref": "#/$defs/ModelProviderEntry"}},
+        "provider_api_keys": {"$ref": "#/$defs/ProviderApiKeys"},
+        "clear_provider_api_keys": {"type": "array", "items": {"type": "string", "maxLength": 64}},
+        "agent_model_bindings": {"$ref": "#/$defs/AgentModelBindings"},
         "sandbox_budgets": {"$ref": "#/$defs/SandboxBudgets"},
         "fuzz_budgets": {"$ref": "#/$defs/FuzzBudgets"},
         "agent_loop_budgets": {"$ref": "#/$defs/AgentLoopBudgets"},
@@ -1487,9 +1491,62 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "audit_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
-        "reverse_planning_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 86400}
+        "audit_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 604800},
+        "reverse_planning_deadline_seconds": {"type": "integer", "minimum": 0, "maximum": 604800}
       }
+    },
+    "ModelProviderEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "base_url", "api_format", "enabled", "models"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$", "maxLength": 64},
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "base_url": {"type": "string", "maxLength": 2048},
+        "api_format": {"type": "string", "enum": ["openai-chat", "anthropic-messages", "openai-responses"]},
+        "enabled": {"type": "boolean"},
+        "timeout_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
+        "max_attempts": {"type": "integer", "minimum": 0, "maximum": 8},
+        "models": {"type": "array", "items": {"$ref": "#/$defs/ProviderModelEntry"}}
+      }
+    },
+    "ProviderModelEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_id"],
+      "properties": {
+        "model_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "display_name": {"type": "string", "maxLength": 256},
+        "context_window_tokens": {"type": "integer", "minimum": 0, "maximum": 100000000},
+        "max_output_tokens": {"type": "integer", "minimum": 0, "maximum": 10000000},
+        "thinking_mode": {"type": "string", "enum": ["off", "default", "custom"]},
+        "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000}
+      }
+    },
+    "AgentModelBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider_id", "model_id"],
+      "properties": {
+        "provider_id": {"type": "string", "minLength": 1, "maxLength": 64},
+        "model_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "fallback_provider_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 64}, {"type": "null"}]},
+        "fallback_model_id": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 256}, {"type": "null"}]}
+      }
+    },
+    "AgentModelBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planning": {"anyOf": [{"$ref": "#/$defs/AgentModelBinding"}, {"type": "null"}]},
+        "audit": {"anyOf": [{"$ref": "#/$defs/AgentModelBinding"}, {"type": "null"}]},
+        "review": {"anyOf": [{"$ref": "#/$defs/AgentModelBinding"}, {"type": "null"}]},
+        "report": {"anyOf": [{"$ref": "#/$defs/AgentModelBinding"}, {"type": "null"}]}
+      }
+    },
+    "ProviderApiKeys": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 4096}
     },
     "ModelTierSettings": {
       "type": "object",
@@ -1511,7 +1568,7 @@
         "context_window_tokens": {"type": "integer", "minimum": 0, "maximum": 100000000},
         "thinking_mode": {"type": "string", "enum": ["off", "default", "custom"]},
         "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000},
-        "timeout_seconds": {"type": "number", "minimum": 0, "maximum": 600},
+        "timeout_seconds": {"type": "number", "minimum": 0, "maximum": 3600},
         "max_attempts": {"type": "integer", "minimum": 0, "maximum": 8}
       }
     },
