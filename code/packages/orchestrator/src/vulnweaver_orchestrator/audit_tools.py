@@ -63,6 +63,9 @@ _MAX_SOURCE_PATTERN_CHARS = 256
 _MAX_NEIGHBORHOOD_DEPTH = 3
 _MAX_FACTS_ITEMS = 100
 _MAX_REPORTED_FINDINGS = 32
+# Scanner output enters the audit context as leads; without a cap one large
+# scanner run would flood the static context of every planning round.
+_MAX_STATIC_LEADS = 200
 # Dynamic execution is expensive (the profile re-runs the full binary analysis
 # alongside the targeted symbolic pass) and only ever runs inside the Sandbox
 # Runner. Both limits are enforced here, not in the model's plan.
@@ -472,9 +475,7 @@ class AuditWorkspace:
         if ref is None:
             return {"found": False, "reason_code": "function_not_indexed"}
         async with self.database.transaction() as repositories:
-            raw = await repositories.pair.neighborhood(
-                ref.version_id, function_id, depth=depth
-            )
+            raw = await repositories.pair.neighborhood(ref.version_id, function_id, depth=depth)
         functions = cast(list[PairFunction], raw["functions"])
         nodes = cast(list[PairNode], raw["nodes"])
         edges = cast(list[PairEdge], raw["edges"])
@@ -486,9 +487,7 @@ class AuditWorkspace:
                 "function_id": function_id,
                 "depth": depth,
                 "related": [
-                    _related_summary(item)
-                    for item in functions
-                    if item["id"] != function_id
+                    _related_summary(item) for item in functions if item["id"] != function_id
                 ],
                 "call_path": [cast(JsonObject, dict(step)) for step in steps],
             },
@@ -556,7 +555,7 @@ class AuditWorkspace:
                         },
                     )
                 )
-        return cast(JsonObject, {"candidates": candidates[: _MAX_FACTS_ITEMS]})
+        return cast(JsonObject, {"candidates": candidates[:_MAX_FACTS_ITEMS]})
 
     async def static_leads(self) -> JsonObject:
         """Static-scanner output, presented as leads to confirm or refute.
@@ -582,6 +581,7 @@ class AuditWorkspace:
                     if lead is not None:
                         leads.append(lead)
         leads.sort(key=lambda item: (str(item.get("path")), str(item.get("cwe_id"))))
+        total = len(leads)
         return cast(
             JsonObject,
             {
@@ -589,7 +589,8 @@ class AuditWorkspace:
                     "Unverified scanner output. Each entry is a lead to confirm or "
                     "refute from code you read yourself, never a conclusion."
                 ),
-                "leads": leads,
+                "total_leads": total,
+                "leads": leads[:_MAX_STATIC_LEADS],
             },
         )
 
@@ -819,9 +820,7 @@ class AuditStepExecutor:
         """
 
         if self.symbolic_runner is None:
-            return _failed(
-                "symbolic.no_runner_configured", "no sandbox runner is configured"
-            )
+            return _failed("symbolic.no_runner_configured", "no sandbox runner is configured")
         if not self.dynamic_verification_enabled:
             return _failed(
                 "symbolic.dynamic_verification_disabled",
@@ -896,8 +895,6 @@ class AuditStepExecutor:
             )
         )
         return {"recorded": True, "total": len(self.reported)}
-
-
 
 
 def _lead_from_evidence(evidence: Any) -> JsonObject | None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import cast
 
@@ -119,9 +119,7 @@ def scan_step(step_id: str = "step:1") -> JsonObject:
     )
 
 
-def run_stub(
-    *, model: str = "planning:test-model", tokens: tuple[int, int] = (10, 10)
-) -> AgentRun:
+def run_stub(*, model: str = "planning:test-model", tokens: tuple[int, int] = (10, 10)) -> AgentRun:
     return cast(
         AgentRun,
         {
@@ -237,9 +235,7 @@ async def _loop_executes_steps_until_empty_plan() -> None:
             succeeded(model_proposal([])),
         ]
     )
-    executor = RecordingExecutor(
-        [StepOutcome(True, {"findings": 0}, artifact_refs=("derived:1",))]
-    )
+    executor = RecordingExecutor([StepOutcome(True, {"findings": 0}, artifact_refs=("derived:1",))])
     sink = Sink()
 
     result = await build_loop(planner, executor, sink=sink).run(loop_request())
@@ -399,9 +395,7 @@ def test_repeated_model_failures_degrade() -> None:
 
 
 async def _repeated_model_failures_degrade() -> None:
-    planner = FakePlanner(
-        [failed("model_transport_error"), failed("model_transport_error")]
-    )
+    planner = FakePlanner([failed("model_transport_error"), failed("model_transport_error")])
     budget = AgentLoopBudget(max_consecutive_model_failures=2)
 
     result = await build_loop(planner, RecordingExecutor([]), budget=budget).run(loop_request())
@@ -416,9 +410,7 @@ def test_single_model_failure_is_retried_by_the_loop() -> None:
 
 
 async def _single_model_failure_is_retried_by_the_loop() -> None:
-    planner = FakePlanner(
-        [failed("model_transport_error"), succeeded(model_proposal([]))]
-    )
+    planner = FakePlanner([failed("model_transport_error"), succeeded(model_proposal([]))])
 
     result = await build_loop(planner, RecordingExecutor([])).run(loop_request())
 
@@ -474,9 +466,7 @@ async def _failed_step_is_observed_by_the_next_round() -> None:
             succeeded(model_proposal([])),
         ]
     )
-    executor = RecordingExecutor(
-        [StepOutcome(False, {}, failure_code="tool_execution_failed")]
-    )
+    executor = RecordingExecutor([StepOutcome(False, {}, failure_code="tool_execution_failed")])
 
     result = await build_loop(planner, executor).run(loop_request())
 
@@ -686,5 +676,201 @@ def test_progress_callback_emits_running_and_terminal_snapshots() -> None:
     assert [item.status for item in emitted] == [RunStatus.RUNNING, RunStatus.SUCCEEDED]
     assert emitted[0].round_index == 1
     assert [item.step_id for item in emitted[0].last_round_steps] == ["step:1"]
+    # The compacted journal rides along so a checkpoint can restore it.
+    assert [entry["round"] for entry in emitted[0].journal] == [1]
     assert emitted[-1].steps == result.steps
     assert emitted[-1].decisions == tuple(result.agent_run["decisions"])
+
+
+def test_journal_feeds_older_rounds_without_duplicating_feedback() -> None:
+    asyncio.run(_journal_feeds_older_rounds_without_duplicating_feedback())
+
+
+async def _journal_feeds_older_rounds_without_duplicating_feedback() -> None:
+    planner = FakePlanner(
+        [
+            succeeded(model_proposal([scan_step("step:1")])),
+            succeeded(model_proposal([scan_step("step:2")])),
+            succeeded(model_proposal([])),
+        ]
+    )
+    executor = RecordingExecutor(
+        [
+            StepOutcome(True, {"summary": "first round observation"}),
+            StepOutcome(True, {"summary": "second round observation"}),
+        ]
+    )
+
+    result = await build_loop(planner, executor).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    third_user = json.loads(planner.messages[2][1]["content"])
+    # Round 2 stays verbatim in last_feedback; only round 1 is compacted into
+    # the journal, so the prompt never carries the same round twice.
+    journal = third_user["investigation_journal"]
+    assert [entry["round"] for entry in journal] == [1]
+    assert journal[0]["kind"] == "step"
+    assert journal[0]["tool"] == "semgrep@1.0.0"
+    assert journal[0]["outcome"] == "ok"
+    assert journal[0]["summary"] == "first round observation"
+    assert third_user["last_feedback"]["planning_round"] == 2
+    assert third_user["last_feedback"]["last_steps"][0]["output"] == {
+        "summary": "second round observation"
+    }
+
+
+def test_journal_is_bounded_and_ages_out_oldest_first() -> None:
+    asyncio.run(_journal_is_bounded_and_ages_out_oldest_first())
+
+
+async def _journal_is_bounded_and_ages_out_oldest_first() -> None:
+    planner = FakePlanner(
+        [succeeded(model_proposal([scan_step(f"step:{index}")])) for index in range(1, 4)]
+        + [succeeded(model_proposal([]))]
+    )
+    executor = RecordingExecutor(
+        [StepOutcome(True, {"summary": f"round {index} observation"}) for index in range(1, 4)]
+    )
+    budget = AgentLoopBudget(max_journal_entries=2)
+
+    result = await build_loop(planner, executor, budget=budget).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    fourth_user = json.loads(planner.messages[3][1]["content"])
+    # After round 3 the journal held rounds 2 and 3; round 3 moved into
+    # last_feedback, leaving exactly one compacted entry.
+    assert [entry["round"] for entry in fourth_user["investigation_journal"]] == [2]
+    assert fourth_user["investigation_journal"][0]["summary"] == "round 2 observation"
+
+
+def test_journal_can_be_disabled() -> None:
+    asyncio.run(_journal_can_be_disabled())
+
+
+async def _journal_can_be_disabled() -> None:
+    planner = FakePlanner(
+        [
+            succeeded(model_proposal([scan_step()])),
+            succeeded(model_proposal([])),
+        ]
+    )
+    executor = RecordingExecutor([StepOutcome(True, {"findings": 0})])
+    budget = AgentLoopBudget(max_journal_entries=0)
+
+    result = await build_loop(planner, executor, budget=budget).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    second_user = json.loads(planner.messages[1][1]["content"])
+    assert "investigation_journal" not in second_user
+    # The last round still arrives verbatim.
+    assert second_user["last_feedback"]["last_steps"][0]["output"] == {"findings": 0}
+
+
+def test_plan_rejections_enter_the_journal() -> None:
+    asyncio.run(_plan_rejections_enter_the_journal())
+
+
+async def _plan_rejections_enter_the_journal() -> None:
+    bad_step = dict(scan_step())
+    bad_step["tool_name"] = "unregistered-tool"
+    planner = FakePlanner(
+        [
+            succeeded(model_proposal([cast(JsonObject, bad_step)])),
+            succeeded(model_proposal([scan_step("step:2")])),
+            succeeded(model_proposal([])),
+        ]
+    )
+    executor = RecordingExecutor([StepOutcome(True, {"findings": 1})])
+
+    result = await build_loop(planner, executor).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    third_user = json.loads(planner.messages[2][1]["content"])
+    journal = third_user["investigation_journal"]
+    # The round-2 step moved into last_feedback; the rejection is what stays.
+    assert journal == [{"round": 1, "kind": "plan_rejected", "reasons": ["tool_not_registered"]}]
+
+
+def test_journal_entry_summaries_are_single_line_and_bounded() -> None:
+    asyncio.run(_journal_entry_summaries_are_single_line_and_bounded())
+
+
+async def _journal_entry_summaries_are_single_line_and_bounded() -> None:
+    planner = FakePlanner(
+        [
+            succeeded(model_proposal([scan_step("step:1")])),
+            succeeded(model_proposal([scan_step("step:2")])),
+            succeeded(model_proposal([])),
+        ]
+    )
+    executor = RecordingExecutor(
+        [
+            StepOutcome(True, {"summary": "line one\nline two\n" + "x" * 500}),
+            StepOutcome(True, {"findings": 0}),
+        ]
+    )
+    budget = AgentLoopBudget(max_journal_entry_chars=64)
+
+    result = await build_loop(planner, executor, budget=budget).run(loop_request())
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    third_user = json.loads(planner.messages[2][1]["content"])
+    summary = str(third_user["investigation_journal"][0]["summary"])
+    # Newlines collapse and the digest respects its own char cap, so one entry
+    # can never blow the prompt line budget.
+    assert "\n" not in summary
+    assert len(summary) <= 64
+    assert summary.startswith("line one line two")
+
+
+def test_resume_seeds_the_journal() -> None:
+    asyncio.run(_resume_seeds_the_journal())
+
+
+async def _resume_seeds_the_journal() -> None:
+    seeded = (
+        {
+            "round": 1,
+            "kind": "step",
+            "step_id": "step:0",
+            "tool": "semgrep@1.0.0",
+            "outcome": "ok",
+            "summary": "prior digest",
+        },
+        {
+            "round": 2,
+            "kind": "step",
+            "step_id": "step:1",
+            "tool": "semgrep@1.0.0",
+            "outcome": "ok",
+            "summary": "same round as last_feedback",
+        },
+    )
+    resume = replace(_resume_state(rounds=2), journal=seeded)
+    planner = FakePlanner([succeeded(model_proposal([]))])
+    executor = RecordingExecutor([])
+    request = AgentLoopRequest(
+        task_id="task:1",
+        run_id="agent-run:loop:1",
+        objective="analyze the sample",
+        context={"artifact": "version:1"},
+        policy_context=full_access_context(),
+        input_refs=("version:1",),
+        resume=resume,
+    )
+
+    result = await build_loop(planner, executor).run(request)
+
+    assert result.status is AgentLoopStatus.COMPLETED
+    first_user = json.loads(planner.messages[0][1]["content"])
+    # The round already covered by last_feedback is filtered; older history
+    # survives the crash.
+    assert [entry["summary"] for entry in first_user["investigation_journal"]] == ["prior digest"]
+    assert first_user["last_feedback"]["planning_round"] == 2
+
+
+def test_budget_rejects_invalid_journal_bounds() -> None:
+    with pytest.raises(ValueError):
+        AgentLoopBudget(max_journal_entries=-1)
+    with pytest.raises(ValueError):
+        AgentLoopBudget(max_journal_entry_chars=16)

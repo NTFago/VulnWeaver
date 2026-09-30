@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -70,9 +71,11 @@ class ScriptedPlanner:
         self._proposals = list(proposals)
         self._failure = failure
         self.calls = 0
+        self.messages: list[list[dict[str, str]]] = []
 
     async def complete_structured(self, **kwargs: object) -> ModelCallResult:
         self.calls += 1
+        self.messages.append(cast(list[dict[str, str]], kwargs["messages"]))
         output = (
             self._proposals.pop(0)
             if self._proposals
@@ -114,9 +117,7 @@ class StubFactLoader:
         return SourceReviewFacts(True, None, excerpt)
 
 
-def step(
-    tool: str, arguments: JsonObject, *, step_id: str, refs: list[str]
-) -> dict[str, object]:
+def step(tool: str, arguments: JsonObject, *, step_id: str, refs: list[str]) -> dict[str, object]:
     return {
         "step_id": step_id,
         "tool_name": tool,
@@ -217,9 +218,7 @@ async def seed(
 
 
 def audit_job(identifier: str, task_id: str) -> Job:
-    return job(
-        identifier, task_id=task_id, idempotency_key=identifier, kind=JobKind.SEMANTIC_AUDIT
-    )
+    return job(identifier, task_id=task_id, idempotency_key=identifier, kind=JobKind.SEMANTIC_AUDIT)
 
 
 def test_audit_tools_register_and_enforce_read_only_boundaries() -> None:
@@ -336,9 +335,7 @@ def test_agent_investigates_then_reports_and_projection_anchors(
                             step_id="s1",
                             refs=[function_version],
                         ),
-                        step(
-                            "static-leads", {}, step_id="s2", refs=[function_version]
-                        ),
+                        step("static-leads", {}, step_id="s2", refs=[function_version]),
                     ],
                     "survey the index and the scanner leads",
                 ),
@@ -413,12 +410,9 @@ def test_agent_investigates_then_reports_and_projection_anchors(
             # provenance: CONTEXTUAL, weight 0, so it can never satisfy the
             # confirmation policy but the evidence chain still shows it.
             async with database.transaction() as repositories:
-                relations = await repositories.findings.list_evidence_relations(
-                    findings[0]["id"]
-                )
+                relations = await repositories.findings.list_evidence_relations(findings[0]["id"])
                 evidence = [
-                    await repositories.evidence.get(item["evidence_id"])
-                    for item in relations
+                    await repositories.evidence.get(item["evidence_id"]) for item in relations
                 ]
             requests = [
                 item
@@ -625,9 +619,7 @@ def test_static_leads_are_leads_and_never_become_findings_by_themselves(
             )
             assert outcome.degraded is False
             assert outcome.findings == ()
-            assert [item["tool"] for item in outcome.investigation] == [
-                "static-leads@1.0.0"
-            ]
+            assert [item["tool"] for item in outcome.investigation] == ["static-leads@1.0.0"]
 
             async with database.transaction() as repositories:
                 findings = await repositories.findings.list_for_task(task_id)
@@ -677,9 +669,7 @@ def test_symbolic_execute_is_refused_without_a_runner_or_a_project_opt_in(
         suffix, _ = await seed(
             database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
         )
-        workspace = AuditWorkspace(
-            database, LocalContentAddressedStore(tmp_path), f"task:{suffix}"
-        )
+        workspace = AuditWorkspace(database, LocalContentAddressedStore(tmp_path), f"task:{suffix}")
         try:
             await workspace.load()
             call = _symbolic_call({"addresses": [0x1050]})
@@ -706,9 +696,7 @@ def test_symbolic_execute_anchors_addresses_on_the_index_and_caps_runs(
         suffix, _ = await seed(
             database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
         )
-        workspace = AuditWorkspace(
-            database, LocalContentAddressedStore(tmp_path), f"task:{suffix}"
-        )
+        workspace = AuditWorkspace(database, LocalContentAddressedStore(tmp_path), f"task:{suffix}")
         try:
             await workspace.load()
             function_version = workspace.function_refs()[0].version_id
@@ -841,17 +829,25 @@ def test_an_audit_that_stops_early_never_reports_no_findings(
 
 
 def _interrupted_checkpoint_state(job_id: str, run_id: str, function_version: str) -> JsonObject:
-    """What the progress callback would have persisted after round 1 crashed."""
-    step_document = {
-        "step_id": "s1",
-        "tool_name": "code-function-list",
-        "tool_version": "1.0.0",
-        "plan_id": f"{run_id}-plan-1",
-        "succeeded": True,
-        "output": {"functions": 1},
-        "artifact_refs": [function_version],
-        "failure_code": None,
-    }
+    """What the progress callback would have persisted after round 2 crashed."""
+
+    def step_document(step_id: str, plan_suffix: str, output: dict[str, object]) -> JsonObject:
+        return cast(
+            JsonObject,
+            {
+                "step_id": step_id,
+                "tool_name": "code-function-list",
+                "tool_version": "1.0.0",
+                "plan_id": f"{run_id}-plan-{plan_suffix}",
+                "succeeded": True,
+                "output": output,
+                "artifact_refs": [function_version],
+                "failure_code": None,
+            },
+        )
+
+    first = step_document("s1", "1", {"functions": 1})
+    second = step_document("s2", "2", {"summary": "surveyed the index"})
     return cast(
         JsonObject,
         {
@@ -859,7 +855,7 @@ def _interrupted_checkpoint_state(job_id: str, run_id: str, function_version: st
             "job_id": job_id,
             "run_id": run_id,
             "completed": False,
-            "rounds": 1,
+            "rounds": 2,
             "decisions": [
                 {
                     "sequence": 1,
@@ -873,9 +869,31 @@ def _interrupted_checkpoint_state(job_id: str, run_id: str, function_version: st
                     "reason": "step s1 via code-function-list",
                     "created_at": TIMESTAMP,
                 },
+                {
+                    "sequence": 3,
+                    "decision": "plan_accepted",
+                    "reason": "plan approved with 1 step(s): check the entrypoints",
+                    "created_at": TIMESTAMP,
+                },
+                {
+                    "sequence": 4,
+                    "decision": "step_executed",
+                    "reason": "step s2 via code-function-list",
+                    "created_at": TIMESTAMP,
+                },
             ],
-            "steps": [step_document],
-            "last_round_steps": [step_document],
+            "steps": [first, second],
+            "last_round_steps": [second],
+            "journal": [
+                {
+                    "round": 1,
+                    "kind": "step",
+                    "step_id": "s1",
+                    "tool": "code-function-list@1.0.0",
+                    "outcome": "ok",
+                    "summary": "listed 1 indexed function",
+                }
+            ],
             "reported": [
                 {
                     "cwe_id": "CWE-95",
@@ -942,6 +960,13 @@ def test_audit_resumes_from_an_interrupted_checkpoint(
         assert outcome.completed
         assert planner.calls == 1
         assert outcome.steps and outcome.steps[0].step_id == "s1"
+        # Round 2 arrives verbatim; round 1 arrives as its compacted journal
+        # digest, so the takeover loses no investigation history.
+        first_user = json.loads(planner.messages[0][1]["content"])
+        assert first_user["last_feedback"]["planning_round"] == 2
+        assert [entry["summary"] for entry in first_user["investigation_journal"]] == [
+            "listed 1 indexed function"
+        ]
         # The finding reported before the crash survives the takeover.
         assert [finding.cwe_id for finding in outcome.findings] == ["CWE-95"]
         decisions = outcome.run["decisions"]
