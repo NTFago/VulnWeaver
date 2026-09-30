@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import RowMapping, Table, delete, func, select, text, update
+from sqlalchemy import Column, RowMapping, Table, delete, func, select, text, update
 from sqlalchemy import exists as exists_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -2118,32 +2118,30 @@ class DeletionRepository:
             ).scalars().all(),
         )
         if not artifact_ids:
-            version_rows = []
+            version_ids: list[str] = []
         else:
-            version_rows = cast(
+            version_ids = cast(
                 "list[str]",
                 (
                     await self._connection.execute(
-                        select(artifact_versions.c.id)
-                        .where(artifact_versions.c.artifact_id.in_(artifact_ids))
-                        # Children reference parents via parent_version_id with an
-                        # immediate RESTRICT check, so delete newest-first.
-                        .order_by(artifact_versions.c.created_at.desc())
+                        select(artifact_versions.c.id).where(
+                            artifact_versions.c.artifact_id.in_(artifact_ids)
+                        )
                     )
                 ).scalars().all(),
             )
-        if version_rows:
+        if version_ids:
             await self._connection.execute(
-                delete(pair_raw).where(pair_raw.c.artifact_version_id.in_(version_rows))
+                delete(pair_raw).where(pair_raw.c.artifact_version_id.in_(version_ids))
             )
             await self._connection.execute(
-                delete(pair_edges).where(pair_edges.c.artifact_version_id.in_(version_rows))
+                delete(pair_edges).where(pair_edges.c.artifact_version_id.in_(version_ids))
             )
             await self._connection.execute(
-                delete(pair_nodes).where(pair_nodes.c.artifact_version_id.in_(version_rows))
+                delete(pair_nodes).where(pair_nodes.c.artifact_version_id.in_(version_ids))
             )
             await self._connection.execute(
-                delete(pair_functions).where(pair_functions.c.artifact_version_id.in_(version_rows))
+                delete(pair_functions).where(pair_functions.c.artifact_version_id.in_(version_ids))
             )
         if artifact_ids:
             await self._connection.execute(
@@ -2151,16 +2149,52 @@ class DeletionRepository:
                 .where(artifacts.c.id.in_(artifact_ids))
                 .values(current_version_id=None)
             )
-        for version_id in version_rows:
-            await self._connection.execute(
-                delete(artifact_versions).where(artifact_versions.c.id == version_id)
-            )
+        await self._delete_chain_leaves(
+            artifact_versions,
+            version_ids,
+            referenced=artifact_versions.c.parent_version_id,
+            label="artifact version",
+        )
         if artifact_ids:
             await self._connection.execute(
                 delete(artifacts).where(artifacts.c.id.in_(artifact_ids))
             )
         await self._connection.execute(delete(projects).where(projects.c.id == project_id))
         return _project_from_row(row)
+
+    async def _delete_chain_leaves(
+        self,
+        table: Table,
+        ids: list[str],
+        *,
+        referenced: Column[Any],
+        label: str,
+    ) -> None:
+        """Delete rows whose self-referencing RESTRICT FK admits no safe fixed
+        order. Rows of one chain can share a single `created_at` (pipelines mint
+        parent and child in one transaction), so timestamp ordering is not a
+        topological order; delete leaves iteratively instead."""
+        remaining = set(ids)
+        while remaining:
+            removed = set(
+                (
+                    await self._connection.execute(
+                        delete(table)
+                        .where(
+                            table.c.id.in_(remaining),
+                            table.c.id.not_in(
+                                select(referenced).where(referenced.is_not(None))
+                            ),
+                        )
+                        .returning(table.c.id)
+                    )
+                ).scalars().all()
+            )
+            if not removed:
+                raise PersistenceInvariantError(
+                    f"{label} chain never reaches a leaf", details={"ids": sorted(remaining)}
+                )
+            remaining -= removed
 
     async def _load_task_for_delete(self, task_id: str) -> Task:
         row = (
@@ -2223,19 +2257,21 @@ class DeletionRepository:
             await self._connection.execute(
                 delete(finding_evidence).where(finding_evidence.c.finding_id.in_(finding_ids))
             )
-            # supersedes_review_id is a self-referencing RESTRICT FK: newest first.
+            # supersedes_review_id is a self-referencing RESTRICT FK.
             review_ids = cast(
                 "list[str]",
                 (
                     await self._connection.execute(
-                        select(reviews.c.id)
-                        .where(reviews.c.finding_id.in_(finding_ids))
-                        .order_by(reviews.c.created_at.desc())
+                        select(reviews.c.id).where(reviews.c.finding_id.in_(finding_ids))
                     )
                 ).scalars().all(),
             )
-            for review_id in review_ids:
-                await self._connection.execute(delete(reviews).where(reviews.c.id == review_id))
+            await self._delete_chain_leaves(
+                reviews,
+                review_ids,
+                referenced=reviews.c.supersedes_review_id,
+                label="review",
+            )
             await self._connection.execute(
                 delete(pocs).where(pocs.c.finding_id.in_(finding_ids))
             )
@@ -2259,16 +2295,16 @@ class DeletionRepository:
             "list[str]",
             (
                 await self._connection.execute(
-                    select(annotations.c.id)
-                    .where(annotations.c.task_id == task_id)
-                    .order_by(annotations.c.created_at.desc())
+                    select(annotations.c.id).where(annotations.c.task_id == task_id)
                 )
             ).scalars().all(),
         )
-        for annotation_id in annotation_ids:
-            await self._connection.execute(
-                delete(annotations).where(annotations.c.id == annotation_id)
-            )
+        await self._delete_chain_leaves(
+            annotations,
+            annotation_ids,
+            referenced=annotations.c.supersedes_annotation_id,
+            label="annotation",
+        )
 
         await self._connection.execute(
             delete(agent_runs).where(agent_runs.c.task_id == task_id)
