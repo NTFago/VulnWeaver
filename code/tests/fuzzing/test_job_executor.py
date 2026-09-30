@@ -265,5 +265,5 @@ async def test_source_fuzz_builds_harness_before_running_service():
     )
 
     assert result["status"] is JobStatus.SUCCEEDED
-    assert service.requests[0]["sandbox_request"]["artifact_kind"] == "elf"
+    assert service.requests[0]["sandbox_request"]["artifact_kind"] == "derived"
     assert service.requests[0]["sandbox_request"]["input_ref"].endswith("f" * 64)
