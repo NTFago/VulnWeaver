@@ -27,6 +27,7 @@ from vulnweaver_contracts import (
     FuzzStatus,
     FuzzToolSummary,
     JsonObject,
+    JsonValue,
     SandboxRequest,
     SandboxResult,
     SandboxStatus,
@@ -191,8 +192,7 @@ class FuzzExecutionService:
             # Carry the sandbox output tails into the failure details: without
             # them an AFL abort (core_pattern, no instrumentation, ...) is
             # invisible from the job record (same lesson as Q-022).
-            details = failure.get("details")
-            details = dict(details) if isinstance(details, dict) else {}
+            details: dict[str, JsonValue] = dict(failure.get("details") or {})
             for name, ref in (
                 ("stdout_tail", sandbox_result.get("stdout_ref")),
                 ("stderr_tail", sandbox_result.get("stderr_ref")),
@@ -204,7 +204,7 @@ class FuzzExecutionService:
                         details[name] = stream.read(4_096).decode("utf-8", "replace")[-3_000:]
                 except (ArtifactStoreError, OSError):
                     continue
-            failure = {**failure, "details": cast(JsonObject, details)}
+            failure = cast(StructuredFailure, {**failure, "details": details})
             return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=status,

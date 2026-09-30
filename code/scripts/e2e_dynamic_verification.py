@@ -33,7 +33,7 @@ def main() -> int:
     payload = login.json()
     write_headers = {"X-CSRF-Token": payload["csrf_token"]}
 
-    with open(SAMPLE_SOURCE, "r", encoding="utf-8") as stream:
+    with open(SAMPLE_SOURCE, encoding="utf-8") as stream:
         source_text = stream.read()
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
