@@ -16,6 +16,7 @@
 |---|---|---|
 | T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
 | T50 扫描器诊断证据化（ADR-032） | ZCode / 本分支 | **完成**：diagnostics 只落 TOOL_OUTPUT 证据（selector 补 severity/message），不再直接成为 CANDIDATE Finding；static-leads 改从证据层读线索；成为 Finding 的唯一路径是 agent 亲读代码后重新报告锚定 |
+| T51 动态验证链路端到端打通 | ZCode / 本分支 | **完成**：afl-casr 镜像构建并注册；修复 4 个链路断点（harness-compile schema 条件必填 / entrypoint fuzz 参数必填与 bundle 白名单 / `AFL_NOOPT=0` 静默禁用插桩 / execs 竞态超预算）；`e2e_dynamic_verification.py` 全链全绿：审计→评审→fuzz 投放→harness 生成→AFL 真实执行→结果契约通过 |
 | T49 agent 引导的动态验证投放（ADR-031） | ZCode / 本分支 | **完成**：审计结算时 agent 显式 `verification_request=fuzz` 的候选立即投放 fuzz 战役（早于 review；opt-in 门禁 + 每审计上限 4 + 调度器幂等去重全保留）；提示词同步为"请求即发起有界战役" |
 | T48 项目级调查记忆（ADR-030） | ZCode / 已合并 `f6d354a` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
 | T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
@@ -52,6 +53,8 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-09-29 | T51 动态验证链路 E2E | opt-in 项目投递教学样本 fuzz-overflow.c：semantic_audit/review/fuzz 全部 succeeded，AFL++ 沙箱真实执行（-E 10000/-V 60），结果通过 FuzzToolSummary/CrashManifest 契约；fuzz 失败诊断能力补齐（sandbox stdout/stderr 尾部进 failure.details，triage reason 进消息） |
+| 2026-09-29 | AFL 教训 | `AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）——compile_env 里 `AFL_NOOPT=0` 使所有 harness 编译静默失去插桩，afl-fuzz 报 No instrumentation detected；`AFL_IGNORE_PROBLEMS=1` 才能跳过容器宿主 core_pattern 管道中止（`AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES` 只是不警告） |
 | 2026-09-28 | T50 诊断证据化（dev 容器，栈内 PG） | orchestrator+binary_analysis+source_analysis **206 passed**；ruff 通过；pyright 0 errors；lineage 测试验证诊断零 Finding 行、线索从证据浮现 |
 | 2026-09-28 | T49 智能体引导投放（dev 容器，栈内 PG） | 新增 2 用例（仅显式请求且锚定成功者被投放/未开启 opt-in 零投放）；orchestrator+binary_analysis **154 passed**；ruff 通过；pyright 0 errors |
 | 2026-09-28 | T48 调查记忆（dev container 内执行，栈内 PG） | orchestrator+binary_analysis **152 passed**（新增 4 记忆用例）；ruff 通过；pyright 0 errors；栈内 E2E `e2e_investigation_memory.py`：同项目两任务全 succeeded，记忆工件 2 版 |
@@ -67,6 +70,6 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
 3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。
-4. **长线下一块**：智能体主导的四块拼图（调查循环/续跑/记忆/战役投放/工具结果降级）已全部就位；候选方向：报告与工作台展示"线索→agent 结论"的差异呈现、Q-025 根因修复。
+4. **长线下一块**：五块拼图+动态验证闭环已全部就位；候选方向：报告与工作台展示"线索→agent 结论"差异呈现、fuzz 崩溃证据经 ADR-027 §4 修订复核的运行时观察。
 4. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；本地仅剩 `main`（worktree `课设-worktree-fe-opts` 已随分支清理移除）；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
 5. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。

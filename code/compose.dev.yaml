@@ -15,8 +15,11 @@ services:
       UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
     volumes:
       - ..:/workspace/vulnweaver
+      - artifact-data:/var/lib/vulnweaver/artifacts
+      - sandbox-runtime:/var/lib/vulnweaver/sandbox
     networks:
       - control-plane
+      - analysis-plane
     depends_on:
       postgres:
         condition: service_healthy

@@ -188,6 +188,23 @@ class FuzzExecutionService:
                 FailureKind.ENVIRONMENT,
                 "fuzz Sandbox Runner did not complete successfully",
             )
+            # Carry the sandbox output tails into the failure details: without
+            # them an AFL abort (core_pattern, no instrumentation, ...) is
+            # invisible from the job record (same lesson as Q-022).
+            details = failure.get("details")
+            details = dict(details) if isinstance(details, dict) else {}
+            for name, ref in (
+                ("stdout_tail", sandbox_result.get("stdout_ref")),
+                ("stderr_tail", sandbox_result.get("stderr_ref")),
+            ):
+                if not ref:
+                    continue
+                try:
+                    with self._store.open(ref) as stream:
+                        details[name] = stream.read(4_096).decode("utf-8", "replace")[-3_000:]
+                except (ArtifactStoreError, OSError):
+                    continue
+            failure = {**failure, "details": cast(JsonObject, details)}
             return FuzzRunOutcome(triage.build_result(
                 request["job_id"],
                 status=status,
@@ -511,7 +528,13 @@ def _failure_for_exception(error: Exception, *, phase: str) -> StructuredFailure
                 if phase == "normalization"
                 else "fuzz request, bundle, or tool identity is invalid"
             ),
-            details={"exception_type": type(error).__name__},
+            # The triage message names the exact violated invariant; without it
+            # the job record cannot distinguish a malformed crash manifest from
+            # a request problem.
+            details={
+                "exception_type": type(error).__name__,
+                "reason": str(error)[:400],
+            },
         )
     if isinstance(error, (OSError, TimeoutError, RuntimeError)):
         return _failure(
