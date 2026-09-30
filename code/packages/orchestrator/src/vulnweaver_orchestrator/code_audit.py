@@ -220,10 +220,10 @@ class CodeAuditAgent:
             max_observation_chars=8_192,
             soft_round_limit=6,
             # Wall clock is the loop's only hard backstop (ADR-027).  The
-            # 30-minute course-era calibration starved real-world samples;
-            # two hours is the long-horizon default and deployments can still
-            # override it via AGENT_AUDIT_DEADLINE_SECONDS.
-            deadline_seconds=7_200.0,
+            # course-era calibrations (30 minutes, then two hours) starved
+            # real-world samples; eight hours is the long-horizon default and
+            # deployments can still override it via AGENT_AUDIT_DEADLINE_SECONDS.
+            deadline_seconds=28_800.0,
         )
         self._limits = limits or AuditWorkspaceLimits()
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))

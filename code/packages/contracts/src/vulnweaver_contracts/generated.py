@@ -996,6 +996,10 @@ class ProductSettings(TypedDict):
     model_tiers: NotRequired[ModelTierSettings]
     tier_api_keys: NotRequired[TierApiKeys]
     clear_tier_api_keys: NotRequired[list[Literal['planning', 'audit', 'review', 'report']]]
+    model_providers: NotRequired[list[ModelProviderEntry]]
+    provider_api_keys: NotRequired[ProviderApiKeys]
+    clear_provider_api_keys: NotRequired[list[str]]
+    agent_model_bindings: NotRequired[AgentModelBindings]
     sandbox_budgets: NotRequired[SandboxBudgets]
     fuzz_budgets: NotRequired[FuzzBudgets]
     agent_loop_budgets: NotRequired[AgentLoopBudgets]
@@ -1027,6 +1031,38 @@ class FuzzBudgets(TypedDict):
 class AgentLoopBudgets(TypedDict):
     audit_deadline_seconds: NotRequired[int]
     reverse_planning_deadline_seconds: NotRequired[int]
+
+class ModelProviderEntry(TypedDict):
+    id: str
+    name: str
+    base_url: str
+    api_format: Literal['openai-chat', 'anthropic-messages', 'openai-responses']
+    enabled: bool
+    timeout_seconds: NotRequired[float]
+    max_attempts: NotRequired[int]
+    models: list[ProviderModelEntry]
+
+class ProviderModelEntry(TypedDict):
+    model_id: str
+    display_name: NotRequired[str]
+    context_window_tokens: NotRequired[int]
+    max_output_tokens: NotRequired[int]
+    thinking_mode: NotRequired[Literal['off', 'default', 'custom']]
+    thinking_budget_tokens: NotRequired[int]
+
+class AgentModelBinding(TypedDict):
+    provider_id: str
+    model_id: str
+    fallback_provider_id: NotRequired[str | None]
+    fallback_model_id: NotRequired[str | None]
+
+class AgentModelBindings(TypedDict):
+    planning: NotRequired[AgentModelBinding | None]
+    audit: NotRequired[AgentModelBinding | None]
+    review: NotRequired[AgentModelBinding | None]
+    report: NotRequired[AgentModelBinding | None]
+
+type ProviderApiKeys = dict[str, str]
 
 class ModelTierSettings(TypedDict):
     planning: NotRequired[TierModelConfig]

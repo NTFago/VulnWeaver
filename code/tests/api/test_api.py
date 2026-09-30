@@ -186,7 +186,13 @@ def test_product_settings_require_auth_and_never_echo_api_key(
     writable = {
         key: value
         for key, value in saved.json().items()
-        if key not in {"api_key_configured", "review_model_api_key", "tier_api_keys_configured"}
+        if key
+        not in {
+            "api_key_configured",
+            "review_model_api_key",
+            "tier_api_keys_configured",
+            "providers_api_key_configured",
+        }
     }
     preserved = client.put(
         "/api/settings",
@@ -265,6 +271,124 @@ def test_product_settings_accept_and_reject_tool_image_digests(
         },
     )
     assert out_of_range.status_code == 422
+
+
+def test_product_settings_store_provider_registry_and_merge_keys(
+    client: TestClient,
+) -> None:
+    csrf = _login_and_change_password(client)
+    provider = {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.example/v1",
+        "api_format": "openai-chat",
+        "enabled": True,
+        "models": [
+            {
+                "model_id": "deepseek-chat",
+                "context_window_tokens": 131072,
+                "max_output_tokens": 8192,
+            }
+        ],
+    }
+    saved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "model_providers": [provider],
+            "provider_api_keys": {"deepseek": "sk-provider-secret"},
+            "agent_model_bindings": {
+                "audit": {"provider_id": "deepseek", "model_id": "deepseek-chat"}
+            },
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    # The response normalizes provider defaults (timeout 0, thinking off, ...).
+    assert body["model_providers"] == [
+        {
+            **provider,
+            "timeout_seconds": 0.0,
+            "max_attempts": 0,
+            "models": [
+                {
+                    **provider["models"][0],
+                    "display_name": "",
+                    "thinking_mode": "off",
+                    "thinking_budget_tokens": 0,
+                }
+            ],
+        }
+    ]
+    assert body["providers_api_key_configured"] == {"deepseek": True}
+    assert body["agent_model_bindings"]["audit"] == {
+        "provider_id": "deepseek",
+        "model_id": "deepseek-chat",
+        "fallback_provider_id": None,
+        "fallback_model_id": None,
+    }
+    assert "sk-provider-secret" not in saved.text
+
+    # A save without a new key preserves the stored secret.
+    preserved = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={"schema_version": "1.0.0", "model_providers": [provider]},
+    )
+    assert preserved.status_code == 200
+    assert preserved.json()["providers_api_key_configured"] == {"deepseek": True}
+
+    # Clearing drops the stored secret.
+    cleared = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "model_providers": [provider],
+            "clear_provider_api_keys": ["deepseek"],
+        },
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["providers_api_key_configured"] == {"deepseek": False}
+
+    # Bindings must reference a defined provider and one of its listed models.
+    dangling_provider = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "agent_model_bindings": {
+                "audit": {"provider_id": "missing", "model_id": "m"}
+            },
+        },
+    )
+    assert dangling_provider.status_code == 422
+    dangling_model = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "model_providers": [provider],
+            "agent_model_bindings": {
+                "audit": {"provider_id": "deepseek", "model_id": "nope"}
+            },
+        },
+    )
+    assert dangling_model.status_code == 422
+
+    # A disabled provider still validates, but its key state stays reported.
+    disabled = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={
+            "schema_version": "1.0.0",
+            "model_providers": [{**provider, "enabled": False}],
+            "provider_api_keys": {"deepseek": "sk-provider-secret"},
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["providers_api_key_configured"] == {"deepseek": True}
 
 
 def test_product_settings_tier_models_and_api_key_isolation(client: TestClient) -> None:

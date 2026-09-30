@@ -142,15 +142,14 @@ class ReviewJobExecutor:
         finding_id = _finding_id(job)
         if finding_id is None:
             return _failed(job["id"], "review.finding_id_required", FailureKind.VALIDATION)
-        # max_model_tokens 0 means uncapped; compute-resource budgets no longer gate jobs.
-        max_tokens = job["resource_budget"]["max_model_tokens"] or None
+        # Output ceilings live in the per-model provider config; resource
+        # budgets are inert bookkeeping (ADR-025) and never gate a review call.
         if self._reviewer is None:
             return _failed(job["id"], "review.model_unconfigured", FailureKind.DEPENDENCY)
         try:
             outcome = await self._reviewer.review(
                 finding_id,
                 attempt_key=f"{job['id']}:attempt:{job['attempt']}",
-                max_output_tokens=max_tokens,
             )
         except EntityNotFound:
             return _failed(job["id"], "review.finding_not_found", FailureKind.VALIDATION)

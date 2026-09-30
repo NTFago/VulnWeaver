@@ -234,9 +234,9 @@ class SemanticAuditor:
     async def audit(self, job: Job) -> SemanticAuditOutcome:
         task_id = job["task_id"]
         run_id = _stable_id("agent-run", "semantic-audit", job["id"], str(job["attempt"]))
-        # A per-call output cap for the single-shot path, not a loop budget:
-        # the job's 0 means "no limit", and the audit loop is not token-gated.
-        max_tokens = job["resource_budget"]["max_model_tokens"] or None
+        # The audit loop and the single-shot path carry no token quota: output
+        # ceilings live in the per-model provider config (ADR-025 keeps resource
+        # budgets inert bookkeeping).
         entries, source_version_id, binary_version_id = await self._auditable_functions(task_id)
         if not entries:
             # Nothing indexed to audit: a successful no-op baseline keeps the
@@ -254,7 +254,7 @@ class SemanticAuditor:
             if agent_outcome is not None:
                 return agent_outcome
         return await self._single_shot_audit(
-            job, run_id, entries, source_version_id, binary_version_id, max_tokens
+            job, run_id, entries, source_version_id, binary_version_id
         )
 
     async def _run_agent(
@@ -342,7 +342,6 @@ class SemanticAuditor:
         entries: list[tuple[str, PairFunction]],
         source_version_id: str,
         binary_version_id: str,
-        max_tokens: int | None,
     ) -> SemanticAuditOutcome:
         """Fixed fallback used when no agent is configured or the agent degrades."""
 
@@ -355,7 +354,6 @@ class SemanticAuditor:
             messages=_messages(observations),
             output_contract="SemanticAuditReport",
             input_refs=tuple(sorted({job["input_refs"][0]})),
-            max_output_tokens=max_tokens,
         )
         run = _run_from_response(response, run_id, task_id, job)
         report = response.output

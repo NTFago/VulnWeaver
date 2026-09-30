@@ -138,7 +138,11 @@ class ReversePlanningAgent:
         # deadline is the backstop instead -- the same "no quotas, a timeout
         # still bounds it" arrangement ADR-025 uses for the sandbox.
         self._budget = budget or AgentLoopBudget(
-            max_plan_rejections=1, deadline_seconds=900.0
+            # Two hours, matching the long-horizon audit posture: the planner
+            # investigates real binaries and a 15-minute deadline cut it off
+            # mid-investigation.
+            max_plan_rejections=1,
+            deadline_seconds=7_200.0,
         )
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic: Callable[[], float] | None = monotonic

@@ -8,9 +8,10 @@ from collections.abc import Iterable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 
+import httpx
 from fastapi import (
     Depends,
     FastAPI,
@@ -87,6 +88,8 @@ from vulnweaver_api.schemas import (
     InstallationStatusResponse,
     LoginRequest,
     MeResponse,
+    ModelProbeBody,
+    ModelProbeResponse,
     PasswordChangeRequest,
     ProductSettingsBody,
     ProductSettingsResponse,
@@ -305,6 +308,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "clear_review_model_api_key",
                 "tier_api_keys",
                 "clear_tier_api_keys",
+                "provider_api_keys",
+                "clear_provider_api_keys",
             },
         )
         validate_contract("ProductSettings", body.model_dump(mode="json"))
@@ -356,6 +361,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             tier["model_name"] = tier_model
         values["review_model_base_url"] = base_url
         values["review_model_name"] = model_name
+        _validate_model_providers(body)
         async with database.transaction() as repositories:
             previous = await repositories.product_settings.get()
             stored_key = previous.get("review_model_api_key")
@@ -379,8 +385,66 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     tier_keys[tier_name] = supplied
             if tier_keys:
                 values["tier_api_keys"] = tier_keys
+            provider_keys = _merge_provider_api_keys(body, previous)
+            if provider_keys:
+                values["provider_api_keys"] = provider_keys
             await repositories.product_settings.replace(values)
         return _product_settings_response(values)
+
+    @app.post("/api/settings/model-probe", response_model=ModelProbeResponse)
+    async def probe_provider_models(
+        body: ModelProbeBody,
+        _: Annotated[str, Depends(require_write)],
+    ) -> ModelProbeResponse:
+        """Fetch a provider's live model list for the settings "smart config"."""
+
+        base_url = body.base_url.strip().rstrip("/")
+        stored_providers: dict[str, object] = {}
+        stored_keys: dict[str, object] = {}
+        async with database.transaction() as repositories:
+            stored = await repositories.product_settings.get()
+            raw_providers = stored.get("model_providers")
+            if isinstance(raw_providers, list):
+                for entry in cast(list[object], raw_providers):
+                    if isinstance(entry, dict):
+                        entry_fields = cast(dict[str, object], entry)
+                        entry_id = entry_fields.get("id")
+                        if isinstance(entry_id, str):
+                            stored_providers[entry_id] = entry_fields
+            raw_keys = stored.get("provider_api_keys")
+            if isinstance(raw_keys, dict):
+                stored_keys = cast(dict[str, object], raw_keys)
+        provider_entry = (
+            stored_providers.get(body.provider_id or "")
+            if body.provider_id
+            else None
+        )
+        if isinstance(provider_entry, dict) and not base_url:
+            candidate = cast(dict[str, object], provider_entry).get("base_url")
+            if isinstance(candidate, str):
+                base_url = candidate.strip().rstrip("/")
+        if not base_url:
+            raise ApiInputError(
+                "incomplete_model_configuration",
+                "a base URL is required to probe models",
+                "base_url",
+            )
+        if not base_url.startswith(("https://", "http://")):
+            raise ApiInputError(
+                "invalid_model_endpoint",
+                "model endpoint must use HTTP or HTTPS",
+                "base_url",
+            )
+        api_key = body.api_key
+        if api_key is None and body.provider_id:
+            stored_value = stored_keys.get(body.provider_id)
+            if isinstance(stored_value, str):
+                api_key = stored_value
+        try:
+            models = await _probe_model_list(base_url, body.api_format, api_key)
+        except ModelProbeError as error:
+            return ModelProbeResponse(models=[], error=error.message)
+        return ModelProbeResponse(models=models)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def live() -> HealthResponse:
@@ -1215,7 +1279,7 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
     public_values = {
         key: value
         for key, value in values.items()
-        if key not in {"review_model_api_key", "tier_api_keys"}
+        if key not in {"review_model_api_key", "tier_api_keys", "provider_api_keys"}
     }
     parsed = ProductSettingsBody.model_validate({"schema_version": "1.0.0", **public_values})
     stored_tier_keys = values.get("tier_api_keys")
@@ -1226,6 +1290,15 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
     )
     configured: dict[str, bool] = {
         tier: tier in stored_key_map for tier in _TIER_NAMES
+    }
+    stored_provider_keys = values.get("provider_api_keys")
+    provider_key_map: dict[str, object] = (
+        {str(k): v for k, v in cast(dict[str, object], stored_provider_keys).items()}
+        if isinstance(stored_provider_keys, dict)
+        else {}
+    )
+    providers_configured: dict[str, bool] = {
+        provider.id: provider.id in provider_key_map for provider in parsed.model_providers
     }
     return ProductSettingsResponse(
         review_model_base_url=parsed.review_model_base_url,
@@ -1245,7 +1318,155 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         angr_enabled=parsed.angr_enabled,
         model_tiers=parsed.model_tiers,
         tier_api_keys_configured=configured,
+        model_providers=parsed.model_providers,
+        providers_api_key_configured=providers_configured,
+        agent_model_bindings=parsed.agent_model_bindings,
     )
+
+
+class ModelProbeError(Exception):
+    """A safe probe failure message; never includes the API key or raw body."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
+def _validate_model_providers(body: ProductSettingsBody) -> None:
+    """Structural validation for the provider registry before it is stored."""
+
+    seen_ids: set[str] = set()
+    for provider in body.model_providers:
+        if provider.id in seen_ids:
+            raise ApiInputError(
+                "duplicate_provider_id",
+                f"provider id {provider.id!r} is defined twice",
+                f"model_providers.{provider.id}.id",
+            )
+        seen_ids.add(provider.id)
+        if provider.enabled:
+            base_url = provider.base_url.strip().rstrip("/")
+            if not base_url:
+                raise ApiInputError(
+                    "incomplete_model_configuration",
+                    "an enabled provider requires a base URL",
+                    f"model_providers.{provider.id}.base_url",
+                )
+            if not base_url.startswith(("https://", "http://")):
+                raise ApiInputError(
+                    "invalid_model_endpoint",
+                    "model endpoint must use HTTP or HTTPS",
+                    f"model_providers.{provider.id}.base_url",
+                )
+        seen_models: set[str] = set()
+        for model in provider.models:
+            if model.model_id in seen_models:
+                raise ApiInputError(
+                    "duplicate_model_id",
+                    f"model {model.model_id!r} is listed twice in provider {provider.id!r}",
+                    f"model_providers.{provider.id}.models.{model.model_id}",
+                )
+            seen_models.add(model.model_id)
+            if model.thinking_mode == "custom" and model.thinking_budget_tokens < 1024:
+                raise ApiInputError(
+                    "invalid_thinking_budget",
+                    "custom thinking mode requires a budget of at least 1024 tokens",
+                    f"model_providers.{provider.id}.models.{model.model_id}"
+                    ".thinking_budget_tokens",
+                )
+    bindings = body.agent_model_bindings
+    for role in _TIER_NAMES:
+        binding = getattr(bindings, role)
+        if binding is None:
+            continue
+        provider = next((p for p in body.model_providers if p.id == binding.provider_id), None)
+        if provider is None:
+            raise ApiInputError(
+                "unknown_binding_provider",
+                f"{role} binding references provider {binding.provider_id!r} which is not defined",
+                f"agent_model_bindings.{role}.provider_id",
+            )
+        if not any(m.model_id == binding.model_id for m in provider.models):
+            raise ApiInputError(
+                "unknown_binding_model",
+                f"{role} binding references model {binding.model_id!r} which provider "
+                f"{provider.id!r} does not list",
+                f"agent_model_bindings.{role}.model_id",
+            )
+
+
+def _merge_provider_api_keys(
+    body: ProductSettingsBody, previous: dict[str, object]
+) -> dict[str, object]:
+    """Merge stored provider keys with this request; prune keys of removed providers."""
+
+    if body.clear_provider_api_keys and set(body.clear_provider_api_keys).intersection(
+        body.provider_api_keys
+    ):
+        raise ApiInputError(
+            "conflicting_secret_update",
+            "API key cannot be replaced and cleared in the same request",
+            "clear_provider_api_keys",
+        )
+    previous_keys = previous.get("provider_api_keys")
+    previous_map: dict[str, object] = (
+        {str(k): v for k, v in cast(dict[str, object], previous_keys).items()}
+        if isinstance(previous_keys, dict)
+        else {}
+    )
+    provider_ids = {provider.id for provider in body.model_providers}
+    merged: dict[str, object] = {
+        key: value
+        for key, value in previous_map.items()
+        if key in provider_ids and key not in body.clear_provider_api_keys
+    }
+    for provider_id, key_value in body.provider_api_keys.items():
+        if provider_id in provider_ids and key_value:
+            merged[provider_id] = key_value
+    return merged
+
+
+async def _probe_model_list(
+    base_url: str, api_format: str, api_key: str | None
+) -> list[str]:
+    """Fetch a provider's model list; bounded, credential-free errors only."""
+
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ModelProbeError("model endpoint must use HTTP or HTTPS")
+    url = base_url if base_url.endswith("/models") else f"{base_url}/models"
+    headers = {"Accept": "application/json"}
+    if api_format == "anthropic-messages":
+        headers["anthropic-version"] = "2023-06-01"
+        if api_key:
+            headers["x-api-key"] = api_key
+    elif api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+            response = await client.get(url, headers=headers)
+    except (httpx.TimeoutException, httpx.TransportError):
+        raise ModelProbeError("could not reach the provider endpoint") from None
+    if response.status_code != 200:
+        raise ModelProbeError(f"provider answered with status {response.status_code}")
+    try:
+        payload: object = response.json()
+    except ValueError:
+        raise ModelProbeError("provider returned non-JSON content") from None
+    if not isinstance(payload, dict):
+        raise ModelProbeError("provider returned an unexpected model list shape")
+    payload_object = cast(dict[str, object], payload)
+    data = payload_object.get("data")
+    if not isinstance(data, list):
+        raise ModelProbeError("provider returned an unexpected model list shape")
+    models: list[str] = []
+    for item in cast(list[object], data)[:200]:
+        if isinstance(item, dict):
+            item_fields = cast(dict[str, object], item)
+            item_id = item_fields.get("id")
+            if isinstance(item_id, str) and item_id:
+                models.append(item_id)
+    return sorted(models)
 
 
 def _count_values(values: Iterable[str]) -> dict[str, int]:

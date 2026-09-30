@@ -1972,6 +1972,7 @@ source = { editable = "apps/api" }
 dependencies = [
     { name = "argon2-cffi" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "vulnweaver-artifact-store" },
     { name = "vulnweaver-contracts" },
@@ -1987,6 +1988,7 @@ dependencies = [
 requires-dist = [
     { name = "argon2-cffi", specifier = ">=25,<26" },
     { name = "fastapi", specifier = ">=0.116,<1" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
     { name = "vulnweaver-artifact-store", editable = "packages/artifact-store" },
     { name = "vulnweaver-contracts", editable = "packages/contracts" },

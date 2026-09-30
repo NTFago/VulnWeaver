@@ -80,6 +80,48 @@ export interface ProductSettings {
   angr_enabled: boolean | null;
   model_tiers: Record<"planning" | "audit" | "review" | "report", TierModelConfig>;
   tier_api_keys_configured: Record<string, boolean>;
+  model_providers: ModelProviderEntry[];
+  providers_api_key_configured: Record<string, boolean>;
+  agent_model_bindings: AgentModelBindings;
+}
+
+export interface ProviderModelEntry {
+  model_id: string;
+  display_name?: string;
+  context_window_tokens?: number;
+  max_output_tokens?: number;
+  thinking_mode?: "off" | "default" | "custom";
+  thinking_budget_tokens?: number;
+}
+
+export interface ModelProviderEntry {
+  id: string;
+  name: string;
+  base_url: string;
+  api_format: "openai-chat" | "anthropic-messages" | "openai-responses";
+  enabled: boolean;
+  timeout_seconds?: number;
+  max_attempts?: number;
+  models: ProviderModelEntry[];
+}
+
+export interface AgentModelBinding {
+  provider_id: string;
+  model_id: string;
+  fallback_provider_id?: string | null;
+  fallback_model_id?: string | null;
+}
+
+export interface AgentModelBindings {
+  planning: AgentModelBinding | null;
+  audit: AgentModelBinding | null;
+  review: AgentModelBinding | null;
+  report: AgentModelBinding | null;
+}
+
+export interface ModelProbeResult {
+  models: string[];
+  error: string | null;
 }
 
 export interface TierModelConfig {
@@ -180,15 +222,26 @@ export const api = {
     }),
   settings: () => request<ProductSettings>("/api/settings"),
   updateSettings: (
-    settings: Omit<ProductSettings, "schema_version" | "api_key_configured" | "tier_api_keys_configured"> & {
+    settings: Omit<ProductSettings, "schema_version" | "api_key_configured" | "tier_api_keys_configured" | "providers_api_key_configured"> & {
       review_model_api_key: string | null; clear_review_model_api_key: boolean;
       tier_api_keys?: Record<string, string>; clear_tier_api_keys?: string[];
+      provider_api_keys?: Record<string, string>; clear_provider_api_keys?: string[];
     },
   ) =>
     request<ProductSettings>("/api/settings", {
       method: "PUT",
       headers: writeHeaders(),
       body: JSON.stringify({ schema_version: schemaVersion, ...settings }),
+    }),
+  probeProviderModels: (payload: {
+    provider_id?: string; base_url?: string;
+    api_format: "openai-chat" | "anthropic-messages" | "openai-responses";
+    api_key?: string;
+  }) =>
+    request<ModelProbeResult>("/api/settings/model-probe", {
+      method: "POST",
+      headers: writeHeaders(true),
+      body: JSON.stringify(payload),
     }),
   projects: () => request<Project[]>("/api/projects"),
   createProject: (payload: Omit<CreateProjectRequest, "schema_version">) =>
