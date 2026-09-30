@@ -51,6 +51,7 @@ from vulnweaver_model_gateway import (
     ModelTier,
     ThinkingConfig,
 )
+from vulnweaver_model_gateway.registry import ModelAccessConfig
 from vulnweaver_orchestrator import (
     AgentLoopBudget,
     CodeAuditAgent,
@@ -447,30 +448,40 @@ def _model_executors(
     audit_deadline_seconds: int | None = None,
     fuzz_dispatcher: object | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
-    """Build one gateway with an independent endpoint per configured tier.
+    """Build one gateway with an independent route per bound agent role.
 
-    Resolution per tier: ``model_tiers.<tier>`` (full protocol/thinking/context
-    support), then the legacy review fields (which historically served REVIEW,
-    AUDIT and PLANNING). Tiers without any configuration get no route; calls on
-    them fail structurally instead of silently using another tier's model.
+    Resolution per role: the provider registry (``model_providers`` +
+    ``agent_model_bindings``, one provider/model pair per agent with an
+    optional fallback), then the legacy ``model_tiers``, then the legacy review
+    fields (which historically served REVIEW, AUDIT and PLANNING). Roles
+    without any configuration get no route; calls on them fail structurally
+    instead of silently using another role's model.
     """
 
-    tier_settings = product_settings.get("model_tiers")
-    tiers: dict[str, object] = (
-        dict(cast(Mapping[str, object], tier_settings))
-        if isinstance(tier_settings, dict)
+    registry_keys_raw = product_settings.get("provider_api_keys")
+    registry_keys: dict[str, str] = (
+        {str(k): str(v) for k, v in cast(Mapping[str, object], registry_keys_raw).items()}
+        if isinstance(registry_keys_raw, dict)
         else {}
     )
-    tier_keys = product_settings.get("tier_api_keys")
-    api_keys: dict[str, object] = (
-        dict(cast(Mapping[str, object], tier_keys)) if isinstance(tier_keys, dict) else {}
-    )
-
-    routes: dict[ModelTier | str, ModelRoute] = {}
-    for tier in ModelTier:
-        endpoint = _tier_endpoint(tier, tiers, api_keys, product_settings)
-        if endpoint is not None:
-            routes[tier] = ModelRoute(primary=endpoint)
+    default_timeout = _setting_float(product_settings, "review_model_timeout_seconds", 60)
+    default_attempts = _setting_int(product_settings, "review_model_max_attempts", 2)
+    routes: dict[ModelTier | str, ModelRoute] | None = None
+    try:
+        registry = ModelAccessConfig.from_settings(
+            product_settings,
+            registry_keys,
+            default_timeout_seconds=default_timeout,
+            default_max_attempts=default_attempts,
+        )
+        if registry.has_bindings():
+            routes = dict(registry.resolve_routes())
+    except (ValueError, RuntimeError) as error:
+        # The registry is the primary model access configuration; a malformed
+        # registry must never silently degrade into the legacy fallback.
+        raise RuntimeError(f"model provider registry is invalid: {error}") from error
+    if routes is None:
+        routes = _legacy_tier_routes(product_settings)
     if not routes:
         return ReviewJobExecutor(None), None, None
     gateway = ModelGateway(
@@ -520,6 +531,29 @@ def _model_executors(
         SemanticAuditJobExecutor(database, auditor),
         gateway,
     )
+
+
+def _legacy_tier_routes(
+    product_settings: dict[str, object],
+) -> dict[ModelTier | str, ModelRoute]:
+    """Pre-registry configuration: per-tier endpoints, then review-field fallback."""
+
+    tier_settings = product_settings.get("model_tiers")
+    tiers: dict[str, object] = (
+        dict(cast(Mapping[str, object], tier_settings))
+        if isinstance(tier_settings, dict)
+        else {}
+    )
+    tier_keys = product_settings.get("tier_api_keys")
+    api_keys: dict[str, object] = (
+        dict(cast(Mapping[str, object], tier_keys)) if isinstance(tier_keys, dict) else {}
+    )
+    routes: dict[ModelTier | str, ModelRoute] = {}
+    for tier in ModelTier:
+        endpoint = _tier_endpoint(tier, tiers, api_keys, product_settings)
+        if endpoint is not None:
+            routes[tier] = ModelRoute(primary=endpoint)
+    return routes
 
 
 def _tier_endpoint(

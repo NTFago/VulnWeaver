@@ -66,6 +66,8 @@ def test_model_hook_requests_bounded_audit_contract() -> None:
         assert gateway.arguments["tier"] is ModelTier.AUDIT
         assert gateway.arguments["output_contract"] == "ReadablePseudocodeReport"
         assert gateway.arguments["input_refs"] == ("artifact-version:input",)
-        assert gateway.arguments["max_output_tokens"] == 321
+        # Output ceilings live in the per-model provider config; the inert
+        # resource budget is never forwarded to the model call (ADR-025).
+        assert "max_output_tokens" not in gateway.arguments
 
     asyncio.run(scenario())

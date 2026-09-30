@@ -43,7 +43,6 @@ class HarnessGenerator:
                 {"role": "user", "content": str(context)},
             ],
             output_contract="HarnessSource",
-            max_output_tokens=8192,
         )
         if response.failure is not None or response.output is None:
             return None

@@ -120,7 +120,7 @@ def test_review_scheduler_is_idempotent_and_inherits_task_model_budget(
     asyncio.run(scenario())
 
 
-def test_review_executor_enforces_budget_and_attempt_identity() -> None:
+def test_review_executor_keeps_attempt_identity_and_ignores_token_budget() -> None:
     async def scenario() -> None:
         reviewer = FakeReviewer()
         value = job("job:review", task_id="task:test", kind=JobKind.REVIEW)
@@ -131,12 +131,12 @@ def test_review_executor_enforces_budget_and_attempt_identity() -> None:
         assert result["evidence_ids"] == ["evidence:review-test"]
         assert reviewer.finding_id == "finding:test"
         assert reviewer.attempt_key == "job:review:attempt:2"
-        assert reviewer.max_output_tokens == 1000
 
-        # A zero model budget now means "no output cap" instead of a policy failure.
-        value["resource_budget"]["max_model_tokens"] = 0
-        uncapped = await ReviewJobExecutor(reviewer).execute(value, asyncio.Event())
-        assert uncapped["status"] is JobStatus.SUCCEEDED
+        # Output ceilings live in the per-model provider config: the executor
+        # never forwards the inert resource budget (ADR-025) to the model call.
+        assert reviewer.max_output_tokens is None
+        value["resource_budget"]["max_model_tokens"] = 1000
+        await ReviewJobExecutor(reviewer).execute(value, asyncio.Event())
         assert reviewer.max_output_tokens is None
 
     asyncio.run(scenario())
