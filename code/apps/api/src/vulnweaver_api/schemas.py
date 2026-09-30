@@ -73,11 +73,13 @@ class AgentLoopBudgetsModel(StrictModel):
     """Wall-clock bounds for the two agent loops, in seconds.
 
     Zero means "keep the deployment default": the resolver reads a non-positive
-    value as unset, exactly as it does for every other budget here.
+    value as unset, exactly as it does for every other budget here. The cap is
+    one week — long-horizon audits on real-world samples are expected to run
+    for hours, and the deadline is a backstop, not a productivity knob.
     """
 
-    audit_deadline_seconds: int = Field(default=0, ge=0, le=86_400)
-    reverse_planning_deadline_seconds: int = Field(default=0, ge=0, le=86_400)
+    audit_deadline_seconds: int = Field(default=0, ge=0, le=604_800)
+    reverse_planning_deadline_seconds: int = Field(default=0, ge=0, le=604_800)
 
 
 class ToolImageDigestsModel(StrictModel):
@@ -98,8 +100,64 @@ class TierModelConfigModel(StrictModel):
     context_window_tokens: int = Field(default=0, ge=0, le=100_000_000)
     thinking_mode: ThinkingMode = "off"
     thinking_budget_tokens: int = Field(default=0, ge=0, le=1_000_000)
-    timeout_seconds: float = Field(default=0, ge=0, le=600)
+    timeout_seconds: float = Field(default=0, ge=0, le=3_600)
     max_attempts: int = Field(default=0, ge=0, le=8)
+
+
+class ProviderModelEntryModel(StrictModel):
+    """One model in a provider's list; 0 limits mean "provider default"."""
+
+    model_id: str = Field(min_length=1, max_length=256)
+    display_name: str = Field(default="", max_length=256)
+    context_window_tokens: int = Field(default=0, ge=0, le=100_000_000)
+    max_output_tokens: int = Field(default=0, ge=0, le=10_000_000)
+    thinking_mode: ThinkingMode = "off"
+    thinking_budget_tokens: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class ModelProviderEntryModel(StrictModel):
+    """One provider: connection fields, enable toggle and its model list."""
+
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    name: str = Field(min_length=1, max_length=128)
+    base_url: str = Field(default="", max_length=2048)
+    api_format: Literal["openai-chat", "anthropic-messages", "openai-responses"] = "openai-chat"
+    enabled: bool = True
+    timeout_seconds: float = Field(default=0, ge=0, le=3_600)
+    max_attempts: int = Field(default=0, ge=0, le=8)
+    models: list[ProviderModelEntryModel] = Field(default_factory=list[ProviderModelEntryModel])
+
+
+class AgentModelBindingModel(StrictModel):
+    provider_id: str = Field(min_length=1, max_length=64)
+    model_id: str = Field(min_length=1, max_length=256)
+    fallback_provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    fallback_model_id: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class AgentModelBindingsModel(StrictModel):
+    planning: AgentModelBindingModel | None = None
+    audit: AgentModelBindingModel | None = None
+    review: AgentModelBindingModel | None = None
+    report: AgentModelBindingModel | None = None
+
+
+class ModelProbeBody(StrictModel):
+    """Probe a provider's live model list ("smart config").
+
+    ``provider_id`` selects a stored provider for base URL / API key defaults;
+    explicit fields win. The API key is write-only and never echoed back.
+    """
+
+    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
+    base_url: str = Field(default="", max_length=2048)
+    api_format: Literal["openai-chat", "anthropic-messages", "openai-responses"] = "openai-chat"
+    api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
+class ModelProbeResponse(StrictModel):
+    models: list[str]
+    error: str | None = None
 
 
 class TierApiKeysModel(StrictModel):
@@ -122,7 +180,7 @@ class ProductSettingsBody(StrictModel):
     review_model_name: str = Field(default="", max_length=256)
     # These bounds mirror the model gateway's own validation. Accepting a wider range stores a
     # value the worker rejects when it builds its gateway, which leaves every job unprocessed.
-    review_model_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    review_model_timeout_seconds: float = Field(default=60, ge=1, le=3_600)
     review_model_max_attempts: int = Field(default=2, ge=1, le=8)
     review_model_repair_attempts: int = Field(default=1, ge=0, le=3)
     review_model_min_interval_seconds: float = Field(default=0, ge=0, le=60)
@@ -140,6 +198,16 @@ class ProductSettingsBody(StrictModel):
     model_tiers: ModelTiersModel = Field(default_factory=ModelTiersModel)
     tier_api_keys: TierApiKeysModel = Field(default_factory=TierApiKeysModel)
     clear_tier_api_keys: list[str] = Field(default_factory=list)
+    # Provider registry: the primary model access model (legacy review fields and
+    # model_tiers stay accepted as fallbacks for deployments not yet migrated).
+    model_providers: list[ModelProviderEntryModel] = Field(
+        default_factory=list[ModelProviderEntryModel]
+    )
+    provider_api_keys: dict[str, str] = Field(default_factory=dict)
+    clear_provider_api_keys: list[str] = Field(default_factory=list)
+    agent_model_bindings: AgentModelBindingsModel = Field(
+        default_factory=AgentModelBindingsModel
+    )
 
 
 class ProductSettingsResponse(StrictModel):
@@ -161,6 +229,9 @@ class ProductSettingsResponse(StrictModel):
     angr_enabled: bool | None
     model_tiers: ModelTiersModel
     tier_api_keys_configured: dict[str, bool]
+    model_providers: list[ModelProviderEntryModel]
+    providers_api_key_configured: dict[str, bool]
+    agent_model_bindings: AgentModelBindingsModel
 
 
 class PasswordChangeRequest(StrictModel):
