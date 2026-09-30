@@ -94,6 +94,7 @@ class EvidenceType(StrEnum):
     DATAFLOW_PATH = 'dataflow_path'
     CRASH_RECORD = 'crash_record'
     REPRODUCTION_RESULT = 'reproduction_result'
+    POC_VERIFICATION_RESULT = 'poc_verification_result'
     EXPLOIT_RECORD = 'exploit_record'
     REVIEW_CONCLUSION = 'review_conclusion'
     HUMAN_CONFIRMATION = 'human_confirmation'

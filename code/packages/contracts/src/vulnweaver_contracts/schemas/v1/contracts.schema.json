@@ -50,7 +50,7 @@
     },
     "EvidenceType": {
       "type": "string",
-      "enum": ["model_explanation", "tool_output", "code_snippet", "dataflow_path", "crash_record", "reproduction_result", "exploit_record", "review_conclusion", "human_confirmation"]
+      "enum": ["model_explanation", "tool_output", "code_snippet", "dataflow_path", "crash_record", "reproduction_result", "poc_verification_result", "exploit_record", "review_conclusion", "human_confirmation"]
     },
     "EvidenceStrength": {
       "type": "string",

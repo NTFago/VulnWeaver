@@ -73,6 +73,14 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
     repeats in the matched environment and that its recorded input drives it; it
     does not prove a source-to-sink path or a reachable authentication bypass, so
     injection and business-logic findings stay unconfirmable on a crash alone.
+
+    ``POC_VERIFICATION_RESULT`` closes that gap for sandbox-run PoC scripts: the
+    markers were captured by the sandbox harness from an actual execution against
+    the sample, so ``sink_reached`` with a concrete source/sink pair proves the
+    source-to-sink path, an observed protection list proves protection analysis
+    happened against the live sample, and a recorded behavior difference proves a
+    reachable path with divergent outcomes. Model explanations never enter this
+    branch, so the "model cannot self-confirm" rule is preserved.
     """
 
     derived: set[str] = set()
@@ -92,7 +100,37 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
                 derived.add("controllable_input")
         elif fact.evidence_type is EvidenceType.REPRODUCTION_RESULT and reproducible:
             derived.add("minimal_reproduction")
+        elif fact.evidence_type is EvidenceType.POC_VERIFICATION_RESULT and reproducible:
+            derived.update(_derived_poc_facts(fact, fact_context.category))
     return frozenset(derived)
+
+
+def _derived_poc_facts(
+    fact: ReviewEvidenceFact, category: FindingCategory
+) -> set[str]:
+    derived = {"minimal_reproduction"}
+    markers = fact.replay_facts.get("markers")
+    if not isinstance(markers, dict):
+        return derived
+    if category is FindingCategory.INJECTION:
+        source = markers.get("source")
+        sink = markers.get("sink")
+        if (
+            markers.get("sink_reached") is True
+            and isinstance(source, str)
+            and source
+            and isinstance(sink, str)
+            and sink
+        ):
+            derived.add("source_to_sink_path")
+        protections = markers.get("protections_observed")
+        if isinstance(protections, list) and protections:
+            derived.add("protection_analysis")
+    elif category is FindingCategory.AUTH_OR_BUSINESS_LOGIC:
+        difference = markers.get("behavior_difference")
+        if isinstance(difference, str) and difference:
+            derived.update({"behavior_difference", "reachable_path"})
+    return derived
 
 
 class FindingReviewGate:

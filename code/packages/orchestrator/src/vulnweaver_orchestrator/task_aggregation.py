@@ -75,6 +75,14 @@ class FuzzDispatchScheduler(Protocol):
     ) -> str | None: ...
 
 
+class PocDispatchScheduler(Protocol):
+    """Implemented by the proof package; dispatches candidate-stage PoC Jobs."""
+
+    async def schedule_in_transaction(
+        self, repositories: Repositories, finding_id: str
+    ) -> str | None: ...
+
+
 class ReportDispatchScheduler(Protocol):
     async def schedule_default(
         self,
@@ -92,12 +100,14 @@ class TaskAggregateSettlementHook:
         review_scheduler: ReviewJobScheduler | None = None,
         audit_scheduler: SemanticAuditScheduler | None = None,
         exploit_scheduler: ExploitDispatchScheduler | None = None,
+        poc_scheduler: PocDispatchScheduler | None = None,
         fuzz_scheduler: FuzzDispatchScheduler | None = None,
         report_scheduler: ReportDispatchScheduler | None = None,
     ) -> None:
         self._review_scheduler = review_scheduler
         self._audit_scheduler = audit_scheduler
         self._exploit_scheduler = exploit_scheduler
+        self._poc_scheduler = poc_scheduler
         self._fuzz_scheduler = fuzz_scheduler
         self._report_scheduler = report_scheduler
 
@@ -141,6 +151,24 @@ class TaskAggregateSettlementHook:
                 [finding["id"] for finding in findings],
             )
             jobs = await repositories.jobs.list_for_task(task["id"])
+        if (
+            self._poc_scheduler is not None
+            and job["kind"] in {JobKind.SOURCE_ANALYSIS, JobKind.SEMANTIC_AUDIT, JobKind.REVIEW}
+            and not analysis_pending
+        ):
+            # Candidate-stage PoC verification: as soon as a finding exists as a
+            # candidate, one bounded sandbox reproduction attempt is dispatched so
+            # dynamic evidence can reach the confirmation gate instead of waiting
+            # for the confirmed-only exploit path. The scheduler re-checks the
+            # candidate status and project opt-in and is idempotent per finding.
+            project = await repositories.projects.get(task["project_id"])
+            if project["exploit_validation_enabled"]:
+                for finding in findings:
+                    if finding["status"] is FindingStatus.CANDIDATE:
+                        await self._poc_scheduler.schedule_in_transaction(
+                            repositories, finding["id"]
+                        )
+                jobs = await repositories.jobs.list_for_task(task["id"])
         review_pending = any(
             item["kind"] is JobKind.REVIEW and item["status"] in _ACTIVE for item in jobs
         )

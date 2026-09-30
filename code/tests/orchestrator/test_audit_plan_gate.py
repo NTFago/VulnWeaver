@@ -185,7 +185,7 @@ def test_default_report_is_queued_before_task_completion(
             tool=ToolIdentity(name="vulnweaver-report", version="1.0.0", image_digest=None)
         )
         hook = TaskAggregateSettlementHook(
-            None, cast(Any, NoopAuditScheduler()), None, None, report_scheduler
+            None, cast(Any, NoopAuditScheduler()), None, None, None, report_scheduler
         )
         try:
             async with database.transaction() as repositories:

@@ -77,6 +77,7 @@ from vulnweaver_persistence import Database, DatabaseSettings, Repositories
 from vulnweaver_proof import (
     AutoExploitScheduler,
     ExploitScriptGenerator,
+    PocVerificationScheduler,
     ProofExecutionService,
     ProofJobExecutor,
     SandboxRunnerClient,
@@ -191,6 +192,7 @@ async def _run() -> None:
             database, store, tool_registry, model_gateway, config
         )
         exploit_scheduler = _auto_exploit_scheduler(database, config)
+        poc_scheduler = _poc_scheduler(database, config)
         fuzz_scheduler = _fuzz_scheduler(
             database,
             store,
@@ -267,6 +269,7 @@ async def _run() -> None:
                 review_scheduler,
                 audit_scheduler,
                 exploit_scheduler,
+                poc_scheduler,
                 fuzz_scheduler,
                 report_scheduler,
             ),
@@ -676,7 +679,21 @@ def _proof_executor(
         if model_gateway is not None
         else None
     )
-    return ProofJobExecutor(database, service, script_generator=generator)
+    return ProofJobExecutor(database, service, script_generator=generator, output_store=store)
+
+
+def _poc_scheduler(
+    database: Database, config: ResolvedDeploymentConfig
+) -> PocVerificationScheduler | None:
+    image_digest = (
+        config.digests.proof_tool
+        or os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
+        or os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
+    )
+    if not image_digest:
+        # Candidate-stage PoC verification shares the pinned proof image gate.
+        return None
+    return PocVerificationScheduler(database, image_digest=image_digest)
 
 
 def _auto_exploit_scheduler(
