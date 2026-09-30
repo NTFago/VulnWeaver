@@ -2,18 +2,19 @@
 
 > 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；历史课设阶段的任务明细见 Git 历史、PR 与 `code/docs/progress/`。
 
-更新时间：2026-09-28（Asia/Shanghai，第二轮更新）
+更新时间：2026-09-30（Asia/Shanghai）
 
 ## 当前焦点
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前主线（用户新 goal）：**agent 主导挖掘、降低对工具结果的依赖、长线作战**——T48 项目级调查记忆已落地（ADR-030）。
 
-部署栈已在本分支上**全部重建并运行**（postgres/redis/api/orchestrator/dispatcher/analysis-worker/sandbox-runner/web/binary-tools 全部 Up），模型经 Web 设置接入（DeepSeek），栈内端到端已通过（见验证记录）。
+部署栈已在本分支上**全部重建并运行**（postgres/redis/api/orchestrator/dispatcher/analysis-worker/sandbox-runner/web/binary-tools 全部 Up），模型经 Web 设置接入，栈内端到端已通过（见验证记录）。
 
 ## 进行中
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
+| T52 模型接入重构：供应商注册表（ADR-033） | ZCode / `feat/model-provider-registry` | **完成（待合并）**：网关新增供应商注册表（`model_providers`+`agent_model_bindings`+`provider_api_keys`，每智能体绑定供应商模型并可配备用）、第三种线格式 OpenAI Responses、每模型上下文/最大输出元数据；任务级限制放开（审计 deadline 默认 8h、逆向规划 2h、上限 7 天；`resource_budget.max_model_tokens` 不再透传为输出上限，harness 8192 硬编码删除；单请求超时上限 600→3600s）；API 设置新增供应商校验/密钥合并/模型探测端点；Web 设置页重做为供应商卡片+绑定；旧 `model_tiers`/`review_model_*` 配置保留回退。已重建 api/orchestrator/analysis-worker/web 镜像并重启栈，worker 正常起循环 |
 | T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
 | T50 扫描器诊断证据化（ADR-032） | ZCode / 本分支 | **完成**：diagnostics 只落 TOOL_OUTPUT 证据（selector 补 severity/message），不再直接成为 CANDIDATE Finding；static-leads 改从证据层读线索；成为 Finding 的唯一路径是 agent 亲读代码后重新报告锚定 |
 | T51 动态验证链路端到端打通 | ZCode / 本分支 | **完成**：afl-casr 镜像构建并注册；修复 4 个链路断点（harness-compile schema 条件必填 / entrypoint fuzz 参数必填与 bundle 白名单 / `AFL_NOOPT=0` 静默禁用插桩 / execs 竞态超预算）；`e2e_dynamic_verification.py` 全链全绿：审计→评审→fuzz 投放→harness 生成→AFL 真实执行→结果契约通过 |
@@ -40,6 +41,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 - ADR-025：`resource_budget` 惰性簿记；沙箱不设计算配额。
 - ADR-027：审计循环不设规划轮次上限，墙钟 deadline 兜底。
 - **ADR-028（2026-09-28）**：分层静态脱壳工具链；unipacker 的 Unicorn 模拟与 angr 同属翻译式处理，原生执行边界不变；重工具只进 binary-tools 镜像。
+- **ADR-033（2026-09-30）**：模型接入重构为供应商注册表+每智能体绑定（参考 cc-switch/dsh 的供应商形态）；输出上限归模型配置，任务不再有 token 配额；审计 deadline 默认 8h、可配至 7 天。保持应用内网关库形态（不引入独立网关服务），`ChatTransport` 保留将来换 SDK 实现的口子。
 
 ## 经验教训（仍有效）
 
@@ -53,6 +55,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-09-30 | T52 模型接入重构（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**605 passed / 5 skipped**（skip 仅 Docker 运行时 opt-in）；新增网关注册表 10 用例、Responses 线格式 3 用例、API 供应商设置/密钥合并/绑定校验用例、设置-网关边界用例；pyright **0 errors**；ruff 通过；svelte-check 0 errors、web 13 tests 过、vite build 过；api/orchestrator/analysis-worker/web 镜像重建并重启，worker 正常起循环并完成工具注册探测 |
 | 2026-09-29 | T51 动态验证链路 E2E | opt-in 项目投递教学样本 fuzz-overflow.c：semantic_audit/review/fuzz 全部 succeeded，AFL++ 沙箱真实执行（-E 10000/-V 60），结果通过 FuzzToolSummary/CrashManifest 契约；fuzz 失败诊断能力补齐（sandbox stdout/stderr 尾部进 failure.details，triage reason 进消息） |
 | 2026-09-29 | AFL 教训 | `AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）——compile_env 里 `AFL_NOOPT=0` 使所有 harness 编译静默失去插桩，afl-fuzz 报 No instrumentation detected；`AFL_IGNORE_PROBLEMS=1` 才能跳过容器宿主 core_pattern 管道中止（`AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES` 只是不警告） |
 | 2026-09-28 | T50 诊断证据化（dev 容器，栈内 PG） | orchestrator+binary_analysis+source_analysis **206 passed**；ruff 通过；pyright 0 errors；lineage 测试验证诊断零 Finding 行、线索从证据浮现 |
@@ -68,8 +71,9 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 下一步
 
+1. **T52 收尾（接手入口）**：当前部署的 DeepSeek 仍走 legacy `model_tiers` 回退（功能不变）；在 Web 设置页用"从预设创建→DeepSeek 官方"重建供应商（填 Key、绑定四个智能体）即完成迁移；迁移后用固定样本跑一次真实审计 E2E 验证注册表路径（`scripts/e2e_investigation_memory.py` 可复用）。OpenAI Responses 线格式只有单测覆盖，未对真实 Responses 端点联调。
 2. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。
+3. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。PG/Redis opt-in 环境变量：`VULNWEAVER_TEST_ADMIN_DATABASE_URL=postgresql+psycopg://vulnweaver:vulnweaver_dev_only@postgres:5432/postgres`、`VULNWEAVER_TEST_REDIS_URL=redis://redis:6379/15`。
 4. **长线下一块**：五块拼图+动态验证闭环已全部就位；候选方向：报告与工作台展示"线索→agent 结论"差异呈现、fuzz 崩溃证据经 ADR-027 §4 修订复核的运行时观察。
-4. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；本地仅剩 `main`（worktree `课设-worktree-fe-opts` 已随分支清理移除）；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
-5. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+5. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
+6. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
