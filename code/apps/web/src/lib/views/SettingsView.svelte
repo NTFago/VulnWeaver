@@ -372,7 +372,7 @@
 <section class="page-heading">
   <div>
     <h1>产品设置</h1>
-    <p>配置审计使用的模型与工具。保存后，新执行的任务将使用最新设置。</p>
+    <p>保存后，新任务使用新配置。</p>
   </div>
 </section>
 <div class="settings-layout">
@@ -389,7 +389,7 @@
         <header class="panel-head">
           <div>
             <h2>模型供应商</h2>
-            <p>每个供应商承载一条连接（Base URL、API 格式、API Key）与自己的模型列表；开关关闭的供应商不参与调用。</p>
+            <p>开关关闭的供应商不参与调用。</p>
           </div>
           <button type="button" class="secondary" on:click={() => addProvider()}>＋ 新供应商</button>
         </header>
@@ -404,7 +404,7 @@
         {#if productSettings.model_providers.length === 0}
           <div class="provider-empty">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8zm-9-2.7L18.6 8 12 11.7 5.4 8 12 5.3zM5 9.7l6 3.4v6.2l-6-3.3V9.7zm8 9.6v-6.2l6-3.4v6.3l-6 3.3z"/></svg>
-            <p>还没有供应商。从上方预设一键创建，或点「＋ 新供应商」手动添加。</p>
+            <p>从上方预设一键创建，或手动添加。</p>
           </div>
         {:else}
           <div class="provider-list">
@@ -510,7 +510,7 @@
                       {#if provider.models.length === 0}
                         <div class="model-empty">
                           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 4.2a1.2 1.2 0 110 2.4 1.2 1.2 0 010-2.4zM11 10h2v7h-2v-7z"/></svg>
-                          <p>当前没有配置模型，添加模型后可绑定给智能体使用。</p>
+                          <p>添加模型后才能绑定给智能体。</p>
                         </div>
                       {:else}
                         <ul class="model-list">
@@ -552,7 +552,7 @@
         <header class="panel-head">
           <div>
             <h2>智能体模型绑定</h2>
-            <p>为每个智能体选择一个供应商模型，可另配备用模型；主模型失败且可重试时自动切换备用。未绑定的智能体无法使用模型。</p>
+            <p>主模型失败时自动切换备用模型；未绑定的智能体不调用模型。</p>
           </div>
         </header>
         <div class="binding-list">
@@ -578,7 +578,7 @@
 
       <section class="panel" id="sec-tool-images">
         <header class="panel-head">
-          <div><h2>工具镜像登记</h2><p>固定摘要优先；留空时由 Runner 自动发现端点或本地镜像。</p></div>
+          <div><h2>工具镜像登记</h2><p>固定摘要优先，留空自动发现。</p></div>
         </header>
         <div class="stack-list">
           <label>binary-tools 摘要（Ghidra / 关键逻辑 / 调用路径）<input bind:value={productSettings.tool_image_digests.binary_tools} placeholder="sha256:…（留空自动发现）" /></label>
@@ -597,7 +597,7 @@
         <button type="button" class="secondary adv-toggle" aria-expanded={showAdvancedSettings} on:click={() => showAdvancedSettings = !showAdvancedSettings}>{showAdvancedSettings ? "收起高级设置" : "高级设置：模糊测试与运行时"}</button>
         {#if showAdvancedSettings}
           <section class="panel advanced-settings">
-            <p class="muted">0 表示未设置，沿用环境变量或代码默认值；更改在下一次任务执行时生效。智能体循环没有 token 配额，墙钟超时是唯一兜底。</p>
+            <p class="muted">0 表示沿用默认值；更改在下次任务生效。</p>
             <div class="field-grid cols-4">
               <label>Fuzz 最大执行次数<input bind:value={productSettings.fuzz_budgets.max_executions} type="number" min="0" /></label>
               <label>Fuzz 最长时长（秒）<input bind:value={productSettings.fuzz_budgets.max_duration_seconds} type="number" min="0" max="86400" /></label>
@@ -643,7 +643,7 @@
 
       <label class="check dialog-smart">
         <input type="checkbox" bind:checked={modelDialog.smart} />
-        <span><b>智能配置</b><small>从内置预设目录带入模型 ID 与推荐元数据，保存前可再修改。</small></span>
+        <span><b>智能配置</b><small>从预设带入模型 ID 与推荐参数，可再修改。</small></span>
       </label>
       {#if modelDialog.smart}
         <label class="dialog-field">从预设选择
