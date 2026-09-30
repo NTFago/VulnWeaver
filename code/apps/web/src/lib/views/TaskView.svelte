@@ -352,7 +352,8 @@
   .task-panel-body {
     min-height: 0;
     overflow-y: auto;
-    overscroll-behavior: contain;
+    /* 不设 overscroll-behavior: contain——面板内容不足或滚到边界时，
+       滚轮必须链式传递给页面，否则空面板会吞掉整页滚动。 */
     scrollbar-gutter: stable;
     padding: 16px 4px 4px 0;
   }
