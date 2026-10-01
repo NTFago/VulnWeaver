@@ -168,7 +168,6 @@ class ModelEndpoint:
             return base
         return f"{base}/responses"
 
-
     def model_for(self, tier: ModelTier) -> str:
         model = self.models.get(tier) or self.models.get(tier.value)
         if model is None:
@@ -488,11 +487,7 @@ class ModelGateway:
                     )
                 selected_model = f"{outcome.endpoint}/{outcome.model}"
                 selected_endpoint = outcome.endpoint
-                decisions.extend(
-                    _decision_records(
-                        len(decisions), outcome.decisions, self._clock
-                    )
-                )
+                decisions.extend(_decision_records(len(decisions), outcome.decisions, self._clock))
                 _add_usage(usage, outcome.usage)
                 if outcome.failure is not None:
                     final_error = outcome.failure
@@ -623,9 +618,7 @@ class ModelGateway:
                 None,
             )
         error = (
-            endpoint_errors[-1]
-            if endpoint_errors
-            else ModelTransportError("model request failed")
+            endpoint_errors[-1] if endpoint_errors else ModelTransportError("model request failed")
         )
         return _RequestOutcome(
             None,
@@ -764,8 +757,11 @@ def _fit_context_window(
     The estimate is deliberately coarse (4 chars per token). When the estimate
     exceeds the window, the largest message contents are shortened first — each
     keeps its head and tail around a trim marker so anchors at either end of an
-    excerpt survive. Every message is preserved; nothing is dropped entirely.
-    Decision records describe the trim so AgentRun trajectories stay truthful.
+    excerpt survive. System messages are pinned and never trimmed: they carry
+    the instructions and untrusted-data caveats every other safeguard relies
+    on, and a window emergency is never a reason to strip them. Every message
+    is preserved; nothing is dropped entirely. Decision records describe the
+    trim so AgentRun trajectories stay truthful.
     """
 
     messages_out = [
@@ -774,11 +770,7 @@ def _fit_context_window(
     window = endpoint.context_window_tokens
     if window <= 0:
         return messages_out, ()
-    reserve = (
-        max_output_tokens
-        or endpoint.max_output_tokens
-        or window // _OUTPUT_RESERVE_FRACTION
-    )
+    reserve = max_output_tokens or endpoint.max_output_tokens or window // _OUTPUT_RESERVE_FRACTION
     budget_chars = max(0, window - reserve) * _CHARS_PER_TOKEN
     if budget_chars == 0:
         # Reserve consumed the whole window: keep a minimal workable slice and let
@@ -789,7 +781,11 @@ def _fit_context_window(
         return messages_out, ()
 
     order = sorted(
-        range(len(messages_out)),
+        (
+            index
+            for index in range(len(messages_out))
+            if messages_out[index].get("role") != "system"
+        ),
         key=lambda index: len(messages_out[index].get("content", "")),
         reverse=True,
     )
@@ -810,6 +806,10 @@ def _fit_context_window(
         total_chars -= len(content) - len(trimmed)
         messages_out[index]["content"] = trimmed
         trimmed_count += 1
+    if trimmed_count == 0:
+        # Over budget with nothing trimmable (pinned or tiny messages): send
+        # as-is and let the provider reject it rather than lie about a trim.
+        return messages_out, ()
     decision = (
         "context_window_trimmed",
         (
@@ -851,9 +851,7 @@ def _anthropic_thinking(endpoint: ModelEndpoint) -> dict[str, object] | None:
     return {"type": "enabled", "budget_tokens": thinking.budget_tokens}
 
 
-_JSON_INSTRUCTION = (
-    " Respond with a single JSON object and nothing else; no prose, no code fences."
-)
+_JSON_INSTRUCTION = " Respond with a single JSON object and nothing else; no prose, no code fences."
 
 
 def _openai_request(
@@ -887,9 +885,7 @@ def _anthropic_request(
     """Build a ``/v1/messages`` payload from the neutral chat messages."""
 
     system_parts = [
-        str(message["content"])
-        for message in messages
-        if str(message.get("role", "")) == "system"
+        str(message["content"]) for message in messages if str(message.get("role", "")) == "system"
     ]
     chat_messages = [
         {"role": str(message["role"]), "content": str(message["content"])}
@@ -931,9 +927,7 @@ def _openai_responses_request(
     """Build a ``/responses`` payload from the neutral chat messages."""
 
     system_parts = [
-        str(message["content"])
-        for message in messages
-        if str(message.get("role", "")) == "system"
+        str(message["content"]) for message in messages if str(message.get("role", "")) == "system"
     ]
     input_items = [
         {"role": str(message["role"]), "content": str(message["content"])}

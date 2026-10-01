@@ -73,6 +73,9 @@ LOGGER = logging.getLogger("vulnweaver.code_audit")
 AUDIT_CHECKPOINT_NODE = "semantic-audit-agent"
 _MAX_CHECKPOINT_STEPS = 256
 _MAX_CHECKPOINT_FINDINGS = 64
+# The journal is already bounded by the loop budget; this cap only protects the
+# checkpoint against a budget configured far above it.
+_MAX_CHECKPOINT_JOURNAL = 512
 
 AUDIT_AGENT_OBJECTIVE = (
     "Audit this task's indexed code for location-anchored security defects. Work "
@@ -320,7 +323,8 @@ class CodeAuditAgent:
             return None
         try:
             checkpoints = [
-                item for item in await self._checkpoints.list(task_id)
+                item
+                for item in await self._checkpoints.list(task_id)
                 if item.node == AUDIT_CHECKPOINT_NODE
             ]
         except Exception as error:  # a broken checkpoint must never block the audit
@@ -358,12 +362,12 @@ class CodeAuditAgent:
             "rounds": progress.round_index,
             "decisions": [dict(record) for record in progress.decisions],
             "steps": [
-                _step_document(step, max_chars)
-                for step in progress.steps[-_MAX_CHECKPOINT_STEPS:]
+                _step_document(step, max_chars) for step in progress.steps[-_MAX_CHECKPOINT_STEPS:]
             ],
             "last_round_steps": [
                 _step_document(step, max_chars) for step in progress.last_round_steps
             ],
+            "journal": [dict(entry) for entry in progress.journal[-_MAX_CHECKPOINT_JOURNAL:]],
             "reported": [
                 _finding_document(finding)
                 for finding in executor.reported[-_MAX_CHECKPOINT_FINDINGS:]
@@ -535,14 +539,11 @@ def _resume_from_state(state: Mapping[str, object], budget: AgentLoopBudget) -> 
             )
             for item in _mapping_items(state.get("decisions"))
         ),
-        steps=tuple(
-            _step_from_document(item)
-            for item in _mapping_items(state.get("steps"))
-        ),
+        steps=tuple(_step_from_document(item) for item in _mapping_items(state.get("steps"))),
         last_round_steps=tuple(
-            _step_from_document(item)
-            for item in _mapping_items(state.get("last_round_steps"))
+            _step_from_document(item) for item in _mapping_items(state.get("last_round_steps"))
         ),
+        journal=_journal_from_documents(state.get("journal")),
         usage=TokenUsage(
             input_tokens=_int_value(usage.get("input_tokens")),
             output_tokens=_int_value(usage.get("output_tokens")),
@@ -553,6 +554,21 @@ def _resume_from_state(state: Mapping[str, object], budget: AgentLoopBudget) -> 
         model_label=_optional_str(state.get("model_label")),
         rounds=_int_value(state.get("rounds")),
     )
+
+
+def _journal_from_documents(value: object) -> tuple[JsonObject, ...]:
+    """Sanitized journal entries from a checkpoint, tolerant of corrupt state.
+
+    Only mappings with an integer ``round`` survive: the loop filters journal
+    entries by round, so an entry without one is dead weight in every prompt.
+    """
+
+    entries: list[JsonObject] = []
+    for item in _mapping_items(value):
+        round_value = item.get("round")
+        if isinstance(round_value, int) and not isinstance(round_value, bool):
+            entries.append(cast(JsonObject, dict(item)))
+    return tuple(entries)
 
 
 def _mapping_value(value: object) -> Mapping[str, object]:
@@ -587,7 +603,6 @@ def _str_value(value: object) -> str:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
-
 
 
 __all__ = [
