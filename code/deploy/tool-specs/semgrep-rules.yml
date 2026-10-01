@@ -15,3 +15,124 @@ rules:
       cwe: [CWE-120]
     patterns:
       - pattern: strcpy(...)
+  - id: vulnweaver.javascript.eval
+    languages: [javascript, typescript]
+    message: Avoid eval on untrusted input
+    severity: ERROR
+    metadata:
+      cwe: [CWE-95]
+    patterns:
+      - pattern: eval(...)
+  - id: vulnweaver.javascript.new-function
+    languages: [javascript, typescript]
+    message: Avoid new Function on untrusted input
+    severity: ERROR
+    metadata:
+      cwe: [CWE-95]
+    patterns:
+      - pattern: new Function(...)
+  - id: vulnweaver.javascript.child-process-exec
+    languages: [javascript, typescript]
+    message: child_process exec runs a shell; dynamic commands may be injectable
+    severity: WARNING
+    metadata:
+      cwe: [CWE-78]
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec(...)
+          - pattern: child_process.execSync(...)
+  - id: vulnweaver.go.sql-sprintf
+    languages: [go]
+    message: SQL statement built with fmt.Sprintf may allow SQL injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-89]
+    patterns:
+      - pattern-either:
+          - pattern: $DB.Query(fmt.Sprintf(...), ...)
+          - pattern: $DB.Exec(fmt.Sprintf(...), ...)
+  - id: vulnweaver.go.command-sprintf
+    languages: [go]
+    message: Command built with fmt.Sprintf may allow command injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-78]
+    patterns:
+      - pattern-either:
+          - pattern: exec.Command(fmt.Sprintf(...), ...)
+          - pattern: exec.CommandContext($CTX, fmt.Sprintf(...), ...)
+  - id: vulnweaver.rust.transmute
+    languages: [rust]
+    message: std::mem::transmute bypasses type safety and can cause undefined behavior
+    severity: WARNING
+    metadata:
+      cwe: [CWE-703]
+    patterns:
+      - pattern: std::mem::transmute(...)
+  - id: vulnweaver.csharp.type-name-handling
+    languages: [csharp]
+    message: TypeNameHandling All/Auto/Types enables polymorphic deserialization attacks
+    severity: ERROR
+    metadata:
+      cwe: [CWE-502]
+    patterns:
+      - pattern-regex: TypeNameHandling\s*\.\s*(All|Auto|Types)
+  - id: vulnweaver.csharp.process-concat
+    languages: [csharp]
+    message: Process argument built by string concatenation may allow command injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-78]
+    patterns:
+      - pattern: Process.Start($A + $B, ...)
+  - id: vulnweaver.php.eval
+    languages: [php]
+    message: Avoid eval on untrusted input
+    severity: ERROR
+    metadata:
+      cwe: [CWE-95]
+    patterns:
+      - pattern-regex: \beval\s*\(
+  - id: vulnweaver.php.shell-exec
+    languages: [php]
+    message: Shell command execution with dynamic arguments may allow command injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-78]
+    patterns:
+      - pattern-either:
+          - pattern: shell_exec(...)
+          - pattern: system(...)
+          - pattern: passthru(...)
+  - id: vulnweaver.php.unserialize
+    languages: [php]
+    message: unserialize on untrusted input allows object injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-502]
+    patterns:
+      - pattern: unserialize($X)
+  - id: vulnweaver.ruby.eval
+    languages: [ruby]
+    message: Avoid eval on untrusted input
+    severity: ERROR
+    metadata:
+      cwe: [CWE-95]
+    patterns:
+      - pattern: eval(...)
+  - id: vulnweaver.ruby.yaml-load
+    languages: [ruby]
+    message: YAML.load on untrusted input allows object injection; use safe_load
+    severity: WARNING
+    metadata:
+      cwe: [CWE-502]
+    patterns:
+      - pattern: YAML.load(...)
+  - id: vulnweaver.kotlin.runtime-exec
+    languages: [kotlin]
+    message: Runtime.exec with a dynamic command may allow command injection
+    severity: WARNING
+    metadata:
+      cwe: [CWE-78]
+    patterns:
+      - pattern: Runtime.getRuntime().exec(...)

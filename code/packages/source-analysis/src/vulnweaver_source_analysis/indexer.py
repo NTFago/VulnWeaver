@@ -1,18 +1,15 @@
-"""Function and call indexing for C, C++, Python, and Java source trees."""
+"""Function and call indexing across the supported source languages."""
 
 from __future__ import annotations
 
 import hashlib
+import importlib
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-import tree_sitter_c
-import tree_sitter_cpp
-import tree_sitter_java
-import tree_sitter_python
 from tree_sitter import Language, Node, Parser
 from vulnweaver_contracts import (
     Capability,
@@ -26,6 +23,13 @@ from vulnweaver_contracts import (
     SourceLocation,
     SourceParameter,
     validate_contract,
+)
+
+from vulnweaver_source_analysis.languages import (
+    EXTENSION_LANGUAGES,
+    LANGUAGES,
+    LanguageSpec,
+    build_system_for,
 )
 
 
@@ -52,34 +56,7 @@ class _LanguageConfig:
     function_types: frozenset[str]
     call_types: frozenset[str]
     class_types: frozenset[str]
-
-
-_EXTENSIONS: dict[str, str] = {
-    ".c": "c",
-    ".h": "c",
-    ".cc": "cpp",
-    ".cpp": "cpp",
-    ".cxx": "cpp",
-    ".hh": "cpp",
-    ".hpp": "cpp",
-    ".hxx": "cpp",
-    ".py": "python",
-    ".pyi": "python",
-    ".java": "java",
-}
-
-_BUILD_FILES: dict[str, str] = {
-    "cmakelists.txt": "cmake",
-    "makefile": "make",
-    "meson.build": "meson",
-    "configure.ac": "autotools",
-    "pyproject.toml": "python-pyproject",
-    "setup.py": "python-setuptools",
-    "requirements.txt": "python-requirements",
-    "pom.xml": "maven",
-    "build.gradle": "gradle",
-    "build.gradle.kts": "gradle",
-}
+    callee_fields: tuple[str, ...]
 
 
 class SourceIndexer:
@@ -113,10 +90,10 @@ class SourceIndexer:
             relative = path.relative_to(source_root).as_posix()
             if ".git" in {part.casefold() for part in path.relative_to(source_root).parts}:
                 continue
-            build_system = _BUILD_FILES.get(path.name.casefold())
+            build_system = build_system_for(path.name)
             if build_system is not None:
                 build_systems.add(build_system)
-            language = _EXTENSIONS.get(path.suffix.casefold())
+            language = EXTENSION_LANGUAGES.get(path.suffix.casefold())
             data = path.read_bytes()
             digest = "sha256:" + hashlib.sha256(data).hexdigest()
             if _looks_binary(data):
@@ -200,56 +177,23 @@ class SourceIndexer:
         return functions, calls
 
 
-def _config(
-    name: str,
-    capsule: object,
-    function_types: set[str],
-    call_types: set[str],
-    class_types: set[str],
-) -> _LanguageConfig:
-    language = Language(capsule)
+def _config(spec: LanguageSpec) -> _LanguageConfig:
+    module = importlib.import_module(spec.grammar_module)
+    capsule: object = getattr(module, spec.grammar_entry)()
     return _LanguageConfig(
-        name,
-        Parser(language),
-        frozenset(function_types),
-        frozenset(call_types),
-        frozenset(class_types),
+        spec.name,
+        Parser(Language(capsule)),
+        spec.function_types,
+        spec.call_types,
+        spec.class_types,
+        spec.callee_fields,
     )
 
 
 def _language_configs() -> dict[str, _LanguageConfig]:
     # Parser instances are scoped to one index operation because one executor can
     # serve multiple jobs concurrently in separate worker threads.
-    return {
-        "c": _config(
-            "c",
-            tree_sitter_c.language(),
-            {"function_definition"},
-            {"call_expression"},
-            {"struct_specifier", "union_specifier"},
-        ),
-        "cpp": _config(
-            "cpp",
-            tree_sitter_cpp.language(),
-            {"function_definition"},
-            {"call_expression"},
-            {"class_specifier", "struct_specifier", "namespace_definition"},
-        ),
-        "python": _config(
-            "python",
-            tree_sitter_python.language(),
-            {"function_definition"},
-            {"call"},
-            {"class_definition"},
-        ),
-        "java": _config(
-            "java",
-            tree_sitter_java.language(),
-            {"method_declaration", "constructor_declaration"},
-            {"method_invocation", "object_creation_expression"},
-            {"class_declaration", "interface_declaration", "enum_declaration"},
-        ),
-    }
+    return {name: _config(spec) for name, spec in LANGUAGES.items()}
 
 
 def _source_function(
@@ -336,6 +280,9 @@ def _scope_names(config: _LanguageConfig, node: Node, source: bytes) -> list[str
             if name_node is None and parent.type in config.function_types:
                 declarator = parent.child_by_field_name("declarator")
                 name_node = _declarator_identifier(declarator)
+            if name_node is None and parent.type in config.class_types:
+                # Rust impl blocks scope their methods by the implemented type.
+                name_node = parent.child_by_field_name("type")
             if name_node is not None:
                 value = _node_text(name_node, source).strip()
                 if value:
@@ -360,11 +307,13 @@ def _calls_in_function(
         if node.type in config.function_types:
             continue
         if node.type in config.call_types:
-            callee_node = (
-                node.child_by_field_name("function")
-                or node.child_by_field_name("name")
-                or node.child_by_field_name("type")
-            )
+            callee_node = None
+            for field_name in config.callee_fields:
+                callee_node = node.child_by_field_name(field_name)
+                if callee_node is not None:
+                    break
+            if callee_node is None:
+                callee_node = _callee_fallback(node)
             if callee_node is not None:
                 callee = _node_text(callee_node, source).strip()
                 if callee:
@@ -385,6 +334,20 @@ def _walk(root: Node) -> Generator[Node, None, None]:
         node = stack.pop()
         yield node
         stack.extend(reversed(node.named_children))
+
+
+# Argument containers follow the callee in a call node; grammars without a
+# callee field (kotlin, swift) would otherwise surface them as the callee.
+_ARGUMENT_CONTAINERS = frozenset(
+    {"arguments", "argument_list", "value_arguments", "call_suffix", "expression_list"}
+)
+
+
+def _callee_fallback(node: Node) -> Node | None:
+    for child in node.named_children:
+        if child.type not in _ARGUMENT_CONTAINERS:
+            return child
+    return None
 
 
 def _first_descendant(node: Node, types: set[str]) -> Node | None:
@@ -481,7 +444,7 @@ def _capability_profile(
             reason=None,
         )
     ]
-    for language in ("c", "cpp", "python", "java"):
+    for language in LANGUAGES:
         if language in languages:
             errors = parse_errors.get(language, 0)
             capabilities.append(

@@ -2,7 +2,7 @@
 
 > 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；历史课设阶段的任务明细见 Git 历史、PR 与 `code/docs/progress/`。
 
-更新时间：2026-09-30（Asia/Shanghai）
+更新时间：2026-10-01（Asia/Shanghai）
 
 ## 当前焦点
 
@@ -14,6 +14,7 @@
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
+| T55 多语言源码审计支持（4→13 种语言） | ZCode / `feat/multi-language-audit` | **完成（代码+测试，未部署）**：语言配置从 indexer.py 三处硬编码（扩展名表/语法节点表/能力循环）+ static_executor.py 两处硬编码（执行门槛/调度筛选）收敛为单一注册表 `packages/source-analysis/src/vulnweaver_source_analysis/languages.py`（`LanguageSpec`：扩展名、语法模块、函数/调用/类节点类型、callee 字段、静态工具覆盖集）。支持语言新增 JavaScript/TypeScript/Go/Rust/C#/PHP/Ruby/Kotlin/Swift；tree-sitter 语法包经 tuna 镜像全部解析成功（kotlin 1.1.0、swift 0.7.3 为社区包，其余官方）。结构性适配：Kotlin/Swift 语法 call 节点无 callee 字段，索引器增加"首个非参数容器具名子节点"兜底；Rust call 字段实为 `function`、`impl` 块按实现类型限定方法作用域；PHP 普通调用节点名为 `function_call_expression`，`new` 计为调用；构建文件识别新增 go.mod/Cargo.toml/package.json/composer.json/Gemfile/`.csproj`/`.sln`。semgrep 规则 2→16 条（js/ts/go/rust/csharp/php/ruby/kotlin，CWE-95/78/89/502/703），经 pin 版 semgrep 1.130.0 `--validate` 通过并对 9 语言最小无害样本逐条命中验证；调度器/执行器按注册表语言交集选工具（go/rust 项目不再误派 cppcheck）。dev 容器全量 `pytest -n 4` **647 passed / 5 skipped**、ruff、pyright 0 errors。**待部署**：重建 analysis-worker 镜像（新语法依赖在 Python 依赖里，需进镜像）并重启；semgrep-rules.yml 是 bind mount，容器重启即生效。**待验证**：真实模型 E2E 用多语言样本仓库跑一次索引→静态线索→审计链路 |
 | T54 agent 上下文分层：调查日志与窗口兜底（ADR-035） | ZCode / 已合并 main `654b5bc`（origin/feat/agent-context-journal 未推送，本地分支已清理） | **完成（代码+测试，已合并，待栈内 E2E）**：调研主流 harness（Claude Code/Codex/Gemini CLI/Cline/Roo/SWE-agent/Aider）上下文管理后补齐审计循环的结构性缺口——此前每轮无状态提示只带上一轮反馈，两轮之前模型完全失忆。落地三层模型：钉住头部（指令/objective/工具目录/静态上下文含 ADR-030 记忆）+ **压缩中间**（`investigation_journal`：上一轮之前所有轮次的确定性单行摘要，步骤/计划拒绝各一条，默认 48 条上限、最老先出、`max_journal_entries=0` 可关）+ 原样尾部（`last_feedback` 不变）；与 feedback 按轮次号结构性去重。journal 进 `LoopProgress`/`LoopResume` 与审计检查点，断点续跑不丢调查史。网关 `_fit_context_window` 兜底加固：system 消息永不裁剪、无可裁时不发虚假 `context_window_trimmed` 决策。`static_leads` 补 200 条上限+`total_leads`（原为静态上下文唯一无界列表）。**待验证**：栈内真实模型 E2E（系统提示新增 journal 使用句，按提示词纪律需固定样本回归） |
 | T53 候选 Finding 自动 PoC 复现验证（ADR-034） | ZCode / `feat/candidate-poc-verification` | **完成（代码+测试，未栈内 E2E）**：CANDIDATE Finding 在审计/复核结算后自动投放一次 PoC 复现 PROOF Job（`PocVerificationScheduler`，幂等键 `poc_verification:<finding_id>`；门禁=项目 `exploit_validation_enabled` + proof 镜像 pin + 脚本安全校验）；脚本生成 baseline `poc_verification`（提示词要求最小复现 + 末行 `POC_MARKERS:` 结构化标记）；executor 从沙箱 stdout 解析标记，COMPLETED 运行落 `POC_VERIFICATION_RESULT` STRONG 证据并携带 `evidence_ids`（激活既有 PROOF 证据→定向 re-review 路径）；`derive_established_facts` 新增注入类（`source_to_sink_path`/`protection_analysis`）与认证类（`behavior_difference`/`reachable_path`）推导——确认仍只走独立 re-review + `evaluate_confirmation`，"模型自我确认"红线不变。契约新增证据类型 + 迁移 0021 放开 `evidence.type` CHECK。dev 容器全量 `pytest -n 4` **616 passed / 5 skipped**、ruff、pyright 0 errors。**待验证**：栈内真实模型端到端（投放到沙箱真跑） |
 | **缺陷（已修复，待部署）**：项目删除 500——`DeletionRepository` 按单一 `created_at DESC` 删除自引用表，时间戳并列时顺序不定 | ZCode / 已合并 main `78842fd`（origin/fix/project-delete-fk-tie，本地分支与 worktree 已清理） | **根因（2026-09-30，线上复现）**：`repositories.py` `delete_project`/`_delete_task_rows` 删除 `artifact_versions`（自引用 FK `parent_version_id`）、`reviews`（`supersedes_review_id`）、`annotations`（`supersedes_annotation_id`）时按 `created_at DESC` 单遍删除，假设"子版本时间戳更晚"；但工件管道在同一事务内为父子版本传入同一 `now()`，线上已有 **31 对 `created_at` 相同的父子版本**（15/18 个 e2e 残留项目受影响）。并列时 Postgres 返回顺序不定，父行先删即触发 RESTRICT FK → `sqlalchemy.exc.IntegrityError` 未映射到任何 API 错误 → 落入 catch-all → 500 "an unexpected internal error occurred"，事务回滚，重试恒失败。**修复**（`fix/persistence` 叶子优先迭代删除，三处自引用链统一走 `_delete_chain_leaves`，环链抛结构化不变量错误）：新增回归测试 `tests/persistence/test_deletion_repository.py` 3 例（修复前红/修复后绿）；定向 77 passed、ruff、pyright 0 errors；**用修复代码对线上 18 个残留项目回滚式试删 18/18 全通过**（事务内 93 个版本清空后 ROLLBACK，现场未动）。**待办**：用户暂缓镜像重建——部署后界面删除即恢复；`IntegrityError`→结构化 409 的错误映射仍可改进。注意 `alembic/versions/0011_finding_candidates.py`、`0012_review_history.py` 的建表语句与线上库不符（库中无这三张表但版本号已到 0020，属迁移文件事后改写），后续迁移变更勿把这组表当作删除遗漏项 |
@@ -59,6 +60,7 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-01 | T55 多语言源码审计（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**647 passed / 5 skipped**（新增：语言注册表不变量 4 用例、9 新语言函数/调用提取参数化用例、全注册语言 CapabilityProfile 用例、调度器语言交集用例）；ruff 通过；pyright **0 errors**；semgrep 1.130.0（analysis-worker 镜像 pin 版）`--validate` 16 条 0 错误，9 语言最小样本冒烟 16/16 逐条命中；13 语言 tree-sitter 节点类型经容器内探针逐一验证（坑：PHP 普通调用节点是 `function_call_expression` 而非 `call_expression`；Rust call 的 callee 字段是 `function` 而非 `expression`；kotlin/swift call 节点无 callee 字段需兜底） |
 | 2026-09-30 | T54 agent 上下文分层（dev 容器，栈内 PG） | `tests/orchestrator` + `tests/model_gateway` **147 passed**（新增 11 用例：journal 进提示且与 last_feedback 去重、上限最老先出、可关闭、计划拒绝入 journal、单行有界摘要、resume 种子、检查点回环到续跑首条消息、网关裁剪钉住 system/头尾锚点保留/无可裁不发决策/到达传输层并落 AgentRun 决策、budget 非法值拒绝）；ruff 通过；pyright **0 errors**。注：本轮 dev 容器 venv 里 contracts 是 T53 合并前的旧装（9 个既有用例假红），`uv sync --reinstall-package vulnweaver-contracts` 后全绿——切分支/合并后除改动包外也要警惕未改包的旧装 |
 | 2026-09-30 | T53 候选 PoC 自动验证（dev 容器，栈内 PG） | 全量 `pytest -n 4`：**616 passed / 5 skipped**（新增调度器幂等/门禁 2、executor 标记解析/证据化/策略拒绝 3、钩子投放 1、事实推导 5 用例）；ruff 通过；pyright **0 errors**；迁移 0021 在临时库验证建库通过（alembic `op.drop_constraint` 会按命名约定二次包装约束名，改用原生 SQL，见迁移内注释） |
 | 2026-09-30 | T52 模型接入重构（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**605 passed / 5 skipped**（skip 仅 Docker 运行时 opt-in）；新增网关注册表 10 用例、Responses 线格式 3 用例、API 供应商设置/密钥合并/绑定校验用例、设置-网关边界用例；pyright **0 errors**；ruff 通过；svelte-check 0 errors、web 13 tests 过、vite build 过；api/orchestrator/analysis-worker/web 镜像重建并重启，worker 正常起循环并完成工具注册探测 |
@@ -77,10 +79,11 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 ## 下一步
 
-1. **T54 收尾（接手入口）**：栈内真实模型 E2E 回归一次提示词变更（系统提示新增 journal 使用句）——可复用 `scripts/e2e_investigation_memory.py`（同项目多任务最能体现 journal/记忆叠加）；观察一次多轮审计的 AgentRun 轨迹确认 `investigation_journal` 出现在每轮提示且轮次推进正常。代码已合并 main（`654b5bc`）。
-2. **T52 收尾**：当前部署的 DeepSeek 仍走 legacy `model_tiers` 回退（功能不变）；在 Web 设置页用"从预设创建→DeepSeek 官方"重建供应商（填 Key、绑定四个智能体）即完成迁移；迁移后用固定样本跑一次真实审计 E2E 验证注册表路径（`scripts/e2e_investigation_memory.py` 可复用）。OpenAI Responses 线格式只有单测覆盖，未对真实 Responses 端点联调。
-3. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-4. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。测试的 PG/Redis opt-in 默认值已指向栈内服务名（`postgres:5432`/`redis:6379`，2026-09-30），容器内跑 pytest 无需再传 `VULNWEAVER_TEST_*` 环境变量；其他环境用同名变量覆盖，连不上时相关用例优雅 skip。
-5. **长线下一块**：五块拼图+动态验证闭环已全部就位；候选方向：报告与工作台展示"线索→agent 结论"差异呈现、fuzz 崩溃证据经 ADR-027 §4 修订复核的运行时观察。
-6. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
-7. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+1. **T55 部署与 E2E（接手入口）**：重建 analysis-worker 镜像（`docker compose build analysis-worker`，新语法依赖在 Python 依赖中需进镜像）并重启栈；上传含 js/go/rust/cs/php/ruby/kt/swift 源码的样本 zip，确认索引 `capability_profile.languages` 含新语言、semgrep/cppcheck Job 按注册表交集投放；真实模型审计一次多语言项目验证 `static_leads` 携带新语言诊断。
+2. **T54 收尾**：栈内真实模型 E2E 回归一次提示词变更（系统提示新增 journal 使用句）——可复用 `scripts/e2e_investigation_memory.py`（同项目多任务最能体现 journal/记忆叠加）；观察一次多轮审计的 AgentRun 轨迹确认 `investigation_journal` 出现在每轮提示且轮次推进正常。代码已合并 main（`654b5bc`）。
+3. **T52 收尾**：当前部署的 DeepSeek 仍走 legacy `model_tiers` 回退（功能不变）；在 Web 设置页用"从预设创建→DeepSeek 官方"重建供应商（填 Key、绑定四个智能体）即完成迁移；迁移后用固定样本跑一次真实审计 E2E 验证注册表路径（`scripts/e2e_investigation_memory.py` 可复用）。OpenAI Responses 线格式只有单测覆盖，未对真实 Responses 端点联调。
+4. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
+5. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。测试的 PG/Redis opt-in 默认值已指向栈内服务名（`postgres:5432`/`redis:6379`，2026-09-30），容器内跑 pytest 无需再传 `VULNWEAVER_TEST_*` 环境变量；其他环境用同名变量覆盖，连不上时相关用例优雅 skip。**2026-10-01 补充**：T55 轮在切换 main 分支后 `vulnweaver_proof` 也是旧装（`PocVerificationScheduler` 缺失，test_auto_poc 收集失败），同法 `--reinstall-package vulnweaver-proof` 解决——Q-003 的"未改包旧装"风险覆盖所有 workspace 包。
+6. **长线下一块**：五块拼图+动态验证闭环已全部就位；候选方向：报告与工作台展示"线索→agent 结论"差异呈现、fuzz 崩溃证据经 ADR-027 §4 修订复核的运行时观察。
+7. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
+8. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
