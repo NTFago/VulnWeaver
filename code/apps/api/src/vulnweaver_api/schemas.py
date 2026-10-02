@@ -12,6 +12,7 @@ from vulnweaver_contracts import (
     Evidence,
     FindingEvidence,
     FindingStatus,
+    PairFunction,
     Severity,
 )
 
@@ -460,3 +461,14 @@ class TaskActivityResponse(StrictModel):
     audit_progress: ActivityAuditProgress | None
     latest_activity_at: str | None
     events: list[dict[str, Any]]
+
+
+class PairFunctionPage(StrictModel):
+    """One bounded page of the workbench function list (server-side paging)."""
+
+    schema_version: Literal["1.0.0"]
+    task_id: str
+    total: int
+    offset: int
+    limit: int
+    functions: list[PairFunction]
