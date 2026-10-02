@@ -124,6 +124,11 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "locations unless you have new evidence), and how far each dig actually got. "
     "Build on this instead of repeating it -- spend your rounds on leads the "
     "memory shows unexplored.\n\n"
+    "Analysis baseline. context.analysis_baseline names the tool work the import "
+    "chain already finished (which tools ran, how many symbolic facts exist, when "
+    "the analysis was produced). Treat it as settled ground: reason from it, and "
+    "reserve symbolic-execute for the specific functions whose behaviour it "
+    "cannot answer.\n\n"
     "Resuming. If the context already shows investigation history, this audit was "
     "interrupted and is continuing: treat those steps as already executed, do not "
     "repeat them, and continue from the last observation.\n\n"
@@ -423,6 +428,7 @@ class CodeAuditAgent:
             "static_leads": await workspace.static_leads(),
             "critical_logic": await workspace.critical_logic(),
             "binary_summary": await workspace.artifact_facts(kind="summary"),
+            "analysis_baseline": await workspace.analysis_baseline(),
         }
         if prior_investigations:
             context["prior_investigations"] = [

@@ -167,6 +167,16 @@ class JobAttemptFailure:
     recorded_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class ReusableImport:
+    """One earlier succeeded import Job whose produced versions may be adopted."""
+
+    job_id: str
+    task_id: str
+    created_at: datetime
+    produced_artifact_version_ids: tuple[str, ...]
+
+
 class ProjectRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -648,6 +658,55 @@ class JobRepository:
             )
         ).mappings()
         return [_job_from_row(row) for row in rows]
+
+    async def find_reusable_imports(
+        self, object_ref: str, *, tool_name: str, project_id: str
+    ) -> list[ReusableImport]:
+        """Succeeded import Jobs over the same input inside one project.
+
+        Re-running a task over an already-analyzed upload must not repeat the
+        expensive import; the previous Job's result names the immutable derived
+        versions (and their PAIR rows) that a matching run can adopt as-is.
+        Scope is per project: derived artifacts never leak across projects.
+        """
+
+        rows = (
+            await self._connection.execute(
+                select(
+                    jobs.c.id,
+                    jobs.c.task_id,
+                    jobs.c.created_at,
+                    job_results.c.produced_artifact_version_ids,
+                )
+                .join(tasks, tasks.c.id == jobs.c.task_id)
+                .join(job_results, job_results.c.job_id == jobs.c.id)
+                .where(
+                    jobs.c.kind == JobKind.IMPORT.value,
+                    jobs.c.status == JobStatus.SUCCEEDED.value,
+                    jobs.c.tool[("name")].as_string() == tool_name,
+                    tasks.c.project_id == project_id,
+                    jobs.c.input_refs.contains([object_ref]),
+                )
+                .order_by(jobs.c.created_at.desc())
+                .limit(8)
+            )
+        ).mappings()
+        reusable: list[ReusableImport] = []
+        for row in rows:
+            produced = row["produced_artifact_version_ids"]
+            if isinstance(produced, list) and produced:
+                identifiers = cast(list[object], produced)
+                reusable.append(
+                    ReusableImport(
+                        job_id=row["id"],
+                        task_id=row["task_id"],
+                        created_at=row["created_at"],
+                        produced_artifact_version_ids=tuple(
+                            str(item) for item in identifiers if isinstance(item, str)
+                        ),
+                    )
+                )
+        return reusable
 
     async def get_result(self, job_id: str) -> WorkerResult | None:
         row = (

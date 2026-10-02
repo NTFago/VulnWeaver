@@ -31,6 +31,7 @@ from vulnweaver_contracts import (
     SchemaVersion,
     StaticToolStatus,
     StructuredFailure,
+    Task,
     ToolIdentity,
     WorkerResult,
     validate_contract,
@@ -392,7 +393,22 @@ class BinaryImportExecutor:
         parent_version_id = _required_argument(job, "artifact_version_id")
         target_addresses = _target_addresses(job, self._limits)
         object_ref = _single_input(job)
-        await self._validate_input(job, parent_version_id, object_ref)
+        task = await self._validate_input(job, parent_version_id, object_ref)
+        reused = await self._find_reusable(
+            job,
+            project_id=task["project_id"],
+            object_ref=object_ref,
+            target_addresses=target_addresses,
+        )
+        if reused is not None:
+            return WorkerResult(
+                schema_version=SchemaVersion.VALUE_1_0_0,
+                job_id=job["id"],
+                status=JobStatus.SUCCEEDED,
+                produced_artifact_version_ids=reused,
+                evidence_ids=[],
+                failure=None,
+            )
         if cancellation.is_set():
             return _cancelled_result(job["id"])
 
@@ -497,10 +513,7 @@ class BinaryImportExecutor:
                         ),
                     ),
                 )
-            planning_active = self._planning_hook is not None and (
-                self._angr_adapter is not None
-                or (self._sandbox is not None and self._sandbox_image_digest is not None)
-            )
+            planning_active = self._planning_active()
             for adapter in adapters:
                 if cancellation.is_set():
                     return _cancelled_result(job["id"], produced)
@@ -569,6 +582,9 @@ class BinaryImportExecutor:
                     "source_artifact_version_id": parent_version_id,
                     "analyzed_artifact_version_id": analyzed_version_id,
                     "target_addresses": list(target_addresses),
+                    # Future imports over the same input adopt this result only
+                    # when their own fingerprint matches byte-for-byte inputs.
+                    "reuse_key": self._reuse_key(job, target_addresses),
                 },
             )
             produced.append(result_version_id)
@@ -740,7 +756,7 @@ class BinaryImportExecutor:
         outcome.unpacked_path = path
         return outcome
 
-    async def _validate_input(self, job: Job, version_id: str, object_ref: str) -> None:
+    async def _validate_input(self, job: Job, version_id: str, object_ref: str) -> Task:
         try:
             async with self._database.transaction() as repositories:
                 task = await repositories.tasks.get(job["task_id"])
@@ -771,6 +787,106 @@ class BinaryImportExecutor:
                 "binary_import.object_ref_mismatch",
                 "job input reference does not match the registered artifact version",
             )
+        return task
+
+    def _planning_active(self) -> bool:
+        return self._planning_hook is not None and (
+            self._angr_adapter is not None
+            or (self._sandbox is not None and self._sandbox_image_digest is not None)
+        )
+
+    def _reuse_key(self, job: Job, target_addresses: tuple[int, ...]) -> str:
+        """Fingerprint of everything that shapes the analysis result bytes.
+
+        Two runs may adopt one result only when every input that changes the
+        output matches: the tool identity, which hooks and execution paths are
+        active, the requested symbolic targets, and the limits that bound what
+        lands in the document.  Anything else — timeouts, scratch paths, pure
+        performance knobs — must stay out of the key.
+        """
+
+        relevant_limits = {
+            "max_functions": self._limits.max_functions,
+            "max_instructions": self._limits.max_instructions,
+            "max_basic_blocks": self._limits.max_basic_blocks,
+            "max_xrefs": self._limits.max_xrefs,
+            "max_pseudocode_functions": self._limits.max_pseudocode_functions,
+            "max_pseudocode_chars": self._limits.max_pseudocode_chars,
+            "max_symbolic_functions": self._limits.max_symbolic_functions,
+            "max_symbolic_steps": self._limits.max_symbolic_steps,
+            "max_symbolic_states": self._limits.max_symbolic_states,
+            "max_strings": self._limits.max_strings,
+            "max_string_chars": self._limits.max_string_chars,
+            "min_string_chars": self._limits.min_string_chars,
+        }
+        tool = _tool_identity(job)
+        material = {
+            "tool": {"name": tool["name"], "version": tool["version"]},
+            "sandboxed_facts": self._sandbox is not None and self._sandbox_image_digest is not None,
+            "angr_enabled": bool(
+                self._angr_adapter.enabled if self._angr_adapter is not None else False
+            ),
+            "planning_active": self._planning_active(),
+            "critical_logic_hook": self._critical_logic_hook is not None,
+            "readable_pseudocode_hook": self._readable_pseudocode_hook is not None,
+            "target_addresses": list(target_addresses),
+            "limits": relevant_limits,
+        }
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    async def _find_reusable(
+        self,
+        job: Job,
+        *,
+        project_id: str,
+        object_ref: str,
+        target_addresses: tuple[int, ...],
+    ) -> list[str] | None:
+        """Adopt a prior run's immutable results when the exact analysis repeats.
+
+        Re-running a task over an already-analyzed upload used to redo the whole
+        Ghidra/facts chain for byte-identical input. The earlier Job's produced
+        versions are immutable and already carry their PAIR rows, so a match on
+        the result-shaping fingerprint adopts them as-is; every mismatch (angr
+        toggle, target set, tool version, limits) falls through to a full run.
+        Versions registered before reuse keys existed simply never match.
+        """
+
+        fingerprint = self._reuse_key(job, target_addresses)
+        try:
+            async with self._database.transaction() as repositories:
+                candidates = await repositories.jobs.find_reusable_imports(
+                    object_ref, tool_name=_tool_name(job), project_id=project_id
+                )
+                for candidate in candidates:
+                    for version_id in candidate.produced_artifact_version_ids:
+                        version = await repositories.artifacts.get_version(version_id)
+                        config = version.get("generation_config") or {}
+                        if (
+                            config.get("format") == "binary-analysis-result"
+                            and config.get("reuse_key") == fingerprint
+                        ):
+                            LOGGER.info(
+                                "binary_import_reused_prior_result",
+                                extra={
+                                    "job_id": job["id"],
+                                    "reused_job_id": candidate.job_id,
+                                    "reused_task_id": candidate.task_id,
+                                    "version_count": len(
+                                        candidate.produced_artifact_version_ids
+                                    ),
+                                },
+                            )
+                            return list(candidate.produced_artifact_version_ids)
+        except (PersistenceError, SQLAlchemyError, AttributeError) as error:
+            # Reuse is an optimization, never a precondition: a database outage
+            # — or an executor wired without one — degrades to the ordinary
+            # full import.
+            LOGGER.warning(
+                "binary_import_reuse_lookup_failed", extra={"error": str(error)[:200]}
+            )
+        return None
 
     def _copy_input(self, object_ref: str, destination: Path) -> None:
         verified = self._store.verify(object_ref)

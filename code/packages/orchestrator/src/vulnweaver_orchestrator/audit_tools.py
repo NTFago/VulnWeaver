@@ -528,6 +528,53 @@ class AuditWorkspace:
         items = _as_list(document.get(kind))[:_MAX_FACTS_ITEMS]
         return cast(JsonObject, {"available": True, "kind": kind, "items": items})
 
+    async def analysis_baseline(self) -> JsonObject:
+        """Provenance of the tool work that already exists before round one.
+
+        The import chain is expensive and its conclusions are durable: which
+        tools ran, what they found, and when the analysis was produced. Naming
+        this up front lets the agent spend rounds on investigation instead of
+        re-deriving facts, and an older ``produced_at`` (a reused result from
+        an earlier task) tells it the baseline may predate this upload's task.
+        """
+
+        baseline: JsonObject = {"binary": None, "source_index": None}
+        for version_id in self.version_ids():
+            version = self._versions[version_id]
+            config = version.get("generation_config") or {}
+            fmt = config.get("format")
+            if fmt == "binary-analysis-result" and baseline["binary"] is None:
+                document = await self._binary_document()
+                runs: list[JsonObject] = []
+                for run in _as_list(document.get("tool_runs")) if document else []:
+                    if isinstance(run, Mapping):
+                        runs.append(
+                            {
+                                "tool": run.get("tool_name"),
+                                "version": run.get("tool_version"),
+                                "status": str(run.get("status")),
+                            }
+                        )
+                baseline["binary"] = cast(
+                    JsonObject,
+                    {
+                        "analysis_version_id": version_id,
+                        "produced_at": version["created_at"],
+                        "symbolic_targets": config.get("target_addresses"),
+                        "tool_runs": runs[:16],
+                        "symbolic_facts": (
+                            len(_as_list(document.get("symbolic_facts"))) if document else 0
+                        ),
+                    },
+                )
+            elif fmt == "source-import-result" and baseline["source_index"] is None:
+                baseline["source_index"] = {
+                    "index_version_id": version_id,
+                    "produced_at": version["created_at"],
+                    "files": config.get("files"),
+                }
+        return baseline
+
     async def critical_logic(self) -> JsonObject:
         candidates: list[JsonObject] = []
         for ref in self._functions:
