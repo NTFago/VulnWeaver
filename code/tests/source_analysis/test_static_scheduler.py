@@ -251,6 +251,45 @@ def test_scheduler_creates_capability_selected_jobs_idempotently() -> None:
     asyncio.run(scenario())
 
 
+def test_scheduler_skips_tools_without_language_overlap() -> None:
+    async def scenario() -> None:
+        database = _FakeDatabase()
+        scheduler = StaticAnalysisScheduler(
+            cast(Database, database),
+            {
+                "semgrep": cast(ToolSpec, _tool_spec("semgrep")),
+                "cppcheck": cast(ToolSpec, _tool_spec("cppcheck")),
+            },
+            clock=lambda: datetime(2026, 9, 8, 10, tzinfo=UTC),
+        )
+        result = cast(
+            SourceImportResult,
+            {
+                "schema_version": SchemaVersion.VALUE_1_0_0,
+                "artifact_version_id": "artifact-version:source",
+                "files": [],
+                "functions": [],
+                "calls": [],
+                "capability_profile": {
+                    "schema_version": SchemaVersion.VALUE_1_0_0,
+                    "artifact_version_id": "artifact-version:source",
+                    "languages": ["go", "rust"],
+                    "architectures": [],
+                    "build_systems": [],
+                    "capabilities": [],
+                    "created_at": "2026-09-08T10:00:00Z",
+                },
+            },
+        )
+
+        scheduled = await scheduler.schedule(_import_job(), result, "artifact-version:index")
+
+        assert len(scheduled) == 1
+        assert database.jobs.jobs[0]["tool"]["name"] == "semgrep"
+
+    asyncio.run(scenario())
+
+
 def test_static_result_parent_matches_scanned_source_archive(
     persistence_database_url: str, tmp_path: Path
 ) -> None:

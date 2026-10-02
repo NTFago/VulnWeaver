@@ -23,6 +23,7 @@ from vulnweaver_source_analysis.finding_projection import (
     StaticFindingProjector,
 )
 from vulnweaver_source_analysis.indexer import SourceIndexer, SourceIndexerSettings
+from vulnweaver_source_analysis.languages import LANGUAGES, LanguageSpec, static_tool_languages
 from vulnweaver_source_analysis.static_executor import (
     StaticAnalysisExecutionError,
     StaticAnalysisExecutor,
@@ -42,6 +43,8 @@ __all__ = [
     "CppcheckAdapter",
     "ImportLimits",
     "ImportSummary",
+    "LANGUAGES",
+    "LanguageSpec",
     "ExcerptLimits",
     "SourceExcerpt",
     "SourceExcerptReader",
@@ -61,4 +64,5 @@ __all__ = [
     "StaticToolOutput",
     "parse_cppcheck_output",
     "parse_semgrep_output",
+    "static_tool_languages",
 ]

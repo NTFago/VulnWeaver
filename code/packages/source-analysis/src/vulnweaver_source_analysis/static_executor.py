@@ -45,6 +45,7 @@ from vulnweaver_persistence import (
 
 from vulnweaver_source_analysis.archive import SafeArchiveImporter, SourceImportError
 from vulnweaver_source_analysis.finding_projection import StaticFindingProjector
+from vulnweaver_source_analysis.languages import static_tool_languages
 from vulnweaver_source_analysis.static_tools import (
     CppcheckAdapter,
     SemgrepAdapter,
@@ -228,10 +229,7 @@ class StaticAnalysisExecutor:
         max_output_bytes: int,
         languages: set[str],
     ) -> StaticToolOutput:
-        supported = {
-            "semgrep": {"c", "cpp", "python", "java"},
-            "cppcheck": {"c", "cpp"},
-        }.get(adapter.name, set())
+        supported = static_tool_languages(adapter.name)
         if not languages.intersection(supported):
             return StaticToolOutput(
                 adapter.name,
@@ -338,13 +336,11 @@ class StaticAnalysisScheduler:
         source_version_id: str,
     ) -> tuple[str, ...]:
         languages = set(source_result["capability_profile"]["languages"])
-        selected = [name for name in ("semgrep", "cppcheck") if name in self._specs]
         selected = [
             name
-            for name in selected
-            if languages.intersection(
-                {"c", "cpp"} if name == "cppcheck" else {"c", "cpp", "python", "java"}
-            )
+            for name in ("semgrep", "cppcheck")
+            if name in self._specs
+            and languages.intersection(static_tool_languages(name))
         ]
         created: list[str] = []
         now = _timestamp(self._clock())

@@ -23,6 +23,7 @@ from vulnweaver_contracts import (
 from vulnweaver_pair import SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings, PersistenceInvariantError
 from vulnweaver_source_analysis import (
+    LANGUAGES,
     ArchiveFormat,
     ImportLimits,
     ImportSummary,
@@ -164,6 +165,133 @@ def test_safe_zip_import_and_four_language_index(tmp_path: Path) -> None:
         if item["status"] is CapabilityStatus.AVAILABLE
     }
     assert "tree_sitter_python" in available
+
+
+@pytest.mark.parametrize(
+    ("filename", "content", "expected_function", "expected_calls"),
+    [
+        pytest.param(
+            "app.js",
+            b"function main(x) { return helper(x); }\n",
+            "main",
+            ["helper"],
+            id="javascript",
+        ),
+        pytest.param(
+            "app.ts",
+            b"function main(x: number): number { return helper(x); }\n",
+            "main",
+            ["helper"],
+            id="typescript",
+        ),
+        pytest.param(
+            "main.go",
+            b"package main\n\nfunc Run(x int) int { return helper(x) }\n",
+            "Run",
+            ["helper"],
+            id="go",
+        ),
+        pytest.param(
+            "lib.rs",
+            b'pub fn run(x: i32) -> i32 { println!("hi"); helper(x) }\n',
+            "run",
+            ["helper", "println"],
+            id="rust",
+        ),
+        pytest.param(
+            "Program.cs",
+            b"class Program { int Run(int x) { return Helper(x); } }\n",
+            "Program.Run",
+            ["Helper"],
+            id="csharp",
+        ),
+        pytest.param(
+            "app.php",
+            b"<?php\nfunction run($x) { return helper($x); }\n",
+            "run",
+            ["helper"],
+            id="php",
+        ),
+        pytest.param(
+            "app.rb",
+            b"def run(x)\n  helper(x)\nend\n",
+            "run",
+            ["helper"],
+            id="ruby",
+        ),
+        pytest.param(
+            "App.kt",
+            b"fun run(x: Int): Int { return helper(x) }\n",
+            "run",
+            ["helper"],
+            id="kotlin",
+        ),
+        pytest.param(
+            "App.swift",
+            b"func run(x: Int) -> Int { return helper(x) }\n",
+            "run",
+            ["helper"],
+            id="swift",
+        ),
+    ],
+)
+def test_indexer_extracts_functions_and_calls_per_language(
+    tmp_path: Path,
+    filename: str,
+    content: bytes,
+    expected_function: str,
+    expected_calls: list[str],
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / filename).write_bytes(content)
+    result = SourceIndexer().index(root, "artifact-version:multi-lang")
+    assert result["files"][0]["parse_status"] == "indexed"
+    functions = [item["qualified_name"] for item in result["functions"]]
+    assert expected_function in functions
+    calls = {item["callee"] for item in result["calls"]}
+    assert set(expected_calls) <= calls
+
+
+def test_indexer_profiles_all_registered_languages(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "app.c").write_bytes(b"int main(void){return 0;}")
+    (root / "app.py").write_bytes(b"def main():\n    pass\n")
+    (root / "app.js").write_bytes(b"function main(x) { return helper(x); }\n")
+    (root / "main.go").write_bytes(b"package main\n\nfunc main() { helper() }\n")
+    (root / "lib.rs").write_bytes(b"pub fn main() { helper(); }\n")
+    (root / "Program.cs").write_bytes(b"class Program { void Main() { Helper(); } }\n")
+    (root / "app.php").write_bytes(b"<?php\nfunction main() { helper(); }\n")
+    (root / "app.rb").write_bytes(b"def main\n  helper()\nend\n")
+    (root / "App.kt").write_bytes(b"fun main() { helper() }\n")
+    (root / "App.swift").write_bytes(b"func main() { helper() }\n")
+    (root / "go.mod").write_bytes(b"module example.com/app\n")
+    (root / "package.json").write_bytes(b"{}\n")
+    (root / "Cargo.toml").write_bytes(b"[package]\nname = 'app'\n")
+    (root / "Sample.csproj").write_bytes(b"<Project></Project>\n")
+
+    result = SourceIndexer().index(root, "artifact-version:registry")
+
+    validate_contract("SourceImportResult", result)
+    languages = set(result["capability_profile"]["languages"])
+    assert languages == set(LANGUAGES) - {"cpp", "java", "typescript"}
+    assert result["capability_profile"]["build_systems"] == [
+        "cargo",
+        "dotnet",
+        "go-modules",
+        "npm",
+    ]
+    capabilities = {
+        item["name"]: item["status"] for item in result["capability_profile"]["capabilities"]
+    }
+    for language in LANGUAGES:
+        expected = (
+            CapabilityStatus.UNAVAILABLE
+            if language not in languages
+            else CapabilityStatus.AVAILABLE
+        )
+        assert capabilities[f"tree_sitter_{language}"] is expected
 
 
 @pytest.mark.parametrize("path", ["../escape.py", "/absolute.py", r"C:\\escape.py"])
