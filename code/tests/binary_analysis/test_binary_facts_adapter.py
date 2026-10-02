@@ -232,6 +232,7 @@ def test_binary_facts_adapter_maps_timeout_to_retryable_failure(tmp_path: Path) 
     else:
         raise AssertionError("a timed-out sandbox run was treated as success")
     assert sandbox.request["timeout_seconds"] == 1234
+    assert sandbox.request["arguments"]["command_timeout_seconds"] == 1234
 
 
 def test_binary_facts_adapter_maps_transport_failure_to_dependency(tmp_path: Path) -> None:
@@ -293,3 +294,149 @@ def test_binary_facts_adapter_maps_runner_cancellation_to_tool_cancelled(
         pass
     else:
         raise AssertionError("a cancelled sandbox run was treated as success")
+
+
+def _facts_result(
+    store: LocalContentAddressedStore,
+    *,
+    functions: list[dict[str, object]],
+    objdump_status: str,
+    objdump_reason: str | None,
+    ghidra_status: str,
+    ghidra_reason: str | None,
+) -> SandboxResult:
+    payload = {
+        "tools": {
+            "objdump": {
+                "tool_name": "objdump",
+                "tool_version": "2.40",
+                "status": objdump_status,
+                "exit_code": 0 if objdump_status == "succeeded" else None,
+                "reason": objdump_reason,
+                "raw_output": None,
+            },
+            "ghidra": {
+                "tool_name": "ghidra",
+                "tool_version": "11.4",
+                "status": ghidra_status,
+                "exit_code": 0 if ghidra_status == "succeeded" else None,
+                "reason": ghidra_reason,
+                "raw_output": None,
+            },
+            "die": {"compiler": "GCC", "packer": None, "packed": False},
+        },
+        "functions": functions,
+        "instructions": [],
+        "basic_blocks": [],
+        "xrefs": [],
+        "pseudocode": [],
+    }
+    stored = store.put_stream(io.BytesIO(json.dumps(payload).encode()), max_bytes=1024 * 1024)
+    return SandboxResult(
+        schema_version="1.0.0",
+        request_id="request-1",
+        status=SandboxStatus.SUCCEEDED,
+        exit_code=0,
+        stdout_ref=None,
+        stderr_ref=None,
+        outputs=[
+            {
+                "path": "binary-facts.json",
+                "object_ref": stored.object_ref,
+                "digest": stored.digest,
+                "size_bytes": stored.size_bytes,
+            }
+        ],
+        resource_usage={
+            "duration_millis": 1,
+            "cpu_millis": 1,
+            "memory_bytes": 1,
+            "output_bytes": stored.size_bytes,
+        },
+        failure=None,
+    )
+
+
+def test_binary_facts_adapter_fails_loudly_when_both_sources_failed(
+    tmp_path: Path,
+) -> None:
+    """Ghidra timeout + objdump overflow with no functions is a retryable failure.
+
+    This is the silent wrong answer that cost twenty minutes of Ghidra on an
+    18MB PE and published an empty analysis that looked successful: the run
+    must fail instead, with the per-tool reasons in the details.
+    """
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    result = _facts_result(
+        store,
+        functions=[],
+        objdump_status="failed",
+        objdump_reason="output_limit_exceeded",
+        ghidra_status="failed",
+        ghidra_reason="timeout",
+    )
+    target = tmp_path / "sample"
+    target.write_bytes(elf64_sample())
+    pinned = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
+    try:
+        asyncio.run(
+            BinaryFactsAdapter(
+                _Sandbox(result),
+                store,
+                image_digest="sha256:" + "a" * 64,
+                input_ref=pinned.object_ref,
+            ).analyze(
+                target,
+                inspect_binary(target, BinaryAnalysisLimits()),
+                BinaryAnalysisLimits(),
+                asyncio.Event(),
+            )
+        )
+    except ToolExecutionError as error:
+        assert error.kind is FailureKind.TOOL
+        assert error.retryable is True
+        assert error.details["failure_code"] == "facts_sources_failed"
+        assert "timeout" in str(error)
+        assert "output_limit_exceeded" in str(error)
+    else:
+        raise AssertionError("a facts run with no functions and both sources failed succeeded")
+
+
+def test_binary_facts_adapter_keeps_partial_objdump_when_ghidra_failed(
+    tmp_path: Path,
+) -> None:
+    """Ghidra failing alone is not fatal: objdump's functions still land."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    sample = elf64_sample()
+    functions = [
+        {"name": "main", "address": 0x1050, "size": 7, "file_offset": 0x200}
+    ]
+    result = _facts_result(
+        store,
+        functions=functions,
+        objdump_status="succeeded",
+        objdump_reason="output_truncated",
+        ghidra_status="failed",
+        ghidra_reason="timeout",
+    )
+    target = tmp_path / "sample"
+    target.write_bytes(sample)
+    pinned = store.put_stream(io.BytesIO(sample), max_bytes=1024 * 1024)
+    contribution = asyncio.run(
+        BinaryFactsAdapter(
+            _Sandbox(result),
+            store,
+            image_digest="sha256:" + "a" * 64,
+            input_ref=pinned.object_ref,
+        ).analyze(
+            target,
+            inspect_binary(target, BinaryAnalysisLimits()),
+            BinaryAnalysisLimits(),
+            asyncio.Event(),
+        )
+    )
+    assert [function["name"] for function in contribution.functions] == ["main"]
+    assert contribution.run["status"] == "succeeded"
+    assert contribution.run["reason"] == "output_truncated"

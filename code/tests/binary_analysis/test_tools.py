@@ -17,7 +17,6 @@ from vulnweaver_binary_analysis import (
     GhidraHeadlessAdapter,
     ObjdumpAdapter,
     ToolCancelled,
-    ToolOutputLimitExceeded,
     UpxAdapter,
     inspect_binary,
     parse_objdump_disassembly,
@@ -348,15 +347,38 @@ def test_unconfigured_heavy_adapters_are_explicitly_unavailable(tmp_path: Path) 
     asyncio.run(scenario())
 
 
-def test_bounded_command_runner_stops_output_floods() -> None:
+def test_bounded_command_runner_keeps_partial_output_on_flood() -> None:
+    """An output flood returns what fit, marked truncated — not an empty loss.
+
+    objdump over a 10MB .text overflows the 8MB budget long after it has
+    emitted usable disassembly; discarding everything is what left large
+    samples with zero functions while the run looked successful.
+    """
+
     async def scenario() -> None:
-        with pytest.raises(ToolOutputLimitExceeded):
-            await BoundedCommandRunner().run(
-                (sys.executable, "-c", "print('x' * 10000)"),
-                timeout_seconds=10,
-                max_output_bytes=128,
-                cancellation=asyncio.Event(),
-            )
+        result = await BoundedCommandRunner().run(
+            (sys.executable, "-c", "print('x' * 10000)"),
+            timeout_seconds=10,
+            max_output_bytes=128,
+            cancellation=asyncio.Event(),
+        )
+        assert result.truncated is True
+        assert len(result.stdout) <= 128
+        assert result.stdout.startswith(b"x")
+
+    _run_subprocess_scenario(scenario())
+
+
+def test_bounded_command_runner_reports_untruncated_success() -> None:
+    async def scenario() -> None:
+        result = await BoundedCommandRunner().run(
+            (sys.executable, "-c", "print('ok')"),
+            timeout_seconds=10,
+            max_output_bytes=4096,
+            cancellation=asyncio.Event(),
+        )
+        assert result.truncated is False
+        assert result.stdout.strip() == b"ok"
 
     _run_subprocess_scenario(scenario())
 
@@ -427,3 +449,35 @@ def test_command_profile_omits_empty_target_addresses() -> None:
     )
     assert argv_with_targets[argv_with_targets.index("--target-addresses") + 1] == "4144"
     assert "--angr-enabled" in argv_with_targets
+
+
+def test_command_profile_passes_command_timeout_through() -> None:
+    from vulnweaver_binary_analysis.profiles import binary_command_profile
+
+    profile = binary_command_profile("vulnweaver-binary-tools:fixed", "sha256:" + "a" * 64)
+    base = {
+        "max_functions": 100,
+        "max_instructions": 1000,
+        "max_pseudocode_functions": 50,
+        "target_addresses": [],
+        "angr_enabled": False,
+    }
+    argv = profile.build_argv(
+        {**base, "command_timeout_seconds": 3600}, PurePath("/input/s"), PurePath("/out")
+    )
+    assert argv[argv.index("--command-timeout") + 1] == "3600"
+
+    # Absent (older callers): no flag, image default applies.
+    argv_default = profile.build_argv(dict(base), PurePath("/input/s"), PurePath("/out"))
+    assert "--command-timeout" not in argv_default
+
+    for bad in (30, 100000, "3600", True):
+        try:
+            profile.build_argv(
+                {**base, "command_timeout_seconds": bad},
+                PurePath("/input/s"),
+                PurePath("/out"),
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid command_timeout_seconds accepted: {bad!r}")

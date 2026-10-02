@@ -183,6 +183,10 @@ class BinaryFactsAdapter:
                 "max_pseudocode_functions": limits.max_pseudocode_functions,
                 "target_addresses": list(self._target_addresses),
                 "angr_enabled": self._angr_enabled,
+                # The image's per-tool stop follows the deployment setting;
+                # large binaries need far more than the image default. The
+                # profile floors the value at 60s, so clamp here to match.
+                "command_timeout_seconds": max(60, int(limits.command_timeout_seconds)),
             },
             output_file_names=["binary-facts.json"],
             resource_budget=cast(ResourceBudget, _sandbox_budget(limits)),
@@ -200,18 +204,35 @@ class BinaryFactsAdapter:
             facts = json.load(stream)
         tools = facts.get("tools", {})
         objdump = tools.get("objdump", {})
+        ghidra = tools.get("ghidra", {})
         die = tools.get("die", {})
-        fallback_run = {
-            "tool_name": self.name,
-            "tool_version": "1.0.0",
-            "status": "succeeded",
-            "exit_code": 0,
-            "reason": None,
-            "raw_output": None,
-        }
+        functions: list[object] = facts.get("functions") or []
+        if not functions and _facts_source_failed(ghidra) and _facts_source_failed(objdump):
+            # Both function sources failed and nothing normalized: this is the
+            # "twenty minutes for zero functions" silent wrong answer. Fail the
+            # run loudly so the job retry policy can act on it instead of
+            # publishing an empty analysis that looks successful.
+            raise ToolExecutionError(
+                "binary-facts produced no functions: "
+                f"ghidra={_facts_failure_reason(ghidra)} "
+                f"objdump={_facts_failure_reason(objdump)}",
+                kind=FailureKind.TOOL,
+                retryable=True,
+                details={
+                    "failure_code": "facts_sources_failed",
+                    "ghidra_status": str(ghidra.get("status") or "unknown"),
+                    "objdump_status": str(objdump.get("status") or "unknown"),
+                    "ghidra_reason": _facts_failure_reason(ghidra),
+                    "objdump_reason": _facts_failure_reason(objdump),
+                },
+            )
         return ToolContribution(
-            run=cast(BinaryToolRun, objdump.get("run", fallback_run)),
-            functions=tuple(cast(list[BinaryFunction], facts.get("functions", []))),
+            # The objdump entry carries the facts run's real status -- a failed
+            # source must surface as a failed run row, never a synthetic
+            # success. It stays the primary run row because objdump is also
+            # where imports come from.
+            run=_facts_tool_run("objdump", objdump),
+            functions=tuple(cast(list[BinaryFunction], functions)),
             instructions=tuple(cast(list[BinaryInstruction], facts.get("instructions", []))),
             basic_blocks=tuple(cast(list[BinaryBasicBlock], facts.get("basic_blocks", []))),
             xrefs=tuple(cast(list[BinaryXref], facts.get("xrefs", []))),
@@ -224,6 +245,31 @@ class BinaryFactsAdapter:
             packer=cast(str | None, die.get("packer")),
             packed=cast(bool | None, die.get("packed")),
         )
+
+
+def _facts_source_failed(source: Mapping[str, object]) -> bool:
+    return source.get("status") == "failed"
+
+
+def _facts_failure_reason(source: Mapping[str, object]) -> str:
+    return str(source.get("reason") or source.get("status") or "failed")
+
+
+def _facts_tool_run(name: str, source: Mapping[str, object]) -> BinaryToolRun:
+    """The run row exactly as the in-image tool reported it."""
+
+    status = str(source.get("status") or "succeeded")
+    return cast(
+        BinaryToolRun,
+        {
+            "tool_name": str(source.get("tool_name") or name),
+            "tool_version": source.get("tool_version"),
+            "status": status,
+            "exit_code": source.get("exit_code"),
+            "reason": source.get("reason"),
+            "raw_output": source.get("raw_output"),
+        },
+    )
 
 
 def _raise_sandbox_failure(tool_name: str, result: SandboxResult) -> NoReturn:
@@ -273,19 +319,20 @@ class CommandResult:
     exit_code: int
     stdout: bytes
     stderr: bytes
+    # True when the combined output hit the budget and the tool was stopped:
+    # what was streamed before the cut is still real output and callers parse
+    # it, marking their run row truncated instead of discarding everything.
+    truncated: bool = False
 
 
 @dataclass(slots=True)
 class _OutputBudget:
     remaining: int
     lock: asyncio.Lock
+    exhausted: bool = False
 
 
 class ToolUnavailable(FileNotFoundError):
-    pass
-
-
-class ToolOutputLimitExceeded(RuntimeError):
     pass
 
 
@@ -354,11 +401,13 @@ class BoundedCommandRunner:
                 await _terminate(process)
                 communicate.cancel()
                 raise ToolCancelled("tool execution was cancelled")
-            try:
-                stdout, stderr, exit_code = await communicate
-            except ToolOutputLimitExceeded:
-                await _terminate(process)
-                raise
+            stdout, stderr, exit_code, truncated = await communicate
+            if truncated:
+                # The process was already terminated after the budget cut; the
+                # bytes streamed before it are kept and parsed by the caller.
+                return CommandResult(
+                    exit_code=exit_code, stdout=stdout, stderr=stderr, truncated=True
+                )
             return CommandResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
         except asyncio.CancelledError:
             await _terminate(process)
@@ -397,8 +446,6 @@ class ObjdumpAdapter:
             raise
         except TimeoutError:
             return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
-        except ToolOutputLimitExceeded:
-            return ToolContribution(run=failed_tool_run(self.name, "output_limit_exceeded", None))
         version = _first_line(version_result.stdout)
         raw = bounded_tool_text(
             b"\n--- disassembly ---\n"
@@ -419,7 +466,14 @@ class ObjdumpAdapter:
         functions = _merge_functions(functions, symbol_functions, limits.max_functions)
         imports = parse_objdump_imports(private.stdout.decode("utf-8", "replace"), metadata)
         basic_blocks, xrefs = derive_objdump_control_flow(instructions, limits)
-        if any(code != 0 for code in exit_codes):
+        if disassembly.truncated:
+            # Partial disassembly over a huge .text: the bytes that streamed
+            # before the budget cut parsed into real functions, so the run
+            # stays usable. The terminated process's signal exit is expected,
+            # not a tool failure -- the reason names the truncation instead.
+            status = StaticToolStatus.SUCCEEDED
+            reason = "output_truncated"
+        elif any(code != 0 for code in exit_codes):
             status = StaticToolStatus.FAILED
             reason = "one_or_more_objdump_views_failed"
         else:
@@ -491,8 +545,6 @@ class DetectItEasyAdapter:
             raise
         except TimeoutError:
             return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
-        except ToolOutputLimitExceeded:
-            return ToolContribution(run=failed_tool_run(self.name, "output_limit_exceeded", None))
         output = bounded_tool_text(
             result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
         )
@@ -545,10 +597,6 @@ class UpxAdapter:
             raise
         except TimeoutError:
             return UpxOutcome(run=failed_tool_run(self.name, "test_timeout", None), packed=False)
-        except ToolOutputLimitExceeded:
-            return UpxOutcome(
-                run=failed_tool_run(self.name, "test_output_limit_exceeded", None), packed=False
-            )
         tested_text = bounded_tool_text(
             tested.stdout + b"\n" + tested.stderr, limits.max_raw_output_chars
         )
@@ -577,13 +625,6 @@ class UpxAdapter:
         except TimeoutError:
             return UpxOutcome(
                 run=failed_tool_run(self.name, "unpack_timeout", tested_text), packed=True
-            )
-        except ToolOutputLimitExceeded:
-            return UpxOutcome(
-                run=failed_tool_run(
-                    self.name, "unpack_output_limit_exceeded", tested_text
-                ),
-                packed=True,
             )
         raw = bounded_tool_text(
             tested.stdout
@@ -671,10 +712,6 @@ class GhidraHeadlessAdapter:
                 raise
             except TimeoutError:
                 return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
-            except ToolOutputLimitExceeded:
-                return ToolContribution(
-                    run=failed_tool_run(self.name, "output_limit_exceeded", None)
-                )
             raw = bounded_tool_text(
                 result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
             )
@@ -779,10 +816,6 @@ class AngrAdapter:
                 raise
             except TimeoutError:
                 return ToolContribution(run=failed_tool_run(self.name, "timeout", None))
-            except ToolOutputLimitExceeded:
-                return ToolContribution(
-                    run=failed_tool_run(self.name, "output_limit_exceeded", None)
-                )
             raw = bounded_tool_text(
                 result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars,
             )
@@ -1362,17 +1395,21 @@ def failed_tool_run(
 
 async def _bounded_communicate(
     process: asyncio.subprocess.Process, max_output_bytes: int
-) -> tuple[bytes, bytes, int]:
+) -> tuple[bytes, bytes, int, bool]:
     if process.stdout is None or process.stderr is None:
         raise RuntimeError("tool pipes were not configured")
     budget = _OutputBudget(remaining=max_output_bytes, lock=asyncio.Lock())
     stdout_task = asyncio.create_task(_read_bounded(process.stdout, budget))
     stderr_task = asyncio.create_task(_read_bounded(process.stderr, budget))
     try:
-        stdout, stderr, exit_code = await asyncio.gather(stdout_task, stderr_task, process.wait())
-        if len(stdout) + len(stderr) > max_output_bytes:
-            raise ToolOutputLimitExceeded("combined tool output exceeds the configured limit")
-        return stdout, stderr, exit_code
+        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+        truncated = budget.exhausted
+        if truncated:
+            # The reader stopped at the budget: the process is blocked writing
+            # into a full pipe and must be stopped before wait() can return.
+            await _terminate(process)
+        exit_code = await process.wait()
+        return stdout, stderr, exit_code, truncated
     finally:
         if not stdout_task.done():
             stdout_task.cancel()
@@ -1384,12 +1421,21 @@ async def _bounded_communicate(
 async def _read_bounded(reader: asyncio.StreamReader, budget: _OutputBudget) -> bytes:
     chunks: list[bytes] = []
     while True:
+        if budget.exhausted:
+            return b"".join(chunks)
         chunk = await reader.read(65_536)
         if not chunk:
             return b"".join(chunks)
         async with budget.lock:
             if len(chunk) > budget.remaining:
-                raise ToolOutputLimitExceeded("tool output exceeds the configured limit")
+                # Keep the slice that fits and stop: the caller decides whether
+                # a partial view is usable (a truncated disassembly still
+                # parses into the functions it managed to emit).
+                kept = chunk[: budget.remaining] if budget.remaining > 0 else b""
+                budget.exhausted = True
+                budget.remaining = 0
+                chunks.append(kept)
+                return b"".join(chunks)
             budget.remaining -= len(chunk)
         chunks.append(chunk)
 

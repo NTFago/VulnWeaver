@@ -45,7 +45,6 @@ from vulnweaver_binary_analysis.tools import (
     CommandRunner,
     ToolCancelled,
     ToolExecutionError,
-    ToolOutputLimitExceeded,
     ToolUnavailable,
     UpxAdapter,
     UpxUnpacker,
@@ -180,11 +179,6 @@ class De4dotUnpacker:
             raise
         except TimeoutError:
             return UnpackAttempt(self.name, failed_tool_run(self.name, "timeout", None))
-        except ToolOutputLimitExceeded:
-            return UnpackAttempt(
-                self.name,
-                failed_tool_run(self.name, "output_limit_exceeded", None),
-            )
         raw = bounded_tool_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
         candidate = _find_candidate(workdir, exclude=sample, prefer="-cleaned")
         if result.exit_code != 0 or candidate is None:
@@ -249,11 +243,6 @@ class UnipackerUnpacker:
             raise
         except TimeoutError:
             return UnpackAttempt(self.name, failed_tool_run(self.name, "timeout", None))
-        except ToolOutputLimitExceeded:
-            return UnpackAttempt(
-                self.name,
-                failed_tool_run(self.name, "output_limit_exceeded", None),
-            )
         raw = bounded_tool_text(result.stdout + b"\n" + result.stderr, limits.max_raw_output_chars)
         candidate = _find_candidate(dumps) or _find_candidate(workdir, exclude=sample)
         if result.exit_code != 0 or candidate is None:

@@ -100,11 +100,17 @@ async def _prepare(args: argparse.Namespace) -> tuple[Path, BinaryMetadata, Bina
     Path(os.environ["HOME"]).mkdir(parents=True, exist_ok=True)
     cancellation = asyncio.Event()
 
-    limits = BinaryAnalysisLimits(
-        max_functions=args.max_functions,
-        max_instructions=args.max_instructions,
-        max_pseudocode_functions=args.max_pseudocode_functions,
-    )
+    limit_kwargs: dict[str, object] = {
+        "max_functions": args.max_functions,
+        "max_instructions": args.max_instructions,
+        "max_pseudocode_functions": args.max_pseudocode_functions,
+    }
+    # The deployment setting rides in through the facts profile; without it
+    # the image's built-in default applies. Ghidra over a large real-world
+    # .text legitimately needs tens of minutes.
+    if args.command_timeout:
+        limit_kwargs["command_timeout_seconds"] = float(args.command_timeout)
+    limits = BinaryAnalysisLimits(**limit_kwargs)
     # The Ghidra adapter creates scratch space next to the target, so the
     # analysis copy must live on the writable /work tmpfs, not /input.
     target = workdir / "target"
@@ -245,6 +251,7 @@ async def main() -> int:
     parser.add_argument("--max-pseudocode-functions", type=int, default=20_000)
     parser.add_argument("--target-addresses", default="")
     parser.add_argument("--angr-enabled", action="store_true")
+    parser.add_argument("--command-timeout", type=int, default=None)
     args = parser.parse_args()
     if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
         print("binary limits must be positive", file=sys.stderr)
