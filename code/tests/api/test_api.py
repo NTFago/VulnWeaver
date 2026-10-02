@@ -1539,3 +1539,147 @@ def test_restart_uses_persisted_registered_account(client: TestClient) -> None:
             },
         )
         assert login.status_code == 200
+
+
+def test_task_activity_returns_liveness_snapshot_with_event_cursor(
+    client: TestClient,
+) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf, key="project:activity")
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "artifact:activity"},
+        content=b"PK\x03\x04harmless",
+    )
+    version_id = upload.json()["versions"][0]["id"]
+    task_id = _create_task(client, csrf, project["id"], version_id, "task:activity")
+
+    async def seed() -> None:
+        database = client.app.state.database
+        assert isinstance(database, Database)
+        async with database.transaction() as repositories:
+            await repositories.jobs.create_without_outbox(
+                Job(
+                    schema_version="1.0.0",
+                    id="job:activity-audit",
+                    task_id=task_id,
+                    kind=JobKind.SEMANTIC_AUDIT,
+                    tool={"name": "audit-agent", "version": "1.0.0", "image_digest": None},
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    status=JobStatus.RUNNING,
+                    idempotency_key="job:activity-audit",
+                    resource_budget=cast(ResourceBudget, _budget()),
+                    retry_policy={
+                        "max_attempts": 2,
+                        "backoff_seconds": 1.0,
+                        "retryable_failure_kinds": [],
+                    },
+                    attempt=1,
+                    lease={
+                        "owner": "worker-1",
+                        "fencing_token": "fence-1",
+                        "expires_at": "2026-09-11T00:10:00Z",
+                        "heartbeat_interval_seconds": 30,
+                    },
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:05:00Z",
+                )
+            )
+            await repositories.agent_runs.save_progress(
+                AgentRun(
+                    schema_version="1.0.0",
+                    id="agent-run:activity",
+                    task_id=task_id,
+                    status=RunStatus.RUNNING,
+                    model="audit-model",
+                    prompt_hash="sha256:" + "c" * 64,
+                    input_refs=["cas://sha256/" + "a" * 64],
+                    decisions=[
+                        {
+                            "sequence": 0,
+                            "decision": "plan_accepted",
+                            "reason": "start with imports",
+                            "created_at": "2026-09-11T00:01:00Z",
+                        },
+                        {
+                            "sequence": 1,
+                            "decision": "step_executed",
+                            "reason": "step inspect-1 via code-function-read@1.0.0",
+                            "created_at": "2026-09-11T00:04:00Z",
+                        },
+                    ],
+                    token_usage={"input_tokens": 11, "output_tokens": 7},
+                    failure=None,
+                    created_at="2026-09-11T00:00:00Z",
+                    updated_at="2026-09-11T00:05:00Z",
+                )
+            )
+            await repositories.checkpoints.append(
+                task_id,
+                "semantic-audit-agent",
+                {
+                    "schema_version": "1.0.0",
+                    "job_id": "job:activity-audit",
+                    "run_id": "agent-run:activity",
+                    "completed": False,
+                    "rounds": 3,
+                    "journal": [
+                        {"round": 1, "kind": "step", "summary": "读取 src/app.py"},
+                        {"round": 2, "kind": "step", "summary": "追踪 helper 调用链"},
+                        {"round": 3, "kind": "plan_rejected", "summary": "计划缺少锚点"},
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "model_label": "audit-model",
+                },
+                created_at=datetime(2026, 9, 11, 0, 6, tzinfo=UTC),
+            )
+
+    asyncio.run(seed())
+
+    payload = client.get(f"/api/tasks/{task_id}/activity").json()
+    assert payload["task_id"] == task_id
+    assert payload["task_status"] in {"created", "pending", "validating", "running"}
+    job = payload["jobs"][0]
+    assert job["id"] == "job:activity-audit"
+    assert job["kind"] == "semantic_audit"
+    assert job["status"] == "running"
+    assert job["tool_name"] == "audit-agent"
+    assert job["lease_expires_at"] == "2026-09-11T00:10:00Z"
+    run = payload["runs"][0]
+    assert run["decision_count"] == 2
+    assert run["latest_decision"] == "step_executed"
+    assert run["latest_decision_at"] == "2026-09-11T00:04:00Z"
+    assert run["input_tokens"] == 11
+    assert run["output_tokens"] == 7
+    progress = payload["audit_progress"]
+    assert progress is not None
+    assert progress["rounds"] == 3
+    assert progress["completed"] is False
+    assert progress["model_label"] == "audit-model"
+    assert progress["input_tokens"] == 100
+    assert progress["journal_tail"][-1]["summary"] == "计划缺少锚点"
+    # The task row was touched at creation (now), after the seeded 2026-09-11 rows.
+    assert payload["latest_activity_at"] == payload["task_updated_at"]
+    assert any(event["event_type"] == "task.requested" for event in payload["events"])
+
+    last_sequence = max(event["sequence"] for event in payload["events"])
+    tail = client.get(f"/api/tasks/{task_id}/activity?after={last_sequence}").json()
+    assert tail["events"] == []
+    assert tail["runs"][0]["latest_decision"] == "step_executed"
+
+
+def test_task_activity_rejects_invalid_event_cursor(client: TestClient) -> None:
+    csrf = _login_and_change_password(client)
+    project = _create_project(client, csrf, key="project:activity-cursor")
+    upload = client.post(
+        f"/api/projects/{project['id']}/artifacts?kind=source_archive",
+        headers={"X-CSRF-Token": csrf, "Idempotency-Key": "artifact:activity-cursor"},
+        content=b"PK\x03\x04harmless",
+    )
+    version_id = upload.json()["versions"][0]["id"]
+    task_id = _create_task(client, csrf, project["id"], version_id, "task:activity-cursor")
+
+    response = client.get(f"/api/tasks/{task_id}/activity?after=-2")
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "invalid_event_cursor"

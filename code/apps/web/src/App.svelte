@@ -15,6 +15,7 @@
     Task,
   } from "@vulnweaver/contracts";
   import { api, ApiError, taskEventSocket, type FindingEvidenceDetail, type ProductSettings, type Session } from "./lib/api";
+  import { activityChanged, type TaskActivity } from "./lib/activity";
   import { sampleArtifacts } from "./lib/project";
   import { mergeEvents, type AuditTrail } from "./lib/audit-trail";
   import AuthView from "./lib/views/AuthView.svelte";
@@ -54,6 +55,7 @@
   let agentRuns: AgentRun[] = [];
   let trail: AuditTrail | null = null;
   let trailError = "";
+  let activity: TaskActivity | null = null;
   let streamState: "connecting" | "connected" | "reconnecting" = "connecting";
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -369,14 +371,46 @@
     selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
     selectedFunctionId = null; pairNeighborhood = null; jobs = []; findings = []; events = [];
     pairFunctions = []; agentRuns = []; trail = null; trailError = ""; reportVersionIds = [];
+    activity = null;
     try {
       await refreshTaskData(task.id, generation);
       if (!isCurrentTask(task.id, generation)) return;
       connectEvents(task.id, 0, generation);
-      // AgentRun can change without a task event; refresh the read model periodically.
-      pollTimer = setInterval(() => scheduleRefresh(task.id, generation), 4000);
+      // 快慢两层轮询：activity 每 3 秒拿一次轻量心跳/决策/轮次快照；只有
+      // activity 显示结构变化（作业状态、运行状态、任务状态）时才全量刷新
+      // 读模型，长任务期间的重负载请求从"每 4 秒 10+"降到偶发。
+      pollTimer = setInterval(() => void pollActivity(task.id, generation), 3000);
       done();
     } catch (caught) { if (isCurrentTask(task.id, generation)) { busy = false; showError(caught); } }
+  }
+
+  function lastEventSequence(): number {
+    return events.reduce((max, event) => Math.max(max, event.sequence), -1);
+  }
+
+  async function pollActivity(taskId: string, generation: number): Promise<void> {
+    if (!isCurrentTask(taskId, generation) || refreshInFlight !== null) return;
+    let next: TaskActivity;
+    try {
+      next = await api.activity(taskId, lastEventSequence());
+    } catch {
+      // 轮询失败保持静默：WS 通道与全量刷新会暴露真正的错误。
+      return;
+    }
+    if (!isCurrentTask(taskId, generation)) return;
+    const changed = activityChanged(activity, next);
+    activity = next;
+    if (selectedTask && (selectedTask.status !== next.task_status || selectedTask.updated_at !== next.task_updated_at)) {
+      selectedTask = {
+        ...selectedTask,
+        status: next.task_status as Task["status"],
+        updated_at: next.task_updated_at,
+      };
+    }
+    if (next.events.length > 0) {
+      events = mergeEvents(events, next.events as QueueEvent[]);
+    }
+    if (changed || next.events.length > 0) scheduleRefresh(taskId, generation);
   }
 
   function disconnectEvents(): void {
@@ -409,7 +443,7 @@
   async function loadTaskData(taskId: string, generation: number): Promise<void> {
     const sequence = ++refreshSequence;
     const [taskData, jobData, findingData, eventData, functions, runs, trailResult] = await Promise.all([
-      api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId), api.pair(taskId), api.agentRuns(taskId),
+      api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId, lastEventSequence()), api.pair(taskId), api.agentRuns(taskId),
       api.auditTrail(taskId).then(value => ({ value, error: "" })).catch(() => ({ value: null, error: "审计关联信息暂不可用" })),
     ]);
     if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
@@ -426,7 +460,7 @@
 
   function connectEvents(taskId: string, attempt = 0, generation = socketGeneration): void {
     if (!isCurrentTask(taskId, generation)) return;
-    const after = events.reduce((max, event) => Math.max(max, event.sequence), -1);
+    const after = lastEventSequence();
     const current = taskEventSocket(taskId, after); socket = current;
     current.onopen = () => { if (isCurrentTask(taskId, generation)) { streamState = "connected"; attempt = 0; } };
     current.onmessage = message => {
@@ -647,6 +681,7 @@
           {agentRuns}
           {trail}
           {trailError}
+          {activity}
           {streamState}
           {pairFunctions}
           {pairNeighborhood}
