@@ -823,6 +823,10 @@ class BinaryImportExecutor:
         material = {
             "tool": {"name": tool["name"], "version": tool["version"]},
             "sandboxed_facts": self._sandbox is not None and self._sandbox_image_digest is not None,
+            # The sandbox image IS the toolchain: rebuilding it (new Ghidra, new
+            # limits) changes what the same input yields, so a cached result
+            # from the previous image must never match.
+            "sandbox_image_digest": self._sandbox_image_digest,
             "angr_enabled": bool(
                 self._angr_adapter.enabled if self._angr_adapter is not None else False
             ),
