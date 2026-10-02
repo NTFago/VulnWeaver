@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
+import logging
 import shutil
 import tempfile
 from collections.abc import Mapping
@@ -42,10 +44,18 @@ from vulnweaver_source_analysis.archive import (
     SourceImportError,
 )
 from vulnweaver_source_analysis.indexer import SourceIndexer
+from vulnweaver_source_analysis.languages import LANGUAGES
 from vulnweaver_source_analysis.static_executor import (
     StaticAnalysisExecutor,
     StaticAnalysisScheduler,
 )
+
+LOGGER = logging.getLogger("vulnweaver.source_analysis")
+
+# Semantics of the published index document. Bump when indexing output changes
+# in a way the language registry alone does not capture; a change invalidates
+# every previously cached index for reuse purposes.
+_INDEX_SCHEMA_VERSION = "1.0.0"
 
 
 class SourceImportExecutionError(RuntimeError):
@@ -170,6 +180,9 @@ class SourceImportExecutor:
         object_ref = job["input_refs"][0]
         if cancellation.is_set():
             return _cancelled_result(job["id"])
+        reused = await self._try_reuse(job, parent_version_id, object_ref)
+        if reused is not None:
+            return reused
 
         scratch = Path(tempfile.mkdtemp(prefix="vulnweaver-source-", dir=self._scratch_root))
         try:
@@ -254,6 +267,103 @@ class SourceImportExecutor:
         with self._store.open(object_ref) as archive_stream:
             return self._importer.extract(archive_stream, extracted)
 
+    def _reuse_key(self) -> str:
+        """Fingerprint of everything that changes the published index bytes.
+
+        The index is deterministic for a given tree, but the tree a given
+        archive yields depends on the importer identity and on which languages
+        the indexer knows — a registry that gained a language indexes
+        differently, so it must not adopt an older index. Bump
+        ``_INDEX_SCHEMA_VERSION`` whenever indexing semantics change without a
+        registry diff.
+        """
+
+        tool_default = ToolIdentity(name="source-import", version="1.0.0", image_digest=None)
+        material = {
+            "languages": sorted(LANGUAGES),
+            "index_schema": _INDEX_SCHEMA_VERSION,
+            "importer": {"name": tool_default["name"], "version": tool_default["version"]},
+        }
+        encoded = json.dumps(material, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    async def _try_reuse(
+        self, job: Job, parent_version_id: str, object_ref: str
+    ) -> WorkerResult | None:
+        """Adopt a prior index for the same archive instead of re-indexing.
+
+        Extracting and tree-sitter indexing a repository is pure CPU work whose
+        output is deterministic; a later task over the same upload in the same
+        project adopts the earlier index version and only schedules its own
+        static-analysis Jobs (their findings are per-task evidence). PAIR rows
+        are keyed to the shared input version, so they carry over untouched.
+        Any lookup trouble degrades to the ordinary full import.
+        """
+
+        fingerprint = self._reuse_key()
+        try:
+            async with self._database.transaction() as repositories:
+                task = await repositories.tasks.get(job["task_id"])
+                candidates = await repositories.jobs.find_reusable_imports(
+                    object_ref,
+                    tool_name=_tool_identity(job)["name"],
+                    project_id=task["project_id"],
+                )
+                for candidate in candidates:
+                    for version_id in candidate.produced_artifact_version_ids:
+                        version = await repositories.artifacts.get_version(version_id)
+                        config = version.get("generation_config") or {}
+                        if not (
+                            config.get("format") == "source-import-result"
+                            and config.get("reuse_key") == fingerprint
+                        ):
+                            continue
+                        result = self._load_index_document(version["object_ref"])
+                        if result is None:
+                            continue
+                        if self._static_scheduler is not None:
+                            await self._static_scheduler.schedule(job, result, version_id)
+                        LOGGER.info(
+                            "source_import_reused_prior_index",
+                            extra={
+                                "job_id": job["id"],
+                                "reused_job_id": candidate.job_id,
+                                "reused_task_id": candidate.task_id,
+                                "reused_version_id": version_id,
+                            },
+                        )
+                        return WorkerResult(
+                            schema_version=SchemaVersion.VALUE_1_0_0,
+                            job_id=job["id"],
+                            status=JobStatus.SUCCEEDED,
+                            produced_artifact_version_ids=[version_id],
+                            evidence_ids=[],
+                            failure=None,
+                        )
+        except (PersistenceError, SQLAlchemyError, AttributeError) as error:
+            # Reuse is an optimization, never a precondition: a database outage
+            # — or an executor wired without one (the cancellation-only paths)
+            # — degrades to the ordinary full import.
+            LOGGER.warning(
+                "source_import_reuse_lookup_failed", extra={"error": str(error)[:200]}
+            )
+        return None
+
+    def _load_index_document(self, object_ref: str) -> SourceImportResult | None:
+        """Read a prior index document; unreadable bytes mean "do not reuse"."""
+
+        try:
+            with self._store.open(object_ref) as stream:
+                document = json.loads(stream.read().decode("utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as error:
+            LOGGER.warning(
+                "source_import_reuse_document_unreadable", extra={"error": str(error)[:200]}
+            )
+            return None
+        if not isinstance(document, dict):
+            return None
+        return cast(SourceImportResult, document)
+
     async def _publish_index(
         self,
         job: Job,
@@ -295,6 +405,7 @@ class SourceImportExecutor:
                         "format": "source-import-result",
                         "files": file_count,
                         "schema_version": str(result["schema_version"]),
+                        "reuse_key": self._reuse_key(),
                     },
                     created_at=job["created_at"],
                 )
