@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import type {
     ArtifactVersion,
     Finding,
@@ -35,6 +36,7 @@
   } from "../i18n";
   import ReportCenter from "../components/ReportCenter.svelte";
   import { pseudocodeText } from "../report-view";
+  import { formatAgo, formatElapsedSince, heartbeat, heartbeatLabels, journalLines, type TaskActivity } from "../activity";
   import TaskPipeline from "../components/TaskPipeline.svelte";
   import FindingStats from "../components/FindingStats.svelte";
   import AgentPanel from "../components/AgentPanel.svelte";
@@ -58,6 +60,7 @@
   export let agentRuns: AgentRun[] = [];
   export let trail: AuditTrail | null = null;
   export let trailError = "";
+  export let activity: TaskActivity | null = null;
   export let streamState: "connecting" | "connected" | "reconnecting" = "connecting";
   export let pairFunctions: PairFunction[] = [];
   export let pairNeighborhood: Record<string, unknown> | null = null;
@@ -152,6 +155,22 @@
     ? `已生成 ${reportVersionIds.length} 份`
     : activeReportJobs.length > 0 ? "生成中" : "未生成";
 
+  // 后台活性：每秒本地计时，把 activity 快照里的时间戳翻译成"X 秒前"。
+  let nowMs = Date.now();
+  onMount(() => {
+    const tick = setInterval(() => (nowMs = Date.now()), 1000);
+    return () => clearInterval(tick);
+  });
+
+  $: taskActive = !["completed", "failed", "cancelled"].includes(task.status);
+  $: pulse = heartbeat(activity?.latest_activity_at ?? null, nowMs);
+  $: runningActivityJobs = (activity?.jobs ?? []).filter((job) => job.status === "running").length;
+  $: latestRun = (activity?.runs ?? [])
+    .filter((run) => run.latest_decision_at !== null)
+    .sort((a, b) => (a.latest_decision_at! < b.latest_decision_at! ? 1 : -1))[0] ?? null;
+  $: latestDecisionAgo = latestRun ? formatAgo(heartbeat(latestRun.latest_decision_at, nowMs).secondsAgo) : null;
+  $: journalText = journalLines(activity?.audit_progress?.journal_tail ?? [], 3);
+
 
   async function submitReview(): Promise<void> {
     if (!reviewRationale.trim()) return;
@@ -176,6 +195,17 @@
     <span class="task-kicker">{taskType === "source" ? "源码" : taskType === "binary" ? "二进制" : "混合样本"}审计工作台</span><h1>审计任务 · {task.id.split(":").pop()?.slice(0, 8)}</h1>
     {#if task.failure}<p class="task-failure">失败原因：{taskFailureContext()}</p>{/if}
     <p>结果：{displayResult(task.result)} · 更新于 {formatDate(task.updated_at)}</p>
+    {#if taskActive}
+      <div class="liveness" data-level={pulse.level} aria-live="polite">
+        <i class="pulse" aria-hidden="true"></i>
+        <b>{heartbeatLabels[pulse.level]}</b>
+        {#if pulse.secondsAgo !== null}<span>最近活动 {formatAgo(pulse.secondsAgo)}</span>{/if}
+        <span>已用时 {formatElapsedSince(task.created_at, nowMs)}</span>
+        {#if runningActivityJobs > 0}<span>{runningActivityJobs} 个作业运行中</span>{/if}
+        {#if activity?.audit_progress && !activity.audit_progress.completed}<span>审计调查第 {activity.audit_progress.rounds} 轮</span>{/if}
+        {#if latestRun?.latest_decision_reason}<span>最新动作：{latestRun.latest_decision_reason}（{latestDecisionAgo}）</span>{/if}
+      </div>
+    {/if}
   </div>
   <div class="task-actions">
     <span class={`status-badge large ${task.result === "partial" ? "waiting_permission" : task.status}`}><i></i>{task.result === "partial" ? "部分完成" : taskStatusLabels[task.status]}</span>
@@ -260,7 +290,7 @@
       </header>
       <div class="task-panel-body" role="region" aria-label="任务详情面板内容">
       {#if rightTab === "agents"}
-        <AgentPanel {agentRuns} {trail} {trailError} />
+        <AgentPanel {agentRuns} {trail} {trailError} {activity} />
       {:else if rightTab === "events"}
         <p class="stream-state">{streamState === "connected" ? "事件连接正常" : streamState === "reconnecting" ? "连接恢复中；已接收事件保留，任务数据定时刷新" : "正在连接事件流"}</p><EventStream {events} {jobs} />
       {:else}
@@ -322,6 +352,41 @@
 <ReportCenter {jobs} versions={reportVersionIds.flatMap(id => artifactVersions.has(id) ? [artifactVersions.get(id)!] : [])} {busy} onGenerate={onCreateReport} />
 
 <style>
+  .liveness {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
+    margin-top: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-s);
+    background: var(--panel-2);
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .liveness b { color: var(--text-1); font-size: 12px; }
+  .liveness span { font-variant-numeric: tabular-nums; }
+  .liveness .pulse {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--muted);
+  }
+  .liveness[data-level="live"] { border-color: rgba(201, 244, 59, 0.4); }
+  .liveness[data-level="live"] .pulse { background: var(--accent); animation: liveness-pulse 1.6s var(--ease) infinite; }
+  .liveness[data-level="live"] b { color: var(--accent); }
+  .liveness[data-level="stale"] { border-color: rgba(255, 176, 32, 0.4); }
+  .liveness[data-level="stale"] .pulse { background: var(--warn); animation: liveness-pulse 3.2s var(--ease) infinite; }
+  .liveness[data-level="stale"] b { color: var(--warn); }
+  .liveness[data-level="idle"] { border-color: rgba(255, 122, 89, 0.45); }
+  .liveness[data-level="idle"] .pulse { background: #ff7a59; }
+  .liveness[data-level="idle"] b { color: #ff9d8e; }
+  @keyframes liveness-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201, 244, 59, 0.4); }
+    50% { box-shadow: 0 0 0 4px rgba(201, 244, 59, 0.07); }
+  }
   .binary-summary { margin: 0 0 24px; font-size: 13px; }
   .binary-summary summary { cursor: pointer; color: var(--text-2); }
   .binary-summary p, .binary-summary small { color: var(--muted); font-size: 12px; }

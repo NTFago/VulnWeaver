@@ -289,6 +289,10 @@ tasks = Table(
     UniqueConstraint("project_id", "idempotency_key", name="uq_tasks_project_idempotency"),
 )
 
+# Project task lists filter by project and order by creation; the FK does not
+# create an index by itself.
+Index("ix_tasks_project_created", tasks.c.project_id, tasks.c.created_at.desc())
+
 evidence = Table(
     "evidence",
     metadata,

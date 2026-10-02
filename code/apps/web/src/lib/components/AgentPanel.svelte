@@ -2,6 +2,7 @@
   import type { AgentRun } from "@vulnweaver/contracts";
   import { formatDuration } from "../format";
   import { failureCodeText, runStatusLabels } from "../i18n";
+  import { journalLines, type TaskActivity } from "../activity";
   import { agentRoles, displayRuns, sharedReferences, type AuditTrail } from "../audit-trail";
 
   /** 多智能体协作面板：按运行记录渲染角色卡片，运行中的智能体带脉冲状态。 */
@@ -9,14 +10,37 @@
   export let agentRuns: AgentRun[] = [];
   export let trail: AuditTrail | null = null;
   export let trailError = "";
+  export let activity: TaskActivity | null = null;
   $: runs = displayRuns(agentRuns, trail);
 
   $: runningCount = agentRuns.filter((run) => run.status === "running").length;
+  $: progress = activity?.audit_progress ?? null;
+  $: journalText = journalLines(progress?.journal_tail ?? [], 3);
 </script>
 
 <div class="agent-cards">
   <p class="trail-note">按实际运行记录展示分工。共享引用仅说明输入输出衔接，不代表自动确认漏洞。</p>
   {#if trailError}<p class="failure">{trailError}；原始运行记录仍可查看。</p>{/if}
+  {#if progress && !progress.completed}
+    <section class="investigation" aria-label="审计调查进度">
+      <header>
+        <span class="badge accent"><i class="pulse-dot" aria-hidden="true"></i>调查进行中</span>
+        <b>第 {progress.rounds} 轮</b>
+        {#if progress.model_label}<small>{progress.model_label}</small>{/if}
+        {#if progress.input_tokens !== null}<small>本轮累计输入 {progress.input_tokens} · 输出 {progress.output_tokens ?? 0}</small>{/if}
+      </header>
+      {#if journalText.length}
+        <ul>
+          {#each journalText as line}
+            <li><span>{line}</span></li>
+          {/each}
+        </ul>
+        <small class="trail-note">调查日志由审计循环每轮写入：刚做过的步骤与被拒绝的计划都在这里。</small>
+      {:else}
+        <small class="trail-note">下一轮结束后，这里会出现调查日志（最近的步骤与计划结论）。</small>
+      {/if}
+    </section>
+  {/if}
   {#if agentRuns.length === 0}
     <div class="compact-empty">模型分析运行后，此处将展示各智能体的决策轨迹。</div>
   {:else}
@@ -55,6 +79,20 @@
 </div>
 
 <style>
+  .investigation {
+    display: grid;
+    gap: 8px;
+    padding: 12px 14px;
+    border: 1px solid rgba(201, 244, 59, 0.35);
+    border-radius: var(--radius-s);
+    background: #252d1b;
+  }
+  .investigation header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .investigation b { font-size: 13px; }
+  .investigation small { color: var(--muted); font-size: 11.5px; }
+  .investigation ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+  .investigation li { font-size: 12px; color: var(--text-2); line-height: 1.55; overflow-wrap: anywhere; }
+  .investigation li::before { content: "·"; color: var(--accent); margin-right: 8px; }
   .trail-note { font-size: 12px; color: var(--muted); margin: 0; }
   .trace-ref { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
   summary { font-size: 12px; color: var(--text-2); cursor: pointer; }

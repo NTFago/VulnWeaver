@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
-from sqlalchemy import Column, RowMapping, Table, delete, func, select, text, update
+from sqlalchemy import Column, RowMapping, Table, delete, func, literal_column, select, text, update
 from sqlalchemy import exists as exists_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -656,6 +657,18 @@ class JobRepository:
         ).mappings().one_or_none()
         return _worker_result_from_row(row) if row is not None else None
 
+    async def get_results(self, job_ids: Sequence[str]) -> dict[str, WorkerResult | None]:
+        """Resolve many job results in one round trip (task views used to N+1)."""
+        if not job_ids:
+            return {}
+        rows = (
+            await self._connection.execute(
+                select(job_results).where(job_results.c.job_id.in_(job_ids))
+            )
+        ).mappings().all()
+        stored = {row["job_id"]: _worker_result_from_row(row) for row in rows}
+        return {job_id: stored.get(job_id) for job_id in job_ids}
+
     async def cancel_for_task(self, task_id: str) -> int:
         result = await self._connection.execute(
             update(jobs)
@@ -1043,6 +1056,23 @@ class JobRepository:
 _NON_TERMINAL_RUN_STATUSES = (RunStatus.CREATED.value, RunStatus.RUNNING.value)
 
 
+class AgentRunSummary(TypedDict):
+    """Bounded per-run projection for activity polling (no decisions payload)."""
+
+    id: str
+    status: str
+    model: str
+    token_usage: JsonObject
+    duration_ms: int | None
+    failure: JsonObject | None
+    created_at: str
+    updated_at: str
+    decision_count: int
+    latest_decision: str | None
+    latest_decision_reason: str | None
+    latest_decision_at: str | None
+
+
 class AgentRunRepository:
     def __init__(self, connection: AsyncConnection) -> None:
         self._connection = connection
@@ -1124,6 +1154,36 @@ class AgentRunRepository:
         ).mappings()
         return [_agent_run_from_row(row) for row in rows]
 
+    async def summarize_for_task(self, task_id: str) -> list[AgentRunSummary]:
+        """Lightweight run read model for liveness polling.
+
+        ``decisions`` grows every round of a long investigation, so the summary
+        keeps only the count and the newest decision; the decisions JSONB is
+        never transferred.  All values are extracted inside PostgreSQL.
+        """
+        decisions = agent_runs.c.decisions
+        rows = (
+            await self._connection.execute(
+                select(
+                    agent_runs.c.id,
+                    agent_runs.c.status,
+                    agent_runs.c.model,
+                    agent_runs.c.token_usage,
+                    agent_runs.c.duration_ms,
+                    agent_runs.c.failure,
+                    agent_runs.c.created_at,
+                    agent_runs.c.updated_at,
+                    func.coalesce(func.jsonb_array_length(decisions), 0).label("decision_count"),
+                    func.jsonb_path_query_first(
+                        decisions, literal_column("'$[last]'")
+                    ).label("latest_decision"),
+                )
+                .where(agent_runs.c.task_id == task_id)
+                .order_by(agent_runs.c.created_at, agent_runs.c.id)
+            )
+        ).mappings()
+        return [_agent_run_summary_from_row(row) for row in rows]
+
 
 class CheckpointRepository:
     def __init__(self, connection: AsyncConnection) -> None:
@@ -1171,6 +1231,25 @@ class CheckpointRepository:
                 await self._connection.execute(
                     select(orchestration_checkpoints)
                     .where(orchestration_checkpoints.c.task_id == task_id)
+                    .order_by(orchestration_checkpoints.c.sequence.desc())
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _checkpoint_from_row(row) if row is not None else None
+
+    async def latest_for_node(self, task_id: str, node: str) -> StoredCheckpoint | None:
+        """Latest checkpoint of one orchestration node (e.g. the audit agent)."""
+        row = (
+            (
+                await self._connection.execute(
+                    select(orchestration_checkpoints)
+                    .where(
+                        orchestration_checkpoints.c.task_id == task_id,
+                        orchestration_checkpoints.c.node == node,
+                    )
                     .order_by(orchestration_checkpoints.c.sequence.desc())
                     .limit(1)
                 )
@@ -2388,6 +2467,28 @@ def _agent_run_values(run: AgentRun, fingerprint: str) -> dict[str, object]:
         "created_at": _parse_datetime(run["created_at"]),
         "updated_at": _parse_datetime(run["updated_at"]),
     }
+
+
+def _agent_run_summary_from_row(row: RowMapping) -> AgentRunSummary:
+    raw_latest = cast("dict[str, object] | None", row["latest_decision"])
+    latest_decision = raw_latest if isinstance(raw_latest, dict) else None
+    reason = latest_decision.get("reason") if latest_decision is not None else None
+    occurred = latest_decision.get("created_at") if latest_decision is not None else None
+    decision = latest_decision.get("decision") if latest_decision is not None else None
+    return AgentRunSummary(
+        id=row["id"],
+        status=row["status"],
+        model=row["model"],
+        token_usage=row["token_usage"],
+        duration_ms=row["duration_ms"],
+        failure=row["failure"],
+        created_at=_format_datetime(row["created_at"]),
+        updated_at=_format_datetime(row["updated_at"]),
+        decision_count=int(row["decision_count"]),
+        latest_decision=str(decision) if isinstance(decision, str) and decision else None,
+        latest_decision_reason=str(reason) if isinstance(reason, str) and reason else None,
+        latest_decision_at=str(occurred) if isinstance(occurred, str) and occurred else None,
+    )
 
 
 def _agent_run_from_row(row: RowMapping) -> AgentRun:

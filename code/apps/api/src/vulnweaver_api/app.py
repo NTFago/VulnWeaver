@@ -51,6 +51,7 @@ from vulnweaver_contracts import (
 )
 from vulnweaver_domain import normalize_idempotency_key
 from vulnweaver_orchestrator import FindingReviewGate
+from vulnweaver_orchestrator.code_audit import AUDIT_CHECKPOINT_NODE
 from vulnweaver_persistence import (
     Database,
     DatabaseSettings,
@@ -75,6 +76,9 @@ from vulnweaver_api.errors import ApiInputError, install_error_handlers
 from vulnweaver_api.events import task_cancelled, task_requested
 from vulnweaver_api.middleware import CorrelationIdMiddleware, RequestBodyLimitMiddleware
 from vulnweaver_api.schemas import (
+    ActivityAuditProgress,
+    ActivityJobSummary,
+    ActivityRunSummary,
     ArtifactDetail,
     AuditTrailResponse,
     CreateAnnotationBody,
@@ -96,6 +100,7 @@ from vulnweaver_api.schemas import (
     RegistrationRequest,
     ReviewFindingBody,
     SessionResponse,
+    TaskActivityResponse,
 )
 from vulnweaver_api.settings import ApiSettings
 from vulnweaver_api.uploads import remove_stale_uploads, stage_upload
@@ -795,6 +800,107 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             await repositories.tasks.get(task_id)
             return await repositories.agent_runs.list_for_task(task_id)
 
+    @app.get("/api/tasks/{task_id}/activity", response_model=TaskActivityResponse)
+    async def task_activity(
+        task_id: str,
+        after: int = -1,
+        _: Annotated[str, Depends(require_account)] = "",
+    ) -> TaskActivityResponse:
+        """One lightweight liveness snapshot for the task view's periodic poll.
+
+        Long investigations have no task-status transitions for long stretches,
+        so this endpoint surfaces the signals that do change while work runs:
+        job lease heartbeats, the newest agent decision per run, and the audit
+        loop's checkpoint (rounds and investigation journal).  Events ride the
+        same response so one request replaces the previous polling storm.
+        """
+        if after < -1:
+            raise ApiInputError(
+                "invalid_event_cursor", "event cursor must be >= -1", "after"
+            )
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            jobs = await repositories.jobs.list_for_task(task_id)
+            runs = await repositories.agent_runs.summarize_for_task(task_id)
+            checkpoint = await repositories.checkpoints.latest_for_node(
+                task_id, AUDIT_CHECKPOINT_NODE
+            )
+            events = await repositories.task_events.list_after(task_id, after_sequence=after)
+
+        job_summaries = [
+            ActivityJobSummary.model_validate(
+                {
+                    "id": job["id"],
+                    "kind": str(job["kind"]),
+                    "tool_name": (job.get("tool") or {}).get("name"),
+                    "status": str(job["status"]),
+                    "attempt": job["attempt"],
+                    "created_at": job["created_at"],
+                    "updated_at": job["updated_at"],
+                    "lease_expires_at": (job.get("lease") or {}).get("expires_at"),
+                    "failure_code": (job.get("failure") or {}).get("code"),
+                }
+            )
+            for job in jobs
+        ]
+        run_summaries = [
+            ActivityRunSummary.model_validate(
+                {
+                    "id": run["id"],
+                    "status": str(run["status"]),
+                    "model": run["model"],
+                    "created_at": run["created_at"],
+                    "updated_at": run["updated_at"],
+                    "duration_ms": run["duration_ms"],
+                    "decision_count": run["decision_count"],
+                    "latest_decision": run["latest_decision"],
+                    "latest_decision_reason": run["latest_decision_reason"],
+                    "latest_decision_at": run["latest_decision_at"],
+                    "input_tokens": run["token_usage"].get("input_tokens"),
+                    "output_tokens": run["token_usage"].get("output_tokens"),
+                    "failure_code": (run["failure"] or {}).get("code"),
+                }
+            )
+            for run in runs
+        ]
+        progress: ActivityAuditProgress | None = None
+        if checkpoint is not None:
+            state = checkpoint.state
+            usage_raw = state.get("usage")
+            usage_dict = cast("dict[str, object]", usage_raw) if isinstance(usage_raw, dict) else {}
+            journal_raw = state.get("journal")
+            journal = cast("list[object]", journal_raw) if isinstance(journal_raw, list) else []
+            progress = ActivityAuditProgress.model_validate(
+                {
+                    "rounds": state.get("rounds", 0),
+                    "completed": bool(state.get("completed", False)),
+                    "model_label": state.get("model_label"),
+                    "updated_at": _format_api_datetime(checkpoint.created_at),
+                    "input_tokens": usage_dict.get("input_tokens"),
+                    "output_tokens": usage_dict.get("output_tokens"),
+                    "journal_tail": cast(
+                        "list[dict[str, Any]]", journal[-5:]
+                    ),
+                }
+            )
+        timestamps = [task["updated_at"], *(job["updated_at"] for job in jobs)]
+        timestamps.extend(run.updated_at for run in run_summaries)
+        if checkpoint is not None:
+            timestamps.append(_format_api_datetime(checkpoint.created_at))
+        return TaskActivityResponse.model_validate(
+            {
+                "schema_version": "1.0.0",
+                "task_id": task_id,
+                "task_status": str(task["status"]),
+                "task_updated_at": task["updated_at"],
+                "jobs": job_summaries,
+                "runs": run_summaries,
+                "audit_progress": progress,
+                "latest_activity_at": max(timestamps) if timestamps else None,
+                "events": [dict(event) for event in events],
+            }
+        )
+
     @app.get("/api/tasks/{task_id}/audit-trail", response_model=AuditTrailResponse)
     async def task_audit_trail(
         task_id: str, _: Annotated[str, Depends(require_account)]
@@ -805,7 +911,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             await repositories.tasks.get(task_id)
             runs = await repositories.agent_runs.list_for_task(task_id)
             jobs = await repositories.jobs.list_for_task(task_id)
-            results = {job["id"]: await repositories.jobs.get_result(job["id"]) for job in jobs}
+            results = await repositories.jobs.get_results([job["id"] for job in jobs])
         return AuditTrailResponse.model_validate(
             build_audit_trail(task_id=task_id, runs=runs, jobs=jobs, results=results)
         )
@@ -1170,7 +1276,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                         return
                     await websocket.send_json(event)
                     cursor = max(cursor, event["sequence"])
-                done, _ = await asyncio.wait({disconnected}, timeout=0.5)
+                done, _ = await asyncio.wait({disconnected}, timeout=1.0)
                 if done:
                     await disconnected
                     return
@@ -1474,3 +1580,7 @@ def _count_values(values: Iterable[str]) -> dict[str, int]:
     for value in values:
         counts[value] = counts.get(value, 0) + 1
     return counts
+
+
+def _format_api_datetime(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")

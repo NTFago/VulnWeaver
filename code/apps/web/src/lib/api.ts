@@ -1,4 +1,5 @@
 import type { AuditTrail } from "./audit-trail";
+import type { TaskActivity } from "./activity";
 import type {
   Artifact,
   ArtifactKind,
@@ -288,6 +289,8 @@ export const api = {
     }),
   jobs: (taskId: string) => request<Job[]>(`/api/tasks/${taskId}/jobs`),
   jobResult: (jobId: string) => request<WorkerResult | { job_id: string; status: string; result: null }>(`/api/jobs/${jobId}/result`),
+  activity: (taskId: string, after: number) =>
+    request<TaskActivity>(`/api/tasks/${taskId}/activity?after=${after}`),
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),

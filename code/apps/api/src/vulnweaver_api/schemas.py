@@ -398,3 +398,62 @@ class AuditTrailResponse(StrictModel):
     task_id: str
     agent_runs: list[AuditTrailAgentRun]
     binary_analysis_jobs: list[BinaryAnalysisJobSummary]
+
+
+class ActivityJobSummary(StrictModel):
+    """Lightweight job row for liveness polling (no arguments/payloads)."""
+
+    id: str
+    kind: str
+    tool_name: str | None
+    status: str
+    attempt: int
+    created_at: str
+    updated_at: str
+    lease_expires_at: str | None
+    failure_code: str | None
+
+
+class ActivityRunSummary(StrictModel):
+    """Bounded run row: decision count plus the newest decision only."""
+
+    id: str
+    status: str
+    model: str
+    created_at: str
+    updated_at: str
+    duration_ms: int | None
+    decision_count: int
+    latest_decision: str | None
+    latest_decision_reason: str | None
+    latest_decision_at: str | None
+    input_tokens: int | None
+    output_tokens: int | None
+    failure_code: str | None
+
+
+class ActivityAuditProgress(StrictModel):
+    """Latest audit-loop checkpoint: where the investigation stands right now."""
+
+    rounds: int
+    completed: bool
+    model_label: str | None
+    updated_at: str
+    input_tokens: int | None
+    output_tokens: int | None
+    journal_tail: list[dict[str, Any]]
+
+
+class TaskActivityResponse(StrictModel):
+    """One lightweight liveness snapshot; the task view polls this instead of
+    refetching every read model."""
+
+    schema_version: Literal["1.0.0"]
+    task_id: str
+    task_status: str
+    task_updated_at: str
+    jobs: list[ActivityJobSummary]
+    runs: list[ActivityRunSummary]
+    audit_progress: ActivityAuditProgress | None
+    latest_activity_at: str | None
+    events: list[dict[str, Any]]
