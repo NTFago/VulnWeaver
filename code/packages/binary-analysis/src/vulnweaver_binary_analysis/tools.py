@@ -1402,12 +1402,17 @@ async def _bounded_communicate(
     stdout_task = asyncio.create_task(_read_bounded(process.stdout, budget))
     stderr_task = asyncio.create_task(_read_bounded(process.stderr, budget))
     try:
-        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
+        # Wait for the first reader to finish, not both: on a budget cut the
+        # process stays alive blocked writing into the full pipe, so the other
+        # pipe would never reach EOF and awaiting both deadlocks. Terminate
+        # first; the surviving reader then sees EOF immediately.
+        await asyncio.wait(
+            {stdout_task, stderr_task}, return_when=asyncio.FIRST_COMPLETED
+        )
         truncated = budget.exhausted
         if truncated:
-            # The reader stopped at the budget: the process is blocked writing
-            # into a full pipe and must be stopped before wait() can return.
             await _terminate(process)
+        stdout, stderr = await asyncio.gather(stdout_task, stderr_task)
         exit_code = await process.wait()
         return stdout, stderr, exit_code, truncated
     finally:
