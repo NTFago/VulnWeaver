@@ -8,6 +8,8 @@
 # Idempotent: dist/ is wiped and rebuilt from src/ on every run.
 # All execution of the sample happens inside throwaway containers; the
 # injection check only appends `echo` (harmless, per AGENTS.md §6).
+# Behaviour assertions cover all three registered findings:
+#   CWE-78 run_report (original), CWE-134 export_report, CWE-121 log_event.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -54,16 +56,31 @@ docker_sh "$PACK_IMAGE" '
     echo "[verify] packed-command-injection: UPX signature present, x86-64 ELF OK"
 '
 
-# 4) Behaviour checks inside throwaway containers: normal run prints the
-#    report line; injected `echo` marker proves the CWE-78 sink is reachable.
+# 4) Behaviour checks inside throwaway containers.
 docker_sh "$CC_IMAGE" '
     set -eu
     chmod +x dist/packed-command-injection
-    out=$(dist/packed-command-injection team-a)
-    echo "$out" | grep -q "audit-report-for team-a"
-    injected=$(dist/packed-command-injection "team-a; echo INJECTED_MARKER_OK")
-    echo "$injected" | grep -q "INJECTED_MARKER_OK"
-    echo "[verify] command injection path reachable (echo payload only)"
+    # CWE-78 (original): normal run prints the report line; injected `echo`
+    # marker proves the command injection sink is reachable.
+    dist/packed-command-injection team-a | grep -q "audit-report-for team-a"
+    dist/packed-command-injection "team-a; echo INJECTED_MARKER_OK" | grep -q "INJECTED_MARKER_OK"
+    echo "[verify] CWE-78 command injection path reachable (echo payload only)"
+    # CWE-134: a plain name prints; "%p" specifiers echo stack hex locally.
+    dist/packed-command-injection --export plain-name | grep -q "export-report: plain-name"
+    dist/packed-command-injection --export "%p %p %p" | grep -Eq "0x[0-9a-f]{4,}"
+    echo "[verify] CWE-134 format string leak confirmed (stack hex echoed locally)"
+    # CWE-121: short log line is fine; oversized message smashes the stack.
+    dist/packed-command-injection --log backup-done | grep -q "log: backup-done"
+    payload=$(printf "A%.0s" $(seq 1 300))
+    set +e
+    dist/packed-command-injection --log "$payload" >/dev/null 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 139 ]; then
+        echo "[verify] expected SIGSEGV (139) for oversized log message, got exit $status" >&2
+        exit 1
+    fi
+    echo "[verify] CWE-121 stack overflow trigger crashed as expected (exit 139)"
 '
 
 # 5) SHA-256 manifest.

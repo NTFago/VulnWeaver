@@ -7,6 +7,8 @@
 #
 # Idempotent: dist/ is wiped and rebuilt from src/ on every run.
 # All execution of the sample happens inside throwaway containers.
+# Behaviour assertions cover all three registered findings:
+#   CWE-120 save_note (original), CWE-122 list_notes, CWE-476 delete_note.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -34,7 +36,7 @@ cd "$SCRIPT_DIR"
 rm -rf dist
 mkdir -p dist
 
-# 1) x86-64 ELF; non-PIE + no stack protector keeps the crash deterministic
+# 1) x86-64 ELF; non-PIE + no stack protector keeps the crashes deterministic
 #    and the decompiled pseudocode classic for the demo.
 docker_sh "$CC_IMAGE" '
     set -eu
@@ -57,12 +59,12 @@ docker_sh "$PACK_IMAGE" '
     echo "[verify] packed-overflow-note: UPX signature present, x86-64 ELF OK"
 '
 
-# 4) Behaviour checks inside throwaway containers: benign input exits cleanly,
-#    oversized input crashes with SIGSEGV (deterministic CWE-120 trigger).
+# 4) Behaviour checks inside throwaway containers.
 docker_sh "$CC_IMAGE" '
     set -eu
     chmod +x dist/packed-overflow-note
-    dist/packed-overflow-note hello >/dev/null
+    # CWE-120 (original): benign note saves; oversized note segfaults.
+    dist/packed-overflow-note hello | grep -q "note saved: hello"
     payload=$(printf "A%.0s" $(seq 1 200))
     set +e
     dist/packed-overflow-note "$payload" >/dev/null 2>&1
@@ -72,7 +74,30 @@ docker_sh "$CC_IMAGE" '
         echo "[verify] expected crash for oversized note, got exit $status" >&2
         exit 1
     fi
-    echo "[verify] overflow trigger crashed as expected (exit $status)"
+    echo "[verify] CWE-120 stack overflow trigger crashed as expected (exit $status)"
+    # CWE-122: benign filter lists fine; oversized filter corrupts the heap chunk.
+    dist/packed-overflow-note --list pending | grep -q "listing: pending"
+    heap_payload=$(printf "A%.0s" $(seq 1 1400))
+    set +e
+    dist/packed-overflow-note --list "$heap_payload" >/dev/null 2>&1
+    status=$?
+    set -e
+    if [ "$status" -lt 128 ]; then
+        echo "[verify] expected crash for oversized list filter, got exit $status" >&2
+        exit 1
+    fi
+    echo "[verify] CWE-122 heap overflow trigger crashed as expected (exit $status)"
+    # CWE-476: registered id deletes fine; unknown id dereferences NULL (SIGSEGV).
+    dist/packed-overflow-note --delete 1 | grep -q "deleted note: 1"
+    set +e
+    dist/packed-overflow-note --delete 42 >/dev/null 2>&1
+    status=$?
+    set -e
+    if [ "$status" -ne 139 ]; then
+        echo "[verify] expected SIGSEGV (139) for unknown note id, got exit $status" >&2
+        exit 1
+    fi
+    echo "[verify] CWE-476 NULL dereference trigger crashed as expected (exit 139)"
 '
 
 # 5) SHA-256 manifest for the distributed artifact.
