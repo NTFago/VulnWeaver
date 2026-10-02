@@ -288,8 +288,10 @@ def _raise_sandbox_failure(tool_name: str, result: SandboxResult) -> NoReturn:
         raise ToolCancelled(f"{tool_name} sandbox execution cancelled")
     if code == "sandbox.timeout":
         kind, retryable = FailureKind.TIMEOUT, True
-    elif code == "sandbox.transport_failed":
-        kind, retryable = FailureKind.DEPENDENCY, True
+    elif code in {"sandbox.transport_failed", "sandbox.runtime_failed"}:
+        # Both are operational: the runner was unreachable, or Docker failed
+        # to start the sandbox (e.g. a stale image digest after a rebuild).
+        kind, retryable = FailureKind.ENVIRONMENT, True
     else:
         kind = FailureKind.TOOL if code == "sandbox.tool_failed" else FailureKind.INTERNAL
         retryable = bool(failure.get("retryable"))

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryAnalysisLimits, BinaryFactsAdapter, inspect_binary
 from vulnweaver_binary_analysis.tools import ToolCancelled, ToolExecutionError
@@ -235,13 +236,20 @@ def test_binary_facts_adapter_maps_timeout_to_retryable_failure(tmp_path: Path) 
     assert sandbox.request["arguments"]["command_timeout_seconds"] == 1234
 
 
-def test_binary_facts_adapter_maps_transport_failure_to_dependency(tmp_path: Path) -> None:
-    """A client-side transport failure stays retryable under the job policy."""
+@pytest.mark.parametrize(
+    ("code", "expected_kind"),
+    [
+        ("sandbox.transport_failed", FailureKind.ENVIRONMENT),
+        ("sandbox.runtime_failed", FailureKind.ENVIRONMENT),
+    ],
+)
+def test_binary_facts_adapter_maps_operational_failures_to_retryable_environment(
+    tmp_path: Path, code: str, expected_kind: FailureKind
+) -> None:
+    """Runner-unreachable and container-start failures retry under the policy."""
 
     store = LocalContentAddressedStore(tmp_path / "cas")
-    result = _failed_result(
-        SandboxStatus.FAILED, "sandbox.transport_failed", retryable=True
-    )
+    result = _failed_result(SandboxStatus.FAILED, code, retryable=True)
     target = tmp_path / "sample"
     target.write_bytes(elf64_sample())
     pinned = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
@@ -260,10 +268,10 @@ def test_binary_facts_adapter_maps_transport_failure_to_dependency(tmp_path: Pat
             )
         )
     except ToolExecutionError as error:
-        assert error.kind is FailureKind.DEPENDENCY
+        assert error.kind is expected_kind
         assert error.retryable is True
     else:
-        raise AssertionError("a transport failure was treated as success")
+        raise AssertionError(f"{code} was treated as success")
 
 
 def test_binary_facts_adapter_maps_runner_cancellation_to_tool_cancelled(
