@@ -124,3 +124,19 @@ def test_agent_loop_deadlines_default_to_none() -> None:
     config = resolve_deployment_config({}, {})
     assert config.audit_deadline_seconds is None
     assert config.reverse_planning_deadline_seconds is None
+
+
+def test_binary_command_timeout_resolves_settings_then_environment() -> None:
+    from_settings = resolve_deployment_config(
+        {"binary_command_timeout_seconds": 3600},
+        {"BINARY_COMMAND_TIMEOUT_SECONDS": "60"},
+    )
+    assert from_settings.binary_command_timeout_seconds == 3600
+
+    from_env = resolve_deployment_config(
+        {"binary_command_timeout_seconds": 0},
+        {"BINARY_COMMAND_TIMEOUT_SECONDS": "900"},
+    )
+    assert from_env.binary_command_timeout_seconds == 900
+
+    assert resolve_deployment_config({}, {}).binary_command_timeout_seconds is None

@@ -235,6 +235,7 @@ def test_product_settings_accept_and_reject_tool_image_digests(
             },
             "sandbox_runner_timeout_seconds": 45,
             "fuzz_runner_timeout_seconds": 900,
+            "binary_command_timeout_seconds": 3600,
             "angr_enabled": True,
         },
     )
@@ -249,6 +250,7 @@ def test_product_settings_accept_and_reject_tool_image_digests(
     assert body["sandbox_budgets"]["afl"]["timeout_seconds"] == 90
     assert body["fuzz_budgets"]["max_executions"] == 500
     assert body["sandbox_runner_timeout_seconds"] == 45
+    assert body["binary_command_timeout_seconds"] == 3600
     assert body["angr_enabled"] is True
     assert client.get("/api/settings").json() == body
 
@@ -271,6 +273,12 @@ def test_product_settings_accept_and_reject_tool_image_digests(
         },
     )
     assert out_of_range.status_code == 422
+    timeout_out_of_range = client.put(
+        "/api/settings",
+        headers={"X-CSRF-Token": csrf},
+        json={**body, "binary_command_timeout_seconds": 86_401},
+    )
+    assert timeout_out_of_range.status_code == 422
 
 
 def test_product_settings_store_provider_registry_and_merge_keys(

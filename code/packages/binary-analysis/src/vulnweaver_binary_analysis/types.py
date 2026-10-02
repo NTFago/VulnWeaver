@@ -40,9 +40,11 @@ class BinaryAnalysisLimits:
     min_string_chars: int = 4
     max_tool_output_bytes: int = 8 * 1024 * 1024
     max_raw_output_chars: int = 1024 * 1024
-    # Aligned with the sandbox request ceiling: one Ghidra/de4dot run over a
-    # real-world binary legitimately needs more than the old 180-second cap.
-    command_timeout_seconds: float = 600.0
+    # Aligned with the sandbox request ceiling: one Ghidra/de4dot/facts pass
+    # over a real-world binary legitimately needs more than the old 180-second
+    # cap, and an 18 MB PE measured ~8 minutes warm — cold container starts
+    # oversubscribe 600 seconds, so the operational stop now sits at 30 minutes.
+    command_timeout_seconds: float = 1800.0
 
     def __post_init__(self) -> None:
         positive = {

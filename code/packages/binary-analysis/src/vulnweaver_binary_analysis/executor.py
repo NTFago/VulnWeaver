@@ -203,10 +203,12 @@ class BinaryImportExecutor:
         planning_hook: BinaryPlanningHook | None = None,
         critical_logic_hook: CriticalLogicHook | None = None,
         readable_pseudocode_hook: ReadablePseudocodeHook | None = None,
+        limits: BinaryAnalysisLimits | None = None,
     ) -> BinaryImportExecutor:
         return cls(
             database,
             store,
+            limits=limits,
             adapters=(
                 DetectItEasyAdapter(die_executable),
                 ObjdumpAdapter(objdump_executable),
@@ -252,6 +254,20 @@ class BinaryImportExecutor:
             )
         except ToolCancelled:
             return _cancelled_result(job["id"])
+        except ToolExecutionError as error:
+            # Sandbox failures carry their own failure kind: a runner timeout or
+            # transport error is retryable under the job retry policy, while a
+            # tool exit is not. Without this mapping the error used to escape to
+            # the worker's generic internal handler, which never retried.
+            failure_code = str(error.details.get("failure_code") or "tool_execution_failed")
+            return _failed_result(
+                job["id"],
+                code=f"binary_import.{failure_code.replace('.', '_')}",
+                kind=error.kind,
+                message=str(error),
+                retryable=error.retryable,
+                details=error.details,
+            )
         except ArtifactStoreError as error:
             return _failed_result(
                 job["id"],

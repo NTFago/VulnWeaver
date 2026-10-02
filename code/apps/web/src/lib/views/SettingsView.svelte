@@ -611,6 +611,10 @@
               <label>Sandbox Runner 超时（秒）<input bind:value={productSettings.sandbox_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
               <label>Fuzz Runner 超时（秒）<input bind:value={productSettings.fuzz_runner_timeout_seconds} type="number" min="0" max="86400" /></label>
             </div>
+            <div class="field-grid">
+              <label>二进制分析命令超时（秒，0 = 默认 30 分钟）<input bind:value={productSettings.binary_command_timeout_seconds} type="number" min="0" max="86400" /></label>
+            </div>
+            <p class="muted">二进制分析命令超时是单次沙箱分析（函数事实提取 / 脱壳）的运行上限：大体积真实样本冷启动可能超过 10 分钟，超时后任务会自动重试一次。</p>
             <label class="check"><input type="checkbox" checked={productSettings.angr_enabled ?? false} on:change={(e) => (productSettings.angr_enabled = e.currentTarget.checked ? true : null)} /><span><b>启用 angr 符号执行</b><small>仅在二进制沙箱可用时实际生效；关闭时回退环境变量。</small></span></label>
           </section>
         {/if}

@@ -1421,6 +1421,7 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         agent_loop_budgets=parsed.agent_loop_budgets,
         sandbox_runner_timeout_seconds=parsed.sandbox_runner_timeout_seconds,
         fuzz_runner_timeout_seconds=parsed.fuzz_runner_timeout_seconds,
+        binary_command_timeout_seconds=parsed.binary_command_timeout_seconds,
         angr_enabled=parsed.angr_enabled,
         model_tiers=parsed.model_tiers,
         tier_api_keys_configured=configured,

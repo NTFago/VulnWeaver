@@ -82,6 +82,9 @@ class ResolvedDeploymentConfig:
     # which is how every other resolved knob behaves.
     audit_deadline_seconds: int | None = None
     reverse_planning_deadline_seconds: int | None = None
+    # Per-command stop for one binary-analysis sandbox run (Ghidra/facts pass).
+    # None keeps the binary-analysis package's built-in default.
+    binary_command_timeout_seconds: int | None = None
 
 
 def resolve_deployment_config(
@@ -214,6 +217,11 @@ def resolve_deployment_config(
             _int_from_settings(settings_agent_loop.get("reverse_planning_deadline_seconds")),
             _int_from_env(environ.get("AGENT_REVERSE_PLANNING_DEADLINE_SECONDS")),
             base.reverse_planning_deadline_seconds,
+        ),
+        binary_command_timeout_seconds=_first(
+            _int_from_settings(settings.get("binary_command_timeout_seconds")),
+            _int_from_env(environ.get("BINARY_COMMAND_TIMEOUT_SECONDS")),
+            base.binary_command_timeout_seconds,
         ),
         angr_enabled=_first(
             angr_settings if isinstance(angr_settings, bool) else None,

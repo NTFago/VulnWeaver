@@ -78,6 +78,7 @@ export interface ProductSettings {
   agent_loop_budgets: AgentLoopBudgets;
   sandbox_runner_timeout_seconds: number;
   fuzz_runner_timeout_seconds: number;
+  binary_command_timeout_seconds: number;
   angr_enabled: boolean | null;
   model_tiers: Record<"planning" | "audit" | "review" | "report", TierModelConfig>;
   tier_api_keys_configured: Record<string, boolean>;

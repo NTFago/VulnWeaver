@@ -194,6 +194,8 @@ class ProductSettingsBody(StrictModel):
     agent_loop_budgets: AgentLoopBudgetsModel = Field(default_factory=AgentLoopBudgetsModel)
     sandbox_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     fuzz_runner_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
+    # 0 keeps the binary-analysis package's built-in command timeout.
+    binary_command_timeout_seconds: int = Field(default=0, ge=0, le=86_400)
     angr_enabled: bool | None = None
     model_tiers: ModelTiersModel = Field(default_factory=ModelTiersModel)
     tier_api_keys: TierApiKeysModel = Field(default_factory=TierApiKeysModel)
@@ -226,6 +228,7 @@ class ProductSettingsResponse(StrictModel):
     agent_loop_budgets: AgentLoopBudgetsModel
     sandbox_runner_timeout_seconds: int
     fuzz_runner_timeout_seconds: int
+    binary_command_timeout_seconds: int
     angr_enabled: bool | None
     model_tiers: ModelTiersModel
     tier_api_keys_configured: dict[str, bool]

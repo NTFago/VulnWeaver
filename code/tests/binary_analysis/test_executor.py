@@ -30,6 +30,7 @@ from vulnweaver_contracts import (
     BinaryToolRun,
     BinaryXref,
     BinaryXrefType,
+    FailureKind,
     Job,
     JobKind,
     JobStatus,
@@ -527,6 +528,153 @@ def test_binary_executor_hands_the_sandbox_the_unpacked_image(
             assert unpacked_ref != packed.object_ref
             assert sandbox.requests, "the sandbox was never asked to analyse anything"
             assert [request["input_ref"] for request in sandbox.requests] == [unpacked_ref]
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class _TimingOutSandbox:
+    """Answer every run with the runner's structured timeout failure."""
+
+    async def run(
+        self, request: Mapping[str, object], cancellation: asyncio.Event
+    ) -> SandboxResult:
+        del cancellation
+        return SandboxResult(
+            schema_version="1.0.0",
+            request_id=str(request["id"]),
+            status=SandboxStatus.TIMED_OUT,
+            exit_code=None,
+            stdout_ref=None,
+            stderr_ref=None,
+            outputs=[],
+            resource_usage={
+                "duration_millis": 1,
+                "cpu_millis": 1,
+                "memory_bytes": 1,
+                "output_bytes": 0,
+            },
+            failure={
+                "code": "sandbox.timeout",
+                "kind": "timeout",
+                "message": "sandbox tool exceeded its time limit",
+                "retryable": True,
+                "details": {},
+            },
+        )
+
+
+def test_binary_executor_maps_sandbox_timeout_to_retryable_failure(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    """A sandbox timeout must not die as an internal worker error.
+
+    The old path let ToolExecutionError escape to the worker's generic
+    handler, which recorded an unretryable internal failure even though the
+    job retry policy explicitly allows timeout kinds.
+    """
+
+    async def scenario() -> None:
+        suffix = uuid.uuid4().hex[:12]
+        project_id = f"project:sandbox-timeout-{suffix}"
+        artifact_id = f"artifact:sandbox-timeout-{suffix}"
+        version_id = f"artifact-version:sandbox-timeout-{suffix}"
+        task_id = f"task:sandbox-timeout-{suffix}"
+        job_id = f"job:sandbox-timeout-{suffix}"
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "store")
+        stored = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
+        project = Project(
+            schema_version="1.0.0",
+            id=project_id,
+            name="Sandbox timeout project",
+            input_scope=["local://authorized-binary"],
+            permission_mode="request_permission",
+            exploit_validation_enabled=False,
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+        )
+        artifact = Artifact(
+            schema_version="1.0.0",
+            id=artifact_id,
+            project_id=project_id,
+            kind=ArtifactKind.ELF,
+            current_version_id=version_id,
+            created_at=TIMESTAMP,
+        )
+        version = ArtifactVersion(
+            schema_version="1.0.0",
+            id=version_id,
+            artifact_id=artifact_id,
+            digest=stored.digest,
+            object_ref=stored.object_ref,
+            generation_config={},
+            created_at=TIMESTAMP,
+        )
+        task = Task(
+            schema_version="1.0.0",
+            id=task_id,
+            project_id=project_id,
+            artifact_version_ids=[version_id],
+            status=TaskStatus.CREATED,
+            result=None,
+            failure=None,
+            idempotency_key=f"task-sandbox-timeout-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        job = Job(
+            schema_version="1.0.0",
+            id=job_id,
+            task_id=task_id,
+            kind=JobKind.IMPORT,
+            tool={
+                "name": "binary-import",
+                "version": "1.0.0",
+                "image_digest": "sha256:" + "a" * 64,
+            },
+            arguments={"artifact_version_id": version_id},
+            input_refs=[stored.object_ref],
+            status=JobStatus.RUNNING,
+            idempotency_key=f"job-sandbox-timeout-{suffix}",
+            resource_budget=cast(ResourceBudget, budget()),
+            retry_policy={
+                "max_attempts": 2,
+                "backoff_seconds": 1.0,
+                "retryable_failure_kinds": ["timeout"],
+            },
+            attempt=1,
+            lease=None,
+            failure=None,
+            created_at=TIMESTAMP,
+            updated_at=TIMESTAMP,
+        )
+        try:
+            async with database.transaction() as repositories:
+                await repositories.projects.add(project)
+                await repositories.artifacts.add(artifact)
+                await repositories.artifacts.add_version(version)
+                await repositories.tasks.create(task)
+            executor = BinaryImportExecutor(
+                database,
+                store,
+                adapters=(),
+                unpackers=(UpxCliUnpacker(upx=_UnpacksUpx()),),
+                pair_importer=BinaryPairImporter(database),
+                scratch_root=tmp_path,
+                sandbox=_TimingOutSandbox(),
+                sandbox_image_digest="sha256:" + "a" * 64,
+            )
+            result = await executor.execute(job, asyncio.Event())
+            assert result["status"] is JobStatus.FAILED
+            failure = result["failure"]
+            assert failure is not None
+            assert failure["code"] == "binary_import.sandbox_timeout"
+            assert failure["kind"] is FailureKind.TIMEOUT
+            assert failure["retryable"] is True
+            assert failure["details"]["failure_code"] == "sandbox.timeout"
         finally:
             await database.dispose()
 

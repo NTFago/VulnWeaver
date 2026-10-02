@@ -174,7 +174,9 @@ async def _run() -> None:
         config = resolve_deployment_config(settings, os.environ)
         binary_sandbox, binary_digest = await _binary_sandbox(config)
         symbolic_runner = (
-            _SymbolicVerificationRunner(database, store, binary_sandbox, binary_digest)
+            _SymbolicVerificationRunner(
+                database, store, binary_sandbox, binary_digest, limits=_binary_limits(config)
+            )
             if binary_sandbox is not None and binary_digest is not None
             else None
         )
@@ -229,6 +231,7 @@ async def _run() -> None:
         angr_enabled = (
             _environment_bool("ANGR_ENABLED", False) if angr_setting is None else angr_setting
         )
+        binary_limits = _binary_limits(config)
         binary_executor = BinaryImportExecutor.configured(
             database,
             store,
@@ -251,6 +254,7 @@ async def _run() -> None:
             readable_pseudocode_hook=(
                 ModelReadablePseudocodeHook(model_gateway) if model_gateway is not None else None
             ),
+            limits=binary_limits,
         )
         executor = AnalysisJobExecutor(
             source_executor,
@@ -939,16 +943,45 @@ class _CrashEvidenceSink:
             )
 
 
+def _binary_limits(config: ResolvedDeploymentConfig) -> BinaryAnalysisLimits:
+    """Binary-analysis limits with the settings-configured command timeout.
+
+    The product setting (``binary_command_timeout_seconds``) is the operational
+    stop for one sandbox facts/unpack pass; zero or absent keeps the package's
+    built-in default.
+    """
+
+    if config.binary_command_timeout_seconds:
+        return BinaryAnalysisLimits(
+            command_timeout_seconds=float(config.binary_command_timeout_seconds)
+        )
+    return BinaryAnalysisLimits()
+
+
+def _binary_client_timeout(config: ResolvedDeploymentConfig) -> float:
+    """HTTP client stop for binary sandbox runs.
+
+    The client must outlive the longest sandbox run it waits on: one facts
+    pass can hold the request for the whole command timeout, plus margin for
+    container teardown and output transfer. A shorter client timeout aborts
+    the request mid-run while the runner keeps executing.
+    """
+
+    runner_timeout = config.sandbox_runner_timeout_seconds or float(
+        os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")
+    )
+    return max(
+        runner_timeout, _binary_limits(config).command_timeout_seconds + 60.0
+    )
+
+
 async def _binary_sandbox(
     config: ResolvedDeploymentConfig,
 ) -> tuple[SandboxRunnerClient | None, str | None]:
     runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
     if not runner_url:
         return None, None
-    timeout = config.sandbox_runner_timeout_seconds or float(
-        os.environ.get("SANDBOX_RUNNER_TIMEOUT_SECONDS", "60")
-    )
-    client = _sandbox_client(runner_url, float(timeout))
+    client = _sandbox_client(runner_url, _binary_client_timeout(config))
     digest = (
         config.digests.binary_tools
         or os.environ.get("BINARY_TOOLS_IMAGE_DIGEST", "").strip()

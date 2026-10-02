@@ -8,7 +8,8 @@ from typing import cast
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_binary_analysis import BinaryAnalysisLimits, BinaryFactsAdapter, inspect_binary
-from vulnweaver_contracts import SandboxResult, SandboxStatus
+from vulnweaver_binary_analysis.tools import ToolCancelled, ToolExecutionError
+from vulnweaver_contracts import FailureKind, SandboxResult, SandboxStatus
 
 from tests.binary_analysis.samples import elf64_sample
 
@@ -166,3 +167,129 @@ def test_binary_facts_adapter_refuses_to_analyze_a_different_artifact(tmp_path: 
         assert str(error) == "binary-facts input_ref does not match the artifact being analyzed"
     else:
         raise AssertionError("a mismatched input_ref was accepted")
+
+
+def _failed_result(status: SandboxStatus, code: str, retryable: bool) -> SandboxResult:
+    return SandboxResult(
+        schema_version="1.0.0",
+        request_id="request-1",
+        status=status,
+        exit_code=None,
+        stdout_ref=None,
+        stderr_ref=None,
+        outputs=[],
+        resource_usage={
+            "duration_millis": 1,
+            "cpu_millis": 1,
+            "memory_bytes": 1,
+            "output_bytes": 0,
+        },
+        failure={
+            "code": code,
+            "kind": "timeout" if code == "sandbox.timeout" else "dependency",
+            "message": "sandbox tool exceeded its time limit",
+            "retryable": retryable,
+            "details": {},
+        },
+    )
+
+
+def test_binary_facts_adapter_maps_timeout_to_retryable_failure(tmp_path: Path) -> None:
+    """A runner-side timeout is an operational stop the retry policy can act on.
+
+    The request must also carry the configured command timeout verbatim: the
+    old ``min(600, ...)`` cap silently ignored larger configured limits.
+    """
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    result = _failed_result(SandboxStatus.TIMED_OUT, "sandbox.timeout", retryable=True)
+    sandbox = _Sandbox(result)
+    limits = BinaryAnalysisLimits(command_timeout_seconds=1234)
+    target = tmp_path / "sample"
+    target.write_bytes(elf64_sample())
+    pinned = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
+    adapter = BinaryFactsAdapter(
+        sandbox,
+        store,
+        image_digest="sha256:" + "a" * 64,
+        input_ref=pinned.object_ref,
+    )
+    try:
+        asyncio.run(
+            adapter.analyze(
+                target,
+                inspect_binary(target, limits),
+                limits,
+                asyncio.Event(),
+            )
+        )
+    except RuntimeError as error:
+        assert "sandbox.timeout" in str(error)
+        assert isinstance(error, ToolExecutionError)
+        assert error.kind is FailureKind.TIMEOUT
+        assert error.retryable is True
+        assert error.details["failure_code"] == "sandbox.timeout"
+    else:
+        raise AssertionError("a timed-out sandbox run was treated as success")
+    assert sandbox.request["timeout_seconds"] == 1234
+
+
+def test_binary_facts_adapter_maps_transport_failure_to_dependency(tmp_path: Path) -> None:
+    """A client-side transport failure stays retryable under the job policy."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    result = _failed_result(
+        SandboxStatus.FAILED, "sandbox.transport_failed", retryable=True
+    )
+    target = tmp_path / "sample"
+    target.write_bytes(elf64_sample())
+    pinned = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
+    try:
+        asyncio.run(
+            BinaryFactsAdapter(
+                _Sandbox(result),
+                store,
+                image_digest="sha256:" + "a" * 64,
+                input_ref=pinned.object_ref,
+            ).analyze(
+                target,
+                inspect_binary(target, BinaryAnalysisLimits()),
+                BinaryAnalysisLimits(),
+                asyncio.Event(),
+            )
+        )
+    except ToolExecutionError as error:
+        assert error.kind is FailureKind.DEPENDENCY
+        assert error.retryable is True
+    else:
+        raise AssertionError("a transport failure was treated as success")
+
+
+def test_binary_facts_adapter_maps_runner_cancellation_to_tool_cancelled(
+    tmp_path: Path,
+) -> None:
+    """A runner-side cancellation means the worker is going away, not failing."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    result = _failed_result(SandboxStatus.CANCELLED, "sandbox.cancelled", retryable=False)
+    target = tmp_path / "sample"
+    target.write_bytes(elf64_sample())
+    pinned = store.put_stream(io.BytesIO(elf64_sample()), max_bytes=1024 * 1024)
+    try:
+        asyncio.run(
+            BinaryFactsAdapter(
+                _Sandbox(result),
+                store,
+                image_digest="sha256:" + "a" * 64,
+                input_ref=pinned.object_ref,
+            ).analyze(
+                target,
+                inspect_binary(target, BinaryAnalysisLimits()),
+                BinaryAnalysisLimits(),
+                asyncio.Event(),
+            )
+        )
+    except ToolCancelled:
+        pass
+    else:
+        raise AssertionError("a cancelled sandbox run was treated as success")
