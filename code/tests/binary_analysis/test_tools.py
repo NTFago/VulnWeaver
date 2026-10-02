@@ -481,3 +481,54 @@ def test_command_profile_passes_command_timeout_through() -> None:
         except ValueError:
             continue
         raise AssertionError(f"invalid command_timeout_seconds accepted: {bad!r}")
+
+
+def test_bounded_command_runner_survives_stdout_flood_with_live_stderr() -> None:
+    """Regression: a budget cut must terminate the process, not deadlock.
+
+    The first reader stopping at the budget leaves the process blocked
+    writing into the full pipe; waiting for the other pipe's EOF before
+    terminating hung objdump for the rest of the sandbox timeout.
+    """
+
+    async def scenario() -> None:
+        result = await asyncio.wait_for(
+            BoundedCommandRunner().run(
+                (
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.write('x' * 100000); sys.stdout.flush(); "
+                    "sys.stderr.write('e' * 8); sys.stderr.flush()",
+                ),
+                timeout_seconds=10,
+                max_output_bytes=128,
+                cancellation=asyncio.Event(),
+            ),
+            timeout=20,
+        )
+        assert result.truncated is True
+        assert result.stdout.startswith(b"x")
+        assert len(result.stdout) <= 128
+
+    _run_subprocess_scenario(scenario())
+
+
+def test_bounded_command_runner_survives_stderr_flood_with_live_stdout() -> None:
+    async def scenario() -> None:
+        result = await asyncio.wait_for(
+            BoundedCommandRunner().run(
+                (
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stderr.write('e' * 100000); sys.stderr.flush(); "
+                    "sys.stdout.write('x' * 8); sys.stdout.flush()",
+                ),
+                timeout_seconds=10,
+                max_output_bytes=128,
+                cancellation=asyncio.Event(),
+            ),
+            timeout=20,
+        )
+        assert result.truncated is True
+
+    _run_subprocess_scenario(scenario())
