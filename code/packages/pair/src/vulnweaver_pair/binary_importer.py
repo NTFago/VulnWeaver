@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -85,21 +86,30 @@ class BinaryPairImporter:
             tool["version"],
         )
         timestamp = created_at or _timestamp(self._clock())
-        functions, nodes, records = _functions_and_nodes(result, raw_id)
-        instruction_nodes, instruction_functions = _instruction_nodes(result, records, raw_id)
-        block_nodes, block_functions = _basic_block_nodes(result, records, raw_id)
-        nodes.extend(block_nodes)
-        nodes.extend(instruction_nodes)
-        edges, external_nodes = _binary_edges(
-            result,
-            records,
-            block_nodes=block_nodes,
-            block_functions=block_functions,
-            instruction_nodes=instruction_nodes,
-            instruction_functions=instruction_functions,
-            raw_id=raw_id,
-        )
-        nodes.extend(external_nodes)
+        # Graph construction walks 200k+ instructions in pure Python; on the
+        # event loop it starved the worker's lease heartbeat and killed the
+        # job after the entire analysis had already succeeded.
+        def _build_graph():
+            functions, nodes, records = _functions_and_nodes(result, raw_id)
+            instruction_nodes, instruction_functions = _instruction_nodes(
+                result, records, raw_id
+            )
+            block_nodes, block_functions = _basic_block_nodes(result, records, raw_id)
+            nodes.extend(block_nodes)
+            nodes.extend(instruction_nodes)
+            edges, external_nodes = _binary_edges(
+                result,
+                records,
+                block_nodes=block_nodes,
+                block_functions=block_functions,
+                instruction_nodes=instruction_nodes,
+                instruction_functions=instruction_functions,
+                raw_id=raw_id,
+            )
+            nodes.extend(external_nodes)
+            return functions, nodes, edges
+
+        functions, nodes, edges = await asyncio.to_thread(_build_graph)
         raw = PairRaw(
             schema_version=SchemaVersion.VALUE_1_0_0,
             id=raw_id,

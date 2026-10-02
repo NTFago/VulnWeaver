@@ -235,7 +235,10 @@ services:
       WORKER_CONSUMER_NAME: ${ANALYSIS_WORKER_CONSUMER_NAME:-analysis-worker-1}
       WORKER_CONSUMER_GROUP: ${ANALYSIS_WORKER_CONSUMER_GROUP:-analysis-workers}
       WORKER_CONCURRENCY: ${ANALYSIS_WORKER_CONCURRENCY:-1}
-      WORKER_LEASE_SECONDS: ${ANALYSIS_WORKER_LEASE_SECONDS:-120}
+      # Long import tails (pair graph construction, result serialization) can
+      # block the loop for minutes; the lease must outlive them or a successful
+      # analysis gets killed at settlement.
+      WORKER_LEASE_SECONDS: ${ANALYSIS_WORKER_LEASE_SECONDS:-600}
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${ANALYSIS_WORKER_HEARTBEAT_INTERVAL_SECONDS:-30}
       REVIEW_MODEL_PROXY_URL: ${REVIEW_MODEL_PROXY_URL:-}
       REPORT_TOOL_VERSION: ${REPORT_TOOL_VERSION:-1.0.0}

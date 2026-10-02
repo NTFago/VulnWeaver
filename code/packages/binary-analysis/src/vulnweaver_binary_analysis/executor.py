@@ -576,8 +576,16 @@ class BinaryImportExecutor:
                 created_at=job["created_at"],
             )
             validate_contract("BinaryAnalysisResult", result)
-            result_bytes = json.dumps(
-                result, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+            # Serializing a 200k-instruction result is pure CPU; off the event
+            # loop, or the worker's lease heartbeat starves during the dump.
+            result_bytes = (
+                await asyncio.to_thread(
+                    json.dumps,
+                    result,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
             ).encode("utf-8")
             stored_result = await asyncio.to_thread(
                 self._store.put_stream, io.BytesIO(result_bytes), max_bytes=len(result_bytes)
@@ -700,8 +708,14 @@ class BinaryImportExecutor:
             "obfuscation": _obfuscation_document(assessments)["assessments"],
             "truncated_function_count": max(0, len(aggregate.pseudocode) - len(source)),
         }
-        content = json.dumps(
-            document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        content = (
+            await asyncio.to_thread(
+                json.dumps,
+                document,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
         ).encode("utf-8")
         if len(content) > self._limits.max_tool_output_bytes:
             raise BinaryAnalysisExecutionError(
