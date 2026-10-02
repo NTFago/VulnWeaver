@@ -1983,6 +1983,59 @@ class PairRepository:
         ).mappings()
         return [_pair_function_from_row(row) for row in rows]
 
+    async def list_functions_page(
+        self,
+        artifact_version_ids: Sequence[str],
+        *,
+        offset: int,
+        limit: int,
+        name_contains: str = "",
+    ) -> tuple[list[PairFunction], int]:
+        """One ordered page of functions across a task's pair versions.
+
+        Returns ``(page, total_matches)``; the total is the filtered count over
+        all versions regardless of the window, so the UI can offer load-more
+        without shipping tens of thousands of rows it will never render.
+        """
+        if not artifact_version_ids:
+            return [], 0
+        condition = pair_functions.c.artifact_version_id.in_(artifact_version_ids)
+        if name_contains:
+            escaped = (
+                name_contains.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            condition = condition & pair_functions.c.name.ilike(f"%{escaped}%")
+        rows = (
+            await self._connection.execute(
+                select(pair_functions, func.count().over().label("total"))
+                .where(condition)
+                .order_by(pair_functions.c.name, pair_functions.c.id)
+                .offset(offset)
+                .limit(limit)
+            )
+        ).mappings()
+        page: list[PairFunction] = []
+        total = 0
+        for row in rows:
+            total = int(row["total"])
+            page.append(_pair_function_from_row(row))
+        return page, total
+
+    async def functions_by_ids(
+        self, artifact_version_id: str, function_ids: Sequence[str]
+    ) -> list[PairFunction]:
+        if not function_ids:
+            return []
+        rows = (
+            await self._connection.execute(
+                select(pair_functions).where(
+                    pair_functions.c.artifact_version_id == artifact_version_id,
+                    pair_functions.c.id.in_(function_ids),
+                )
+            )
+        ).mappings()
+        return [_pair_function_from_row(row) for row in rows]
+
     async def get_function(self, function_id: str) -> PairFunction:
         row = (
             (

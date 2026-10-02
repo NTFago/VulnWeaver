@@ -1181,7 +1181,14 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
                         },
                         binary_location=None,
                         signature="main()",
-                        attributes={},
+                        attributes={
+                            "kind": "function",
+                            "qualified_name": "main",
+                            "pseudocode": [{"text": "def main():\n    pass"}],
+                            "critical_logic": [
+                                {"category": "input", "score": 0.9}
+                            ],
+                        },
                     ),
                     PairFunction(
                         schema_version="1.0.0",
@@ -1220,6 +1227,29 @@ def test_finding_evidence_review_and_annotation_api_are_auditable(
     invalid_address = client.get(f"/api/tasks/{task_id}/pair/address/-1")
     assert invalid_address.status_code == 422
     assert invalid_address.json()["error_code"] == "invalid_binary_address"
+
+    light = client.get(f"/api/tasks/{task_id}/pair/light").json()
+    assert light["total"] == 2
+    assert light["schema_version"] == "1.0.0"
+    assert [item["id"] for item in light["functions"]] == [function_id, binary_function_id]
+    assert "pseudocode" not in light["functions"][0]["attributes"]
+    assert light["functions"][0]["attributes"]["critical_logic"] == [
+        {"category": "input", "score": 0.9}
+    ]
+    filtered = client.get(f"/api/tasks/{task_id}/pair/light?name_contains=zzz").json()
+    assert filtered["total"] == 0
+    assert filtered["functions"] == []
+    window = client.get(f"/api/tasks/{task_id}/pair/light?limit=1&offset=1").json()
+    assert window["total"] == 2
+    assert [item["id"] for item in window["functions"]] == [binary_function_id]
+    bad_limit = client.get(f"/api/tasks/{task_id}/pair/light?limit=0")
+    assert bad_limit.status_code == 422
+    assert bad_limit.json()["error_code"] == "invalid_pair_limit"
+    full = client.get(f"/api/tasks/{task_id}/pair/function/{function_id}").json()
+    assert full["attributes"]["pseudocode"] == [{"text": "def main():\n    pass"}]
+    foreign = client.get(f"/api/tasks/{task_id}/pair/function/pair-function:elsewhere")
+    assert foreign.status_code == 404
+    assert foreign.json()["error_code"] == "entity_not_found"
 
     annotation_headers = {
         "X-CSRF-Token": csrf,

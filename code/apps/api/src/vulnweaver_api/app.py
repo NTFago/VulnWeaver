@@ -94,6 +94,7 @@ from vulnweaver_api.schemas import (
     MeResponse,
     ModelProbeBody,
     ModelProbeResponse,
+    PairFunctionPage,
     PasswordChangeRequest,
     ProductSettingsBody,
     ProductSettingsResponse,
@@ -109,6 +110,22 @@ LOGGER = logging.getLogger(__name__)
 IDEMPOTENCY_HEADER = Header(alias="Idempotency-Key", min_length=8, max_length=128)
 _TIER_NAMES = ("planning", "audit", "review", "report")
 CSRF_HEADER = Header(alias="X-CSRF-Token", min_length=8, max_length=256)
+# Attributes the workbench list renders; everything else (pseudocode bodies,
+# parameters, raw ids) is only needed for the selected function's detail.
+_PAIR_LIST_ATTRIBUTE_KEYS = ("critical_logic",)
+
+
+def _pair_list_projection(function: PairFunction) -> PairFunction:
+    attributes = function["attributes"]
+    return cast(
+        PairFunction,
+        {
+            **function,
+            "attributes": {
+                key: attributes[key] for key in _PAIR_LIST_ATTRIBUTE_KEYS if key in attributes
+            },
+        },
+    )
 
 
 async def _pair_scopes(repositories: Repositories, task: Task) -> list[str]:
@@ -927,6 +944,66 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 functions.extend(await repositories.pair.list_functions(version_id))
             return functions
 
+    @app.get("/api/tasks/{task_id}/pair/light", response_model=PairFunctionPage)
+    async def task_pair_light(
+        task_id: str,
+        offset: int = 0,
+        limit: int = 300,
+        name_contains: str = "",
+        _: Annotated[str, Depends(require_account)] = "",
+    ) -> PairFunctionPage:
+        """One bounded page of the workbench function list.
+
+        Large trees carry tens of thousands of functions; shipping them all
+        made the task view transfer tens of megabytes and proxy every row in
+        browser memory.  The list is filtered and paged server-side, projected
+        to the fields the list UI renders (names, locations, signatures,
+        critical-logic badges) -- pseudocode and full attributes ride the
+        per-function detail endpoint instead.
+        """
+        if offset < 0:
+            raise ApiInputError("invalid_pair_offset", "offset must be >= 0", "offset")
+        if not 1 <= limit <= 1000:
+            raise ApiInputError("invalid_pair_limit", "limit must be between 1 and 1000", "limit")
+        if len(name_contains) > 256:
+            raise ApiInputError(
+                "invalid_pair_query", "name filter is limited to 256 characters", "name_contains"
+            )
+        query = name_contains.strip()
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            scopes = await _pair_scopes(repositories, task)
+            page_functions, total = await repositories.pair.list_functions_page(
+                scopes, offset=offset, limit=limit, name_contains=query
+            )
+        projected = [_pair_list_projection(function) for function in page_functions]
+        return PairFunctionPage.model_validate(
+            {
+                "schema_version": "1.0.0",
+                "task_id": task_id,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+                "functions": projected,
+            }
+        )
+
+    @app.get("/api/tasks/{task_id}/pair/function/{function_id}")
+    async def task_pair_function(
+        task_id: str, function_id: str, _: Annotated[str, Depends(require_account)]
+    ) -> PairFunction:
+        """One full function record (including pseudocode) for the workbench detail."""
+        async with database.transaction() as repositories:
+            task = await repositories.tasks.get(task_id)
+            function = await repositories.pair.get_function(function_id)
+            if function["artifact_version_id"] not in await _pair_scopes(repositories, task):
+                raise ApiInputError(
+                    "pair_function_not_found",
+                    "pair function is not part of the task",
+                    "function_id",
+                )
+            return function
+
     @app.get("/api/tasks/{task_id}/pair/address/{address}")
     async def task_pair_at_address(
         task_id: str,
@@ -953,7 +1030,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         depth: int = 1,
         _: Annotated[str, Depends(require_account)] = "",
     ) -> dict[str, Any]:
-        """Return bounded caller/callee edges for a function in the task."""
+        """Return bounded caller/callee edges for a function in the task.
+
+        The matched function's neighbours are echoed back as light records so
+        the UI can label caller/callee buttons without holding the whole
+        function list client-side.
+        """
         if depth < 1 or depth > 3:
             raise ApiInputError(
                 "invalid_pair_depth", "pair neighborhood depth must be between 1 and 3", "depth"
@@ -966,7 +1048,23 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     neighborhood = await repositories.pair.neighborhood(
                         version_id, function_id, depth=depth
                     )
-                    return neighborhood
+                    nodes_raw = neighborhood.get("nodes")
+                    if isinstance(nodes_raw, list):
+                        nodes = cast("list[dict[str, object]]", nodes_raw)
+                    else:
+                        nodes = []
+                    related_ids = sorted(
+                        {
+                            related_id
+                            for node in nodes
+                            if isinstance(related_id := node.get("function_id"), str) and related_id
+                        }
+                    )
+                    related = await repositories.pair.functions_by_ids(version_id, related_ids)
+                    return {
+                        **neighborhood,
+                        "functions": [_pair_list_projection(function) for function in related],
+                    }
         raise ApiInputError(
             "pair_function_not_found", "pair function is not part of the task", "function_id"
         )

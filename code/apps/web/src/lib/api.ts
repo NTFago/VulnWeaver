@@ -22,6 +22,15 @@ import type {
   WorkerResult,
 } from "@vulnweaver/contracts";
 
+export interface PairFunctionPage {
+  schema_version: "1.0.0";
+  task_id: string;
+  total: number;
+  offset: number;
+  limit: number;
+  functions: PairFunction[];
+}
+
 export interface Session {
   schema_version: "1.0.0";
   username: string;
@@ -295,7 +304,12 @@ export const api = {
   events: (taskId: string, after = -1) =>
     request<QueueEvent[]>(`/api/tasks/${taskId}/events?after=${after}`),
   findings: (taskId: string) => request<Finding[]>(`/api/tasks/${taskId}/findings`),
-  pair: (taskId: string) => request<PairFunction[]>(`/api/tasks/${encodeURIComponent(taskId)}/pair`),
+  pair: (taskId: string, offset: number, nameContains: string) =>
+    request<PairFunctionPage>(
+      `/api/tasks/${encodeURIComponent(taskId)}/pair/light?offset=${offset}&limit=300&name_contains=${encodeURIComponent(nameContains)}`,
+    ),
+  pairFunction: (taskId: string, functionId: string) =>
+    request<PairFunction>(`/api/tasks/${encodeURIComponent(taskId)}/pair/function/${encodeURIComponent(functionId)}`),
   agentRuns: (taskId: string) => request<AgentRun[]>(`/api/tasks/${encodeURIComponent(taskId)}/agent-runs`),
   auditTrail: (taskId: string) => request<AuditTrail>(`/api/tasks/${encodeURIComponent(taskId)}/audit-trail`),
   pairNeighborhood: (taskId: string, functionId: string, depth = 1) =>

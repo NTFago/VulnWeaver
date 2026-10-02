@@ -4,6 +4,7 @@ import { aggregatePipelineStages, pipelineProgress } from '../src/lib/pipeline.t
 import { findingCounts, pseudocodeText, reportView } from '../src/lib/report-view.ts';
 import { displayRuns, sharedReferences, mergeEvents } from '../src/lib/audit-trail.ts';
 import { activityChanged, formatAgo, formatElapsedSince, heartbeat, journalLines } from '../src/lib/activity.ts';
+import { FUNCTION_RENDER_CAP, renderablePairFunctions } from '../src/lib/pair-view.ts';
 import { tasks, runsFor, trailFor } from './dev-fixtures.mjs';
 import { sampleArtifacts } from '../src/lib/project.ts';
 test('derived pipeline outputs never become selectable samples', () => {
@@ -144,4 +145,14 @@ test('journal tail renders one bounded line per entry', () => {
   assert.deepEqual(journalLines([{ round: 2, kind: 'step', summary: '读取 src/app.py' }, { summary: '' }], 3), ['第 2 轮 · 读取 src/app.py']);
   assert.deepEqual(journalLines([{ round: 1, summary: 'a' }, { round: 2, summary: 'b' }, { round: 3, summary: 'c' }, { round: 4, summary: 'd' }], 2), ['第 3 轮 · c', '第 4 轮 · d']);
   assert.deepEqual(journalLines([]), []);
+});
+
+const pairFns = (names) => names.map((name) => ({ id: `fn:${name}`, name, symbol: `mod.${name}`, attributes: {} }));
+
+test('function list render stays capped so huge trees cannot flood the DOM', () => {
+  const fns = pairFns(Array.from({ length: 1200 }, (_, i) => `fn_${i}`));
+  assert.equal(renderablePairFunctions(fns).length, FUNCTION_RENDER_CAP);
+  assert.equal(renderablePairFunctions(fns, 50).length, 50);
+  assert.deepEqual(renderablePairFunctions(fns, 0), []);
+  assert.equal(renderablePairFunctions(pairFns(['a', 'b'])).length, 2);
 });

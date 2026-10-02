@@ -37,6 +37,7 @@
   import ReportCenter from "../components/ReportCenter.svelte";
   import { pseudocodeText } from "../report-view";
   import { formatAgo, formatElapsedSince, heartbeat, heartbeatLabels, journalLines, type TaskActivity } from "../activity";
+  import { FUNCTION_PAGE_SIZE, FUNCTION_RENDER_CAP, renderablePairFunctions } from "../pair-view";
   import TaskPipeline from "../components/TaskPipeline.svelte";
   import FindingStats from "../components/FindingStats.svelte";
   import AgentPanel from "../components/AgentPanel.svelte";
@@ -63,7 +64,9 @@
   export let activity: TaskActivity | null = null;
   export let streamState: "connecting" | "connected" | "reconnecting" = "connecting";
   export let pairFunctions: PairFunction[] = [];
+  export let pairTotal = 0;
   export let pairNeighborhood: Record<string, unknown> | null = null;
+  export let selectedFunctionDetail: PairFunction | null = null;
   export let selectedFunctionId: string | null = null;
   export let reportVersionIds: string[] = [];
   export let artifactVersions = new Map<string, ArtifactVersion>();
@@ -76,9 +79,11 @@
   export let onCreateReport: (format: "markdown" | "pdf" | "sarif") => void = () => {};
   export let onCreateProof: (kind: "proof_of_concept" | "exploit", scriptRef: string, imageDigest: string) => void = () => {};
   export let onSelectFinding: (finding: Finding) => void = () => {};
+  export let onSelectFunction: (fn: PairFunction) => void = () => {};
+  export let onFunctionQueryChange: (query: string) => void = () => {};
+  export let onLoadMoreFunctions: () => void = () => {};
   export let onSubmitReview: (outcome: FindingStatus, rationale: string) => Promise<boolean> = async () => false;
   export let onSubmitAnnotation: (note: string) => Promise<boolean> = async () => false;
-  export let onSelectFunction: (fn: PairFunction) => void = () => {};
 
   let proofScriptRef = "";
   let proofImageDigest = "sha256:";
@@ -114,7 +119,10 @@
     const edges = (pairNeighborhood.edges ?? []) as PairEdgeLike[];
     const nodeFunction = new Map<string, string>();
     for (const node of nodes) if (node.function_id) nodeFunction.set(node.id, node.function_id);
-    const byId = new Map(pairFunctions.map((fn) => [fn.id, fn]));
+    // 邻区函数由 neighborhood 响应附带（服务端轻投影），当前分页兜底。
+    const byId = new Map<string, PairFunction>();
+    for (const fn of pairFunctions) byId.set(fn.id, fn);
+    for (const fn of ((pairNeighborhood.functions ?? []) as PairFunction[])) byId.set(fn.id, fn);
     const ids = new Set<string>();
     for (const edge of edges) {
       if (edge.type !== "call") continue;
@@ -170,6 +178,20 @@
     .sort((a, b) => (a.latest_decision_at! < b.latest_decision_at! ? 1 : -1))[0] ?? null;
   $: latestDecisionAgo = latestRun ? formatAgo(heartbeat(latestRun.latest_decision_at, nowMs).secondsAgo) : null;
   $: journalText = journalLines(activity?.audit_progress?.journal_tail ?? [], 3);
+
+  // 函数列表：服务端分页 + 过滤（防抖触发 onFunctionQueryChange）；
+  // "加载更多"叠加的页数受渲染封顶约束，避免 DOM 再膨胀。
+  let functionQuery = "";
+  let queryTimer: ReturnType<typeof setTimeout> | null = null;
+  $: renderedFunctions = renderablePairFunctions(pairFunctions, FUNCTION_RENDER_CAP);
+
+  function onQueryInput(): void {
+    if (queryTimer !== null) clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => {
+      queryTimer = null;
+      onFunctionQueryChange(functionQuery.trim());
+    }, 350);
+  }
 
 
   async function submitReview(): Promise<void> {
@@ -320,19 +342,27 @@
   {:else}
     <div class="workbench">
       <div class="function-list" role="listbox" aria-label="函数列表">
-        {#each pairFunctions as fn (fn.id)}
+        <input class="function-filter" type="search" placeholder="按名称过滤（如 main、run）" bind:value={functionQuery} on:input={onQueryInput} />
+        {#each renderedFunctions as fn (fn.id)}
           <button class:selected={selectedFunctionId === fn.id} on:click={() => onSelectFunction(fn)}>
             <b>{fn.name}</b>
             {#if functionCritical(fn).length > 0}<em class="key-badge">{functionCritical(fn).map((entry) => entry.category).join(" / ")}</em>{/if}
             <small>{functionLocation(fn)}</small>
           </button>
         {/each}
+        {#if renderedFunctions.length < pairFunctions.length}
+          <p class="function-list-note">已显示前 {renderedFunctions.length} 个（本次已加载 {pairFunctions.length} 个）；请继续用名称过滤缩小范围。</p>
+        {:else if pairFunctions.length < pairTotal}
+          <button class="secondary function-more" on:click={onLoadMoreFunctions}>加载更多（共 {pairTotal} 个，已显示 {pairFunctions.length} 个）</button>
+        {:else if pairTotal > 0}
+          <p class="function-list-note">共 {pairTotal} 个函数，已全部显示。</p>
+        {/if}
       </div>
       <div class="function-detail">
         {#if !selectedFunctionId}
           <div class="compact-empty">选择一个函数，查看其调用方、被调用方与伪代码。</div>
         {:else}
-          {@const selected = pairFunctions.find((fn) => fn.id === selectedFunctionId)}
+          {@const selected = selectedFunctionDetail ?? pairFunctions.find((fn) => fn.id === selectedFunctionId)}
           {#if selected}
             <div class="function-title-block"><b class="function-title">{selected.name}</b><small>{selected.signature ?? functionLocation(selected)}</small></div>
             {#if pseudocodeText(selected)}<pre class="code-view">{pseudocodeText(selected)}</pre>{:else}<small class="muted">该函数没有已导出的伪代码。</small>{/if}
@@ -388,6 +418,18 @@
     50% { box-shadow: 0 0 0 4px rgba(201, 244, 59, 0.07); }
   }
   .binary-summary { margin: 0 0 24px; font-size: 13px; }
+  .function-filter {
+    margin: 0 0 8px;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-s);
+    background: var(--panel-2);
+    color: var(--text-1);
+    font-size: 12.5px;
+    width: 100%;
+  }
+  .function-list-note { color: var(--muted); font-size: 11.5px; margin: 8px 2px; }
+  .function-more { width: 100%; margin: 8px 0 2px; font-size: 12px; }
   .binary-summary summary { cursor: pointer; color: var(--text-2); }
   .binary-summary p, .binary-summary small { color: var(--muted); font-size: 12px; }
   .binary-summary small, .binary-summary code { display: block; overflow-wrap: anywhere; }

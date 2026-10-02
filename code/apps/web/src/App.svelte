@@ -52,6 +52,10 @@
   let productSettings: ProductSettings | null = null;
   let pairNeighborhood: Record<string, unknown> | null = null;
   let pairFunctions: PairFunction[] = [];
+  let pairTotal = 0;
+  let pairQuery = "";
+  let pairOffset = 0;
+  let selectedFunctionDetail: PairFunction | null = null;
   let agentRuns: AgentRun[] = [];
   let trail: AuditTrail | null = null;
   let trailError = "";
@@ -369,7 +373,8 @@
     begin(); disconnectEvents(); selectedTask = task; view = "task";
     const generation = socketGeneration;
     selectedFinding = null; selectedEvidence = []; selectedPocs = []; selectedReviews = [];
-    selectedFunctionId = null; pairNeighborhood = null; jobs = []; findings = []; events = [];
+    selectedFunctionId = null; pairNeighborhood = null; selectedFunctionDetail = null; jobs = []; findings = []; events = [];
+    pairFunctions = []; pairTotal = 0; pairQuery = ""; pairOffset = 0;
     pairFunctions = []; agentRuns = []; trail = null; trailError = ""; reportVersionIds = [];
     activity = null;
     try {
@@ -443,14 +448,31 @@
   async function loadTaskData(taskId: string, generation: number): Promise<void> {
     const sequence = ++refreshSequence;
     const [taskData, jobData, findingData, eventData, functions, runs, trailResult] = await Promise.all([
-      api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId, lastEventSequence()), api.pair(taskId), api.agentRuns(taskId),
+      api.task(taskId), api.jobs(taskId), api.findings(taskId), api.events(taskId, lastEventSequence()),
+      api.pair(taskId, pairOffset, pairQuery).then(value => ({ value, error: "" })).catch(() => ({ value: null, error: "函数列表暂不可用" })),
+      api.agentRuns(taskId),
       api.auditTrail(taskId).then(value => ({ value, error: "" })).catch(() => ({ value: null, error: "审计关联信息暂不可用" })),
     ]);
     if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
-    selectedTask = taskData; jobs = jobData; findings = findingData; pairFunctions = functions; agentRuns = runs;
+    selectedTask = taskData; jobs = jobData; findings = findingData;
+    if (functions.value) {
+      // 任务重跑后函数集可能变小：当前窗口越界时回到第一页。
+      if (functions.value.functions.length === 0 && pairOffset > 0) {
+        pairOffset = 0;
+        const first = await api.pair(taskId, 0, pairQuery).catch(() => null);
+        if (isCurrentTask(taskId, generation) && first) {
+          pairFunctions = first.functions; pairTotal = first.total;
+        }
+      } else {
+        pairFunctions = functions.value.functions; pairTotal = functions.value.total;
+      }
+    } else {
+      pairFunctions = []; pairTotal = 0;
+    }
+    agentRuns = runs;
     events = mergeEvents(events, eventData); trail = trailResult.value; trailError = trailResult.error;
     if (selectedFinding) selectedFinding = findings.find(finding => finding.id === selectedFinding?.id) ?? null;
-    if (selectedFunctionId && !functions.some(fn => fn.id === selectedFunctionId)) { selectedFunctionId = null; pairNeighborhood = null; }
+    if (selectedFunctionId && !functions.value?.functions.some(fn => fn.id === selectedFunctionId) && !functions.value?.total) { selectedFunctionId = null; pairNeighborhood = null; selectedFunctionDetail = null; }
     const inputVersions = await Promise.all(taskData.artifact_version_ids.map(id => api.artifactVersion(id)));
     if (!isCurrentTask(taskId, generation) || sequence !== refreshSequence) return;
     for (const version of inputVersions) artifactVersions.set(version.id, version);
@@ -559,9 +581,45 @@
   async function selectFunction(fn: PairFunction): Promise<void> {
     selectedFunctionId = fn.id;
     if (!selectedTask) return;
-    const taskId = selectedTask.id; pairNeighborhood = null;
-    try { const value = await api.pairNeighborhood(taskId, fn.id); if (selectedTask?.id === taskId && selectedFunctionId === fn.id) pairNeighborhood = value; }
+    const taskId = selectedTask.id; pairNeighborhood = null; selectedFunctionDetail = null;
+    try {
+      // 详情（伪代码全文）与调用关系都按需加载；失败分别降级。
+      const detailPromise = api.pairFunction(taskId, fn.id).catch(() => null);
+      const neighborhood = await api.pairNeighborhood(taskId, fn.id);
+      const detail = await detailPromise;
+      if (selectedTask?.id !== taskId || selectedFunctionId !== fn.id) return;
+      selectedFunctionDetail = detail;
+      pairNeighborhood = neighborhood;
+    }
     catch (caught) { showError(caught); }
+  }
+
+  /** 服务端搜索函数列表（列表框输入防抖后调用）。 */
+  async function searchPairFunctions(query: string): Promise<void> {
+    if (!selectedTask) return;
+    const taskId = selectedTask.id;
+    const generation = socketGeneration;
+    try {
+      const page = await api.pair(taskId, 0, query);
+      if (!isCurrentTask(taskId, generation)) return;
+      pairQuery = query; pairOffset = 0; pairFunctions = page.functions; pairTotal = page.total;
+    } catch (caught) { showError(caught); }
+  }
+
+  /** 加载更多：把下一页追加到列表（服务端仍每页 300 条）。 */
+  async function loadMorePairFunctions(): Promise<void> {
+    if (!selectedTask) return;
+    const taskId = selectedTask.id;
+    const generation = socketGeneration;
+    const nextOffset = pairOffset + 300;
+    try {
+      const page = await api.pair(taskId, nextOffset, pairQuery);
+      if (!isCurrentTask(taskId, generation)) return;
+      pairOffset = nextOffset;
+      const known = new Set(pairFunctions.map(fn => fn.id));
+      pairFunctions = [...pairFunctions, ...page.functions.filter(fn => !known.has(fn.id))];
+      pairTotal = page.total;
+    } catch (caught) { showError(caught); }
   }
 
   async function cancelTask(): Promise<void> {
@@ -684,7 +742,9 @@
           {activity}
           {streamState}
           {pairFunctions}
+          {pairTotal}
           {pairNeighborhood}
+          {selectedFunctionDetail}
           {selectedFunctionId}
           {reportVersionIds}
           {artifactVersions}
@@ -699,6 +759,8 @@
           onSubmitReview={submitReview}
           onSubmitAnnotation={submitAnnotation}
           onSelectFunction={(fn) => void selectFunction(fn)}
+          onFunctionQueryChange={(query) => void searchPairFunctions(query)}
+          onLoadMoreFunctions={() => void loadMorePairFunctions()}
         />{/key}
       {/if}
     </main>
