@@ -532,3 +532,41 @@ def test_bounded_command_runner_survives_stderr_flood_with_live_stdout() -> None
         assert result.truncated is True
 
     _run_subprocess_scenario(scenario())
+
+
+def test_command_profile_skips_disassembly_only_with_targets() -> None:
+    from vulnweaver_binary_analysis.profiles import binary_command_profile
+
+    profile = binary_command_profile("vulnweaver-binary-tools:fixed", "sha256:" + "a" * 64)
+    base = {
+        "max_functions": 100,
+        "max_instructions": 1000,
+        "max_pseudocode_functions": 50,
+        "angr_enabled": True,
+        "command_timeout_seconds": 3600,
+    }
+    argv = profile.build_argv(
+        {**base, "target_addresses": [4144], "skip_disassembly": True},
+        PurePath("/input/s"),
+        PurePath("/out"),
+    )
+    assert "--skip-disassembly" in argv
+    assert "--target-addresses" in argv
+
+    # Full pass (no skip): flag absent.
+    argv_full = profile.build_argv(
+        {**base, "target_addresses": []}, PurePath("/input/s"), PurePath("/out")
+    )
+    assert "--skip-disassembly" not in argv_full
+
+    # Skip without targets is meaningless and rejected.
+    try:
+        profile.build_argv(
+            {**base, "target_addresses": [], "skip_disassembly": True},
+            PurePath("/input/s"),
+            PurePath("/out"),
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("skip_disassembly without targets was accepted")

@@ -65,6 +65,12 @@ def binary_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> Tool
                         "minimum": 60,
                         "maximum": 86400,
                     },
+                    # Symbolic-target follow-up runs skip the disassembly
+                    # phases (die/upx/objdump/ghidra) and only execute angr:
+                    # the function index already exists from the first run,
+                    # so repeating a 30-minute Ghidra pass to add targets is
+                    # pure waste.
+                    "skip_disassembly": {"type": "boolean"},
                 },
             },
             "output_schema": {"type": "object"},
@@ -135,6 +141,14 @@ def binary_command_profile(
             ):
                 raise ValueError("binary command_timeout_seconds is invalid")
             timeout_arguments = ("--command-timeout", str(raw_timeout))
+        skip_arguments: tuple[str, ...] = ()
+        raw_skip = arguments.get("skip_disassembly", False)
+        if not isinstance(raw_skip, bool):
+            raise ValueError("binary skip_disassembly is invalid")
+        if raw_skip:
+            if not target_addresses:
+                raise ValueError("skip_disassembly requires target_addresses")
+            skip_arguments = ("--skip-disassembly",)
         symbolic_arguments: tuple[str, ...] = ()
         if target_addresses:
             symbolic_arguments += (
@@ -157,6 +171,7 @@ def binary_command_profile(
             str(max_pseudocode),
             *timeout_arguments,
             *symbolic_arguments,
+            *skip_arguments,
         )
 
     return SandboxCommandProfile(

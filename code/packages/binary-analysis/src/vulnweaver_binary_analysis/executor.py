@@ -347,6 +347,9 @@ class BinaryImportExecutor:
                     input_ref=analyzed_object_ref,
                     target_addresses=target_addresses,
                     angr_enabled=True,
+                    # The full facts pass already ran; this follow-up only
+                    # needs angr on the planned targets.
+                    skip_disassembly=True,
                 ).analyze(analyzed_path, metadata, self._limits, cancellation)
             else:
                 angr_adapter = self._angr_adapter

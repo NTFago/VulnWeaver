@@ -155,6 +155,35 @@ async def _unpack_mode(args: argparse.Namespace) -> int:
 
 async def _facts_mode(args: argparse.Namespace) -> int:
     target, metadata, limits, cancellation = await _prepare(args)
+    targets = tuple(
+        sorted({int(value) for value in args.target_addresses.split(",") if value})
+    )
+    if len(targets) > limits.max_symbolic_functions or any(value < 0 for value in targets):
+        print("target addresses are invalid", file=sys.stderr)
+        return 2
+    if args.skip_disassembly:
+        # Symbolic-target follow-up: the caller already holds the function
+        # index from the full pass; only angr executes here. Re-running
+        # Ghidra (~30 minutes on large binaries) to add targets is waste.
+        angr = await AngrAdapter(enabled=True).analyze_targets(
+            target, metadata, limits, cancellation, targets
+        )
+        facts = {
+            "schema_version": SCHEMA_VERSION,
+            "metadata": dataclasses.asdict(metadata),
+            "tools": {"angr": _run_dict(angr)},
+            "normalized_from": "angr-only",
+            "functions": [],
+            "instructions": [],
+            "basic_blocks": [],
+            "xrefs": [],
+            "pseudocode": [],
+            "symbolic_facts": list(angr.symbolic_facts),
+            "imports": [],
+            "strings": [],
+            "samples": {},
+        }
+        return _write_facts(args, facts)
     die = await DetectItEasyAdapter().analyze(target, metadata, limits, cancellation)
     unpacked_path = Path("/work") / "run" / "unpacked"
     upx = await UpxAdapter().unpack(target, unpacked_path, limits, cancellation)
@@ -162,12 +191,6 @@ async def _facts_mode(args: argparse.Namespace) -> int:
     ghidra = await GhidraHeadlessAdapter(
         GHIDRA_EXECUTABLE, GHIDRA_SCRIPTS
     ).analyze(target, metadata, limits, cancellation)
-    targets = tuple(
-        sorted({int(value) for value in args.target_addresses.split(",") if value})
-    )
-    if len(targets) > limits.max_symbolic_functions or any(value < 0 for value in targets):
-        print("target addresses are invalid", file=sys.stderr)
-        return 2
     angr = await AngrAdapter(enabled=args.angr_enabled).analyze_targets(
         target, metadata, limits, cancellation, targets
     )
@@ -238,10 +261,21 @@ async def _facts_mode(args: argparse.Namespace) -> int:
     # shaped by the requested limits can legitimately reach tens of MB with
     # partial disassembly. Never byte-cut here: truncated JSON is invalid JSON
     # and the worker would fail on parse. The guard only catches absurd sizes.
+    return _write_payload(args, "binary-facts.json", payload, "binary facts document")
+
+
+def _write_facts(args: argparse.Namespace, facts: dict[str, object]) -> int:
+    payload = json.dumps(facts, ensure_ascii=True, sort_keys=True, default=str)
+    return _write_payload(args, "binary-facts.json", payload, "binary facts document")
+
+
+def _write_payload(
+    args: argparse.Namespace, name: str, payload: str, description: str
+) -> int:
     if len(payload) > 512 * 1024 * 1024:
-        print("binary facts document exceeds the hard size guard", file=sys.stderr)
+        print(f"{description} exceeds the hard size guard", file=sys.stderr)
         return 3
-    (args.output_dir / "binary-facts.json").write_text(payload, encoding="utf-8")
+    (args.output_dir / name).write_text(payload, encoding="utf-8")
     return 0
 
 
@@ -258,6 +292,7 @@ async def main() -> int:
     parser.add_argument("--target-addresses", default="")
     parser.add_argument("--angr-enabled", action="store_true")
     parser.add_argument("--command-timeout", type=int, default=None)
+    parser.add_argument("--skip-disassembly", action="store_true")
     args = parser.parse_args()
     if args.max_functions < 1 or args.max_instructions < 1 or args.max_pseudocode_functions < 1:
         print("binary limits must be positive", file=sys.stderr)

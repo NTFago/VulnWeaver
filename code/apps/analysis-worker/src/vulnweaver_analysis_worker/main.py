@@ -374,6 +374,8 @@ class _SymbolicVerificationRunner:
             input_ref=version["object_ref"],
             target_addresses=target_addresses,
             angr_enabled=True,
+            # Targeted follow-up: angr only, no repeated disassembly phases.
+            skip_disassembly=True,
         )
         contribution = await adapter.analyze_ref(
             artifact_kind, self._limits, asyncio.Event()

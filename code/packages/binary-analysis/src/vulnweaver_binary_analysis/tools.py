@@ -123,6 +123,7 @@ class BinaryFactsAdapter:
         input_ref: str,
         target_addresses: tuple[int, ...] = (),
         angr_enabled: bool = False,
+        skip_disassembly: bool = False,
     ):
         self._sandbox = sandbox
         self._store = store
@@ -130,6 +131,7 @@ class BinaryFactsAdapter:
         self._input_ref = input_ref
         self._target_addresses = target_addresses
         self._angr_enabled = angr_enabled
+        self._skip_disassembly = skip_disassembly
 
     async def analyze(
         self,
@@ -187,6 +189,7 @@ class BinaryFactsAdapter:
                 # large binaries need far more than the image default. The
                 # profile floors the value at 60s, so clamp here to match.
                 "command_timeout_seconds": max(60, int(limits.command_timeout_seconds)),
+                "skip_disassembly": self._skip_disassembly,
             },
             output_file_names=["binary-facts.json"],
             resource_budget=cast(ResourceBudget, _sandbox_budget(limits)),
@@ -205,8 +208,15 @@ class BinaryFactsAdapter:
         tools = facts.get("tools", {})
         objdump = tools.get("objdump", {})
         ghidra = tools.get("ghidra", {})
+        angr = tools.get("angr", {})
         die = tools.get("die", {})
         functions: list[object] = facts.get("functions") or []
+        if self._skip_disassembly:
+            # Angr-only follow-up: the contribution carries symbolic facts and
+            # the caller merges them into the aggregate from the full pass.
+            return ToolContribution(run=_facts_tool_run("angr", angr), symbolic_facts=tuple(
+                cast(list[BinarySymbolicFact], facts.get("symbolic_facts", []))
+            ))
         if not functions and _facts_source_failed(ghidra) and _facts_source_failed(objdump):
             # Both function sources failed and nothing normalized: this is the
             # "twenty minutes for zero functions" silent wrong answer. Fail the
@@ -722,7 +732,7 @@ class GhidraHeadlessAdapter:
                     run=failed_tool_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
-                document = _load_json_file(output, limits.max_tool_output_bytes)
+                document = _load_json_file(output, _EXPORT_JSON_MAX_BYTES)
                 (
                     functions,
                     instructions,
@@ -826,7 +836,7 @@ class AngrAdapter:
                     run=failed_tool_run(self.name, "analysis_failed", raw, result.exit_code)
                 )
             try:
-                document = _load_json_file(output, limits.max_tool_output_bytes)
+                document = _load_json_file(output, _EXPORT_JSON_MAX_BYTES)
                 (
                     functions,
                     instructions,
@@ -1346,6 +1356,13 @@ def _load_json_file(path: Path, max_bytes: int) -> object:
     if size > max_bytes:
         raise ValueError("structured tool export exceeds the configured limit")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+# Structured exports (Ghidra/angr JSON) legitimately reach tens of MB at full
+# limits: 200k instructions serialize to ~20MB, and an 8MB guard threw away
+# thirty-minute Ghidra analyses AFTER they succeeded. Aligned with the
+# entrypoint's hard size guard.
+_EXPORT_JSON_MAX_BYTES = 512 * 1024 * 1024
 
 
 def _detect_compiler_and_packer(output: str) -> tuple[str | None, str | None]:

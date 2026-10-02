@@ -448,3 +448,77 @@ def test_binary_facts_adapter_keeps_partial_objdump_when_ghidra_failed(
     assert [function["name"] for function in contribution.functions] == ["main"]
     assert contribution.run["status"] == "succeeded"
     assert contribution.run["reason"] == "output_truncated"
+
+
+def test_binary_facts_adapter_angr_only_follow_up(tmp_path: Path) -> None:
+    """A symbolic-target follow-up returns only angr's facts and run row."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    payload = {
+        "tools": {
+            "angr": {
+                "tool_name": "angr",
+                "tool_version": None,
+                "status": "succeeded",
+                "exit_code": 0,
+                "reason": None,
+                "raw_output": None,
+            }
+        },
+        "functions": [],
+        "symbolic_facts": [
+            {
+                "function_address": 4144,
+                "status": "completed",
+                "steps": 3,
+                "explored_states": 5,
+                "reached_addresses": [4200],
+                "unconstrained_states": 0,
+                "reason": None,
+            }
+        ],
+    }
+    stored = store.put_stream(io.BytesIO(json.dumps(payload).encode()), max_bytes=1024 * 1024)
+    result = SandboxResult(
+        schema_version="1.0.0",
+        request_id="request-1",
+        status=SandboxStatus.SUCCEEDED,
+        exit_code=0,
+        stdout_ref=None,
+        stderr_ref=None,
+        outputs=[
+            {
+                "path": "binary-facts.json",
+                "object_ref": stored.object_ref,
+                "digest": stored.digest,
+                "size_bytes": stored.size_bytes,
+            }
+        ],
+        resource_usage={
+            "duration_millis": 1,
+            "cpu_millis": 1,
+            "memory_bytes": 1,
+            "output_bytes": stored.size_bytes,
+        },
+        failure=None,
+    )
+    sandbox = _Sandbox(result)
+    sample = elf64_sample()
+    target = tmp_path / "sample"
+    target.write_bytes(sample)
+    pinned = store.put_stream(io.BytesIO(sample), max_bytes=1024 * 1024)
+    contribution = asyncio.run(
+        BinaryFactsAdapter(
+            sandbox,
+            store,
+            image_digest="sha256:" + "a" * 64,
+            input_ref=pinned.object_ref,
+            target_addresses=(4144,),
+            angr_enabled=True,
+            skip_disassembly=True,
+        ).analyze_ref("elf", BinaryAnalysisLimits(), asyncio.Event())
+    )
+    assert sandbox.request["arguments"]["skip_disassembly"] is True
+    assert [fact["function_address"] for fact in contribution.symbolic_facts] == [4144]
+    assert contribution.functions == ()
+    assert contribution.run["tool_name"] == "angr"
