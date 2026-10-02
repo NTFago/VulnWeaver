@@ -146,8 +146,9 @@ async def _unpack_mode(args: argparse.Namespace) -> int:
         shutil.copyfile(outcome.unpacked_path, destination)
         report["unpacked_digest"] = _sha256(destination)
     payload = json.dumps(report, ensure_ascii=True, sort_keys=True, default=str)
-    if len(payload) > 1024 * 1024:
-        payload = payload[: 1024 * 1024]
+    if len(payload) > 512 * 1024 * 1024:
+        print("binary unpack report exceeds the hard size guard", file=sys.stderr)
+        return 3
     (args.output_dir / "binary-unpack.json").write_text(payload, encoding="utf-8")
     return 0
 
@@ -233,8 +234,13 @@ async def _facts_mode(args: argparse.Namespace) -> int:
         },
     }
     payload = json.dumps(facts, ensure_ascii=True, sort_keys=True, default=str)
-    if len(payload) > 8 * 1024 * 1024:
-        payload = payload[: 8 * 1024 * 1024]
+    # The runner accepts up to MAX_SANDBOX_OUTPUT_BYTES (8 GiB); a document
+    # shaped by the requested limits can legitimately reach tens of MB with
+    # partial disassembly. Never byte-cut here: truncated JSON is invalid JSON
+    # and the worker would fail on parse. The guard only catches absurd sizes.
+    if len(payload) > 512 * 1024 * 1024:
+        print("binary facts document exceeds the hard size guard", file=sys.stderr)
+        return 3
     (args.output_dir / "binary-facts.json").write_text(payload, encoding="utf-8")
     return 0
 
