@@ -57,6 +57,14 @@ def binary_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> Tool
                         "items": {"type": "integer", "minimum": 0},
                     },
                     "angr_enabled": {"type": "boolean"},
+                    # Per-tool stop inside the image (Ghidra/objdump). Large
+                    # real-world binaries need far more than the image's
+                    # built-in default, so the deployment setting rides in.
+                    "command_timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 60,
+                        "maximum": 86400,
+                    },
                 },
             },
             "output_schema": {"type": "object"},
@@ -117,6 +125,16 @@ def binary_command_profile(
             raise ValueError("binary target_addresses are invalid")
         if not isinstance(angr_enabled, bool):
             raise ValueError("binary angr_enabled is invalid")
+        timeout_arguments: tuple[str, ...] = ()
+        raw_timeout = arguments.get("command_timeout_seconds")
+        if raw_timeout is not None:
+            if (
+                isinstance(raw_timeout, bool)
+                or not isinstance(raw_timeout, int)
+                or not 60 <= raw_timeout <= 86400
+            ):
+                raise ValueError("binary command_timeout_seconds is invalid")
+            timeout_arguments = ("--command-timeout", str(raw_timeout))
         symbolic_arguments: tuple[str, ...] = ()
         if target_addresses:
             symbolic_arguments += (
@@ -137,6 +155,7 @@ def binary_command_profile(
             str(max_instructions),
             "--max-pseudocode-functions",
             str(max_pseudocode),
+            *timeout_arguments,
             *symbolic_arguments,
         )
 
