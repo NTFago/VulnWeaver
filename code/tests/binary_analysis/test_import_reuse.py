@@ -321,3 +321,40 @@ def test_binary_executor_reruns_when_reuse_key_differs(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_binary_executor_retry_after_lease_loss_registers_fresh_versions(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    """A retry attempt gets its own derived identity instead of an ID collision.
+
+    Attempt 1 registered its versions, then died from a lost lease (or any
+    post-registration failure). Attempt 2 re-runs the chain; its content can
+    legitimately differ (planning degradation), so sharing deterministic IDs
+    across attempts made the retry fail with derived_artifact_conflict.
+    """
+
+    async def scenario() -> None:
+        suffix = uuid.uuid4().hex[:12]
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "store")
+        try:
+            first_job, _ = await _seed_input(database, store, tmp_path, suffix)
+            first = await _executor(
+                database, store, tmp_path, _RecordingSandbox(store)
+            ).execute(first_job, asyncio.Event())
+            assert first["status"] is JobStatus.SUCCEEDED
+            first_versions = list(first["produced_artifact_version_ids"])
+
+            second_job = cast(Job, {**first_job, "attempt": 2})
+            second = await _executor(
+                database, store, tmp_path, _RecordingSandbox(store)
+            ).execute(second_job, asyncio.Event())
+            assert second["status"] is JobStatus.SUCCEEDED, second.get("failure")
+            second_versions = list(second["produced_artifact_version_ids"])
+            assert second_versions != first_versions
+            assert len(second_versions) == len(first_versions)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

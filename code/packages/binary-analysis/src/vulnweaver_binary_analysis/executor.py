@@ -451,6 +451,12 @@ class BinaryImportExecutor:
             analyzed_object_ref = object_ref
             produced: list[str] = []
             metadata = original_metadata
+            # Derived identity is scoped to the attempt, not just the job: a
+            # retry after a lost lease re-runs the whole chain and its content
+            # may legitimately differ (planning degradation, symbolic runs), so
+            # sharing IDs across attempts would collide on registration. The
+            # same attempt replays deterministically into the same IDs.
+            attempt_scope = f"a{int(job['attempt'])}"
             if unpack_outcome.unpacked_path is not None:
                 assert unpack_outcome.final_metadata is not None
                 metadata = unpack_outcome.final_metadata
@@ -459,8 +465,12 @@ class BinaryImportExecutor:
                 role, unpack_format, tool_name = _UNPACK_DERIVATIONS.get(
                     method, ("unpacked", "unpacked-binary", method)
                 )
-                unpacked_version_id = _derived_identifier("artifact-version", job["id"], role)
-                unpacked_artifact_id = _derived_identifier("artifact", job["id"], role)
+                unpacked_version_id = _derived_identifier(
+                    "artifact-version", job["id"], f"{role}\0{attempt_scope}"
+                )
+                unpacked_artifact_id = _derived_identifier(
+                    "artifact", job["id"], f"{role}\0{attempt_scope}"
+                )
                 stored_unpacked = unpack_outcome.stored
                 if stored_unpacked is None:
                     stored_unpacked = await asyncio.to_thread(
@@ -572,8 +582,12 @@ class BinaryImportExecutor:
             stored_result = await asyncio.to_thread(
                 self._store.put_stream, io.BytesIO(result_bytes), max_bytes=len(result_bytes)
             )
-            result_version_id = _derived_identifier("artifact-version", job["id"], "analysis")
-            result_artifact_id = _derived_identifier("artifact", job["id"], "analysis")
+            result_version_id = _derived_identifier(
+                "artifact-version", job["id"], f"analysis\0{attempt_scope}"
+            )
+            result_artifact_id = _derived_identifier(
+                "artifact", job["id"], f"analysis\0{attempt_scope}"
+            )
             await self._register_derived(
                 job,
                 parent_version_id=analyzed_version_id,
@@ -650,6 +664,7 @@ class BinaryImportExecutor:
         self, job: Job, analysis_version_id: str, aggregate: BinaryAnalysisAggregate
     ) -> str | None:
         """Publish a bounded review artifact without changing decompiler evidence."""
+        attempt_scope = f"a{int(job['attempt'])}"
         max_chars = min(32 * 1024, self._limits.max_pseudocode_chars)
         source = _bounded_readable_source(
             aggregate.pseudocode,
@@ -697,8 +712,12 @@ class BinaryImportExecutor:
         stored = await asyncio.to_thread(
             self._store.put_stream, io.BytesIO(content), max_bytes=len(content)
         )
-        version_id = _derived_identifier("artifact-version", job["id"], "readable-pseudocode")
-        artifact_id = _derived_identifier("artifact", job["id"], "readable-pseudocode")
+        version_id = _derived_identifier(
+            "artifact-version", job["id"], f"readable-pseudocode\0{attempt_scope}"
+        )
+        artifact_id = _derived_identifier(
+            "artifact", job["id"], f"readable-pseudocode\0{attempt_scope}"
+        )
         await self._register_derived(
             job,
             parent_version_id=analysis_version_id,
