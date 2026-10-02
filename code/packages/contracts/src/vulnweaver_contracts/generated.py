@@ -1006,6 +1006,7 @@ class ProductSettings(TypedDict):
     agent_loop_budgets: NotRequired[AgentLoopBudgets]
     sandbox_runner_timeout_seconds: NotRequired[int]
     fuzz_runner_timeout_seconds: NotRequired[int]
+    binary_command_timeout_seconds: NotRequired[int]
     angr_enabled: NotRequired[bool | None]
 
 class ToolImageDigests(TypedDict):

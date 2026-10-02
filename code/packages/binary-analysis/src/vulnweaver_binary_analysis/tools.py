@@ -14,7 +14,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import NoReturn, Protocol, cast
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
@@ -29,6 +29,7 @@ from vulnweaver_contracts import (
     BinaryToolRun,
     BinaryXref,
     BinaryXrefType,
+    FailureKind,
     JsonObject,
     ResourceBudget,
     SandboxRequest,
@@ -71,7 +72,25 @@ class BinaryToolAdapter(Protocol):
 
 
 class ToolExecutionError(RuntimeError):
-    """Raised when an isolated tool cannot produce its declared result."""
+    """Raised when an isolated tool cannot produce its declared result.
+
+    The optional structured fields let executors map a sandbox failure onto a
+    retryable failure kind instead of the generic internal error, and carry the
+    runner's failure code into job details for diagnosis.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: FailureKind = FailureKind.TOOL,
+        retryable: bool = False,
+        details: Mapping[str, object] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.retryable = retryable
+        self.details = dict(details or {})
 
 
 class UpxUnpacker(Protocol):
@@ -167,11 +186,11 @@ class BinaryFactsAdapter:
             },
             output_file_names=["binary-facts.json"],
             resource_budget=cast(ResourceBudget, _sandbox_budget(limits)),
-            timeout_seconds=min(600, max(1, int(limits.command_timeout_seconds))),
+            timeout_seconds=max(1, int(limits.command_timeout_seconds)),
         )
         result = await self._sandbox.run(request, cancellation)
         if result["status"] != "succeeded":
-            raise ToolExecutionError("binary-facts sandbox execution failed")
+            _raise_sandbox_failure("binary-facts", result)
         output = next(
             (item for item in result["outputs"] if item["path"] == "binary-facts.json"), None
         )
@@ -207,6 +226,36 @@ class BinaryFactsAdapter:
         )
 
 
+def _raise_sandbox_failure(tool_name: str, result: SandboxResult) -> NoReturn:
+    """Translate a failed SandboxResult into the executor's exception taxonomy.
+
+    A timed-out or unreachable runner is an operational condition the job retry
+    policy can act on, so it maps to a retryable timeout/dependency failure;
+    a runner-side cancellation means the worker is shutting down and surfaces
+    as ToolCancelled. The failure code and message ride along for diagnosis.
+    """
+
+    failure = result["failure"] or {}
+    code = str(failure.get("code") or f"sandbox.status_{result['status']}")
+    message = str(failure.get("message") or "sandbox execution failed")
+    if code == "sandbox.cancelled":
+        raise ToolCancelled(f"{tool_name} sandbox execution cancelled")
+    if code == "sandbox.timeout":
+        kind, retryable = FailureKind.TIMEOUT, True
+    elif code == "sandbox.transport_failed":
+        kind, retryable = FailureKind.DEPENDENCY, True
+    else:
+        kind = FailureKind.TOOL if code == "sandbox.tool_failed" else FailureKind.INTERNAL
+        retryable = bool(failure.get("retryable"))
+    raise ToolExecutionError(
+        f"{tool_name} sandbox execution failed: status={result['status']} "
+        f"code={code} message={message[:300]}",
+        kind=kind,
+        retryable=retryable,
+        details={"failure_code": code, "sandbox_status": str(result["status"])},
+    )
+
+
 def _sandbox_budget(limits: BinaryAnalysisLimits) -> dict[str, object]:
     return {
         "max_model_tokens": 0,
@@ -215,7 +264,7 @@ def _sandbox_budget(limits: BinaryAnalysisLimits) -> dict[str, object]:
         "disk_bytes": 1024 * 1024 * 1024,
         "max_tool_concurrency": 1,
         "max_dynamic_runs": 0,
-        "timeout_seconds": min(600, int(limits.command_timeout_seconds)),
+        "timeout_seconds": max(1, int(limits.command_timeout_seconds)),
     }
 
 

@@ -23,8 +23,11 @@ class SandboxRunnerClient:
             raise ValueError("sandbox runner URL must use http or https")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("sandbox runner URL must not contain credentials or query data")
-        if timeout_seconds <= 0 or timeout_seconds > 600:
-            raise ValueError("sandbox runner timeout must be between 0 and 600 seconds")
+        # The ceiling matches the settings schema (one day): a binary facts
+        # pass over a large real-world sample legitimately waits tens of
+        # minutes, so the old 600-second cap would reject valid configurations.
+        if timeout_seconds <= 0 or timeout_seconds > 86_400:
+            raise ValueError("sandbox runner timeout must be between 0 and 86400 seconds")
         if bearer_token is not None and not bearer_token:
             raise ValueError("sandbox bearer token must not be empty")
         self._url = base_url.rstrip("/") + "/v1/sandbox/runs"

@@ -940,6 +940,7 @@ export interface ProductSettings {
   agent_loop_budgets?: AgentLoopBudgets;
   sandbox_runner_timeout_seconds?: number;
   fuzz_runner_timeout_seconds?: number;
+  binary_command_timeout_seconds?: number;
   angr_enabled?: boolean | null;
 }
 

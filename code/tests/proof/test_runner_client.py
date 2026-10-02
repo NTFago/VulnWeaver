@@ -199,3 +199,16 @@ def test_identity_mismatch_realigns_digest_and_retries_once() -> None:
         assert _RunnerHandler.seen_digests == [stale, _RunnerHandler.current_digest]
         assert result["status"] == "succeeded"
         assert result["failure"] is None
+
+
+def test_client_accepts_settings_scale_runner_timeouts() -> None:
+    """The client bound matches the settings schema (one day), not the old 600s.
+
+    A binary facts pass over a large real-world sample legitimately waits
+    tens of minutes, so the configurable command timeout must be expressible
+    in the client that waits on the runner's response.
+    """
+
+    SandboxRunnerClient("http://127.0.0.1:1", timeout_seconds=86_400)
+    with pytest.raises(ValueError):
+        SandboxRunnerClient("http://127.0.0.1:1", timeout_seconds=86_401)

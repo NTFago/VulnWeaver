@@ -1447,6 +1447,7 @@
         "agent_loop_budgets": {"$ref": "#/$defs/AgentLoopBudgets"},
         "sandbox_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "fuzz_runner_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
+        "binary_command_timeout_seconds": {"type": "integer", "minimum": 0, "maximum": 86400},
         "angr_enabled": {"anyOf": [{"type": "boolean"}, {"type": "null"}]}
       }
     },
