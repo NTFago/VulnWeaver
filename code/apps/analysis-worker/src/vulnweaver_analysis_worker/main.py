@@ -685,7 +685,7 @@ def _proof_executor(
         if model_gateway is not None
         else None
     )
-    return ProofJobExecutor(database, service, script_generator=generator, output_store=store)
+    return ProofJobExecutor(database, service, script_generator=generator)
 
 
 def _poc_scheduler(

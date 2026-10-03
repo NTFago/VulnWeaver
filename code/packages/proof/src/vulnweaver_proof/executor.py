@@ -3,27 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
-from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from typing import BinaryIO, Protocol, cast
+from typing import Protocol, cast
 
 from vulnweaver_contracts import (
     SCHEMA_VERSION,
     ArtifactKind,
-    Evidence,
-    EvidenceRelation,
-    EvidenceStrength,
-    EvidenceType,
     FailureKind,
-    FindingEvidence,
     FindingStatus,
     Job,
     JobKind,
     JobStatus,
-    JsonObject,
-    JsonValue,
     Poc,
     PocKind,
     PocResult,
@@ -44,19 +34,12 @@ from .auto_exploit import (
     POC_VERIFICATION_BASELINE,
     AutoExploitError,
     ExploitScriptGenerator,
-    stable_id,
 )
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 
 
 class ProofSandbox(Protocol):
     async def run(self, request: SandboxRequest, cancellation: asyncio.Event) -> SandboxResult: ...
-
-
-class OutputStore(Protocol):
-    """Read-only view of the artifact store used to recover sandbox stdout."""
-
-    def open(self, object_ref: str) -> AbstractContextManager[BinaryIO]: ...
 
 
 class ProofExecutionError(ValueError):
@@ -72,12 +55,10 @@ class ProofJobExecutor:
         service: ProofExecutionService,
         *,
         script_generator: ExploitScriptGenerator | None = None,
-        output_store: OutputStore | None = None,
     ) -> None:
         self._database = database
         self._service = service
         self._script_generator = script_generator
-        self._output_store = output_store
 
     async def execute(self, job: Job, cancellation: asyncio.Event) -> WorkerResult:
         if job["kind"] not in {JobKind.PROOF, JobKind.EXPLOIT}:
@@ -132,13 +113,9 @@ class ProofJobExecutor:
             async with self._database.transaction() as repositories:
                 await repositories.pocs.create(poc)
             evidence_ids: list[str] = []
-            if isinstance(raw_poc, dict) and poc["status"] is PocStatus.COMPLETED:
-                # A completed reproduction run turns the harness-captured marker
-                # line into strong reproducible evidence, which re-opens review
-                # through the settlement hook's evidence trigger.
-                evidence_ids = await self._persist_poc_evidence(
-                    job, request, poc
-                )
+            # The generated program has no bound target input or independent
+            # verifier yet. Its stdout markers are untrusted claims, so a
+            # completed tool run must not create STRONG finding evidence.
         except ScriptRefOwnershipError as error:
             return _worker_failure(
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
@@ -212,59 +189,6 @@ class ProofJobExecutor:
             },
         )
 
-    async def _persist_poc_evidence(
-        self, job: Job, request: ProofRequest, poc: Poc
-    ) -> list[str]:
-        if self._output_store is None or not poc["run_log_ref"]:
-            return []
-        stdout = await asyncio.to_thread(_read_ref_text, self._output_store, poc["run_log_ref"])
-        markers = _parse_poc_markers(stdout)
-        if markers is None:
-            # No harness-captured marker line: the run completed but never
-            # demonstrated anything structured, so it stays out of the record.
-            return []
-        digest = "sha256:" + hashlib.sha256(stdout.encode("utf-8")).hexdigest()
-        evidence_id = stable_id("evidence", "poc-verification", job["id"])
-        async with self._database.transaction() as repositories:
-            await repositories.evidence.create(
-                Evidence(
-                    schema_version=SchemaVersion.VALUE_1_0_0,
-                    id=evidence_id,
-                    type=EvidenceType.POC_VERIFICATION_RESULT,
-                    strength=EvidenceStrength.STRONG,
-                    artifact_ref=request["script_ref"],
-                    digest=digest,
-                    tool=None,
-                    input_ref=request["script_ref"],
-                    command_hash=None,
-                    exit_code=None,
-                    stdout_ref=poc["run_log_ref"],
-                    stderr_ref=None,
-                    replay_recipe=cast(
-                        JsonObject,
-                        {
-                            "kind": "poc_reproduction",
-                            "reproducible": True,
-                            "markers": markers,
-                            "run_log_ref": poc["run_log_ref"],
-                        },
-                    ),
-                    created_at=poc["created_at"],
-                )
-            )
-            await repositories.findings.link_evidence(
-                FindingEvidence(
-                    schema_version=SchemaVersion.VALUE_1_0_0,
-                    finding_id=request["finding_id"],
-                    evidence_id=evidence_id,
-                    relation=EvidenceRelation.SUPPORTS,
-                    weight=1.0,
-                    created_by="vulnweaver-poc-verification",
-                    created_at=poc["created_at"],
-                )
-            )
-        return [evidence_id]
-
     async def _prepare_auto_request(
         self,
         job: Job,
@@ -305,43 +229,6 @@ class ProofJobExecutor:
                 "timeout_seconds": int(budget["timeout_seconds"]),
             },
         )
-
-
-def _read_ref_text(store: OutputStore, object_ref: str, *, max_bytes: int = 256 * 1024) -> str:
-    with store.open(object_ref) as handle:
-        return handle.read(max_bytes).decode("utf-8", errors="replace")
-
-
-_MARKER_PREFIX = "POC_MARKERS:"
-
-
-def _parse_poc_markers(stdout: str) -> JsonObject | None:
-    """Extract and sanitize the last harness-captured marker line, if any."""
-    for line in reversed(stdout.splitlines()):
-        stripped = line.strip()
-        if not stripped.startswith(_MARKER_PREFIX):
-            continue
-        try:
-            payload: JsonValue = json.loads(stripped[len(_MARKER_PREFIX):])
-        except ValueError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        markers: dict[str, JsonValue] = {}
-        sink_reached = payload.get("sink_reached")
-        if isinstance(sink_reached, bool):
-            markers["sink_reached"] = sink_reached
-        for key in ("source", "sink", "behavior_difference"):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                markers[key] = value
-        protections = payload.get("protections_observed")
-        if isinstance(protections, list):
-            cleaned = [item for item in protections if isinstance(item, str) and item]
-            if cleaned:
-                markers["protections_observed"] = cast(list[JsonValue], cleaned)
-        return markers
-    return None
 
 
 def _worker_failure(
@@ -463,7 +350,7 @@ def _poc_status(status: SandboxStatus) -> PocStatus:
 def _poc_result(result: SandboxResult) -> PocResult:
     status = result["status"]
     if status == SandboxStatus.SUCCEEDED:
-        return PocResult.EXPLOITABLE
+        return PocResult.INCONCLUSIVE
     if status == SandboxStatus.TIMED_OUT:
         return PocResult.TIMEOUT
     if status == SandboxStatus.POLICY_DENIED:

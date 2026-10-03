@@ -154,7 +154,7 @@ def test_proof_binds_script_and_pinned_policy_to_sandbox() -> None:
     assert request["input_ref"] == _request()["script_ref"]
     assert request["image_digest"] == IMAGE_DIGEST
     assert request["tool_name"] == "proof"
-    assert poc["result"] == "exploitable"
+    assert poc["result"] == "inconclusive"
     assert poc["status"] == "completed"
     assert poc["run_log_ref"] == "cas://stdout"
 

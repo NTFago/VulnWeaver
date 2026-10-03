@@ -9,7 +9,6 @@ from uuid import uuid4
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
-    EvidenceType,
     Finding,
     FindingCategory,
     FindingStatus,
@@ -227,7 +226,7 @@ def _poc_job(task_id: str, finding_id: str, suffix: str) -> Job:
     return cast(Job, proof_job)
 
 
-def test_poc_job_creates_marker_evidence_and_returns_evidence_ids(
+def test_poc_job_does_not_promote_self_reported_markers_to_evidence(
     persistence_database_url: str, tmp_path: object
 ) -> None:
     async def scenario() -> None:
@@ -250,23 +249,17 @@ def test_poc_job_creates_marker_evidence_and_returns_evidence_ids(
                 MarkerSandbox(stdout.object_ref), tool_name="proof-tool", tool_version="1.0.0"
             ),
             script_generator=generator,
-            output_store=store,
         )
         try:
             result = await executor.execute(_poc_job(task_id, finding_id, suffix), asyncio.Event())
             assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
-            assert len(result["evidence_ids"]) == 1
+            assert result["evidence_ids"] == []
             async with database.transaction() as repositories:
                 pocs = await repositories.pocs.list_for_finding(finding_id)
                 relations = await repositories.findings.list_evidence_relations(finding_id)
-                evidence = await repositories.evidence.get(result["evidence_ids"][0])
             assert pocs[0]["kind"] == "proof_of_concept"
-            assert evidence["type"] == EvidenceType.POC_VERIFICATION_RESULT
-            recipe = evidence["replay_recipe"]
-            assert recipe["reproducible"] is True
-            assert recipe["markers"]["sink_reached"] is True
-            assert recipe["markers"]["source"] == "request.query"
-            assert [item["evidence_id"] for item in relations] == result["evidence_ids"]
+            assert pocs[0]["result"] == "inconclusive"
+            assert relations == []
         finally:
             await database.dispose()
 
@@ -289,7 +282,6 @@ def test_poc_job_without_marker_line_produces_no_evidence(
                 MarkerSandbox(stdout.object_ref), tool_name="proof-tool", tool_version="1.0.0"
             ),
             script_generator=generator,
-            output_store=store,
         )
         try:
             result = await executor.execute(_poc_job(task_id, finding_id, suffix), asyncio.Event())
@@ -321,7 +313,6 @@ def test_poc_job_policy_denies_confirmed_finding(
                 MarkerSandbox(None), tool_name="proof-tool", tool_version="1.0.0"
             ),
             script_generator=generator,
-            output_store=store,
         )
         try:
             result = await executor.execute(_poc_job(task_id, finding_id, suffix), asyncio.Event())
