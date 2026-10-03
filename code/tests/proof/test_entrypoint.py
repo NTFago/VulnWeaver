@@ -167,8 +167,12 @@ def test_target_cannot_forge_the_supervisor_report(tmp_path: Path) -> None:
 
     assert code == 0
     assert report["verdict"] == "rejected_under_test_conditions"
-    assert report["verdict_reasons"] == ["no_trigger_observed"]
+    # The forged target completes cleanly and both inputs behave alike, so the
+    # supervisor reports no input-dependent behavior instead of any trigger.
+    assert report["verdict_reasons"] == ["no_behavior_difference"]
+    assert report["observed_behavior"] is None
     assert all(run["exit_code"] == 0 for run in report["runs"])
+    assert all(run["output_digest"] for run in report["runs"])
 
 
 def test_target_invocation_timeout_is_reported_and_stopped(

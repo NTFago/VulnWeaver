@@ -33,6 +33,7 @@ REPORT_NAME = "execution-report.json"
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_INPUT_BYTES = 64 * 1024
+MAX_OBSERVED_OUTPUT_BYTES = 64 * 1024
 RUN_TIMEOUT_SECONDS = 30
 REPLAY_COUNT = 2
 TARGET_EXCEPTION_EXIT_CODE = 10
@@ -40,6 +41,7 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
 
 VERIFIED_TRIGGER = "verified_trigger"
+VERIFIED_BEHAVIOR = "verified_behavior"
 REJECTED = "rejected_under_test_conditions"
 INCONCLUSIVE = "inconclusive"
 ENVIRONMENT_ERROR = "environment_error"
@@ -168,6 +170,11 @@ def _check_manifest_shape(manifest: object) -> None:
         for key in ("artifact_id", "version_id", "artifact_kind")
     ) or not _DIGEST.match(str(binding.get("digest", ""))):
         raise BundleError("bundle_manifest_invalid")
+    constraint_digest = manifest.get("constraint_digest")
+    if constraint_digest is not None and (
+        not isinstance(constraint_digest, str) or not _DIGEST.match(constraint_digest)
+    ):
+        raise BundleError("bundle_manifest_invalid")
     inputs = manifest.get("inputs") or []
     controls = manifest.get("controls") or []
     if not inputs or not controls:
@@ -198,7 +205,7 @@ def _write_member(directory: Path, name: str, content: bytes, mode: int) -> Path
 
 class _Run:
     __slots__ = ("role", "input_name", "exit_code", "signal", "duration_millis",
-                 "target_frames", "timed_out")
+                 "target_frames", "timed_out", "output_digest")
 
     def __init__(self, role: str, input_name: str) -> None:
         self.role = role
@@ -208,6 +215,7 @@ class _Run:
         self.duration_millis = 0
         self.target_frames = False
         self.timed_out = False
+        self.output_digest: str | None = None
 
     def record(self) -> dict[str, object]:
         return {
@@ -218,6 +226,7 @@ class _Run:
             "duration_millis": self.duration_millis,
             "target_frames": self.target_frames,
             "timed_out": self.timed_out,
+            "output_digest": self.output_digest,
         }
 
     @property
@@ -227,6 +236,10 @@ class _Run:
     @property
     def attributed(self) -> bool:
         return self.crashed and self.target_frames
+
+    @property
+    def completed(self) -> bool:
+        return self.exit_code == 0 and not self.timed_out
 
 
 def _run_invocation(
@@ -252,6 +265,7 @@ def _run_invocation(
                 json.dumps(invocation, ensure_ascii=True, sort_keys=True).encode("utf-8"),
                 0o444,
             )
+            output_path = run_dir / "observed-output.bin"
             worker = Path(__file__).with_name("vulnweaver-proof-target-worker")
             if not worker.is_file():
                 raise BundleError("target_worker_unavailable")
@@ -261,26 +275,31 @@ def _run_invocation(
                 "PYTHONIOENCODING": "utf-8",
             }
             try:
-                process = subprocess.Popen(
-                    [
-                        sys.executable,
-                        str(worker),
-                        "--target",
-                        str(target_path),
-                        "--input",
-                        str(input_path),
-                        "--invocation",
-                        str(invocation_path),
-                        "--target-digest",
-                        target_digest,
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    cwd=run_dir,
-                    env=environment,
-                    start_new_session=(os.name == "posix"),
-                )
+                with output_path.open("wb") as output_stream:
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(worker),
+                            "--target",
+                            str(target_path),
+                            "--input",
+                            str(input_path),
+                            "--invocation",
+                            str(invocation_path),
+                            "--target-digest",
+                            target_digest,
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        # Output lands in a file the supervisor reads back
+                        # bounded; an unbounded stdout pipe could deadlock or
+                        # balloon memory. The child keeps its inherited fd, so
+                        # closing the parent copy here is safe.
+                        stdout=output_stream,
+                        stderr=subprocess.DEVNULL,
+                        cwd=run_dir,
+                        env=environment,
+                        start_new_session=(os.name == "posix"),
+                    )
             except OSError as error:
                 raise BundleError("target_worker_unavailable") from error
             try:
@@ -297,6 +316,12 @@ def _run_invocation(
                 run.target_frames = True
             elif run.exit_code is not None and run.exit_code < 0:
                 run.signal = -run.exit_code
+            if run.completed:
+                try:
+                    observed = output_path.read_bytes()[:MAX_OBSERVED_OUTPUT_BYTES]
+                    run.output_digest = _digest(observed)
+                except OSError as error:
+                    raise BundleError("target_worker_io_error") from error
     except BundleError:
         raise
     except OSError as error:
@@ -373,6 +398,7 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
         reasons: list[str] = []
         chosen: _Run | None = next((run for run in trigger_runs if run.attributed), None)
         replay_runs: list[_Run] = []
+        behavior_trigger: _Run | None = None
         if chosen is not None:
             index = next(i for i, run in enumerate(trigger_runs) if run is chosen)
             replay_runs = [
@@ -381,6 +407,19 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
                                 "replay")
                 for _ in range(REPLAY_COUNT)
             ]
+        else:
+            # No attributed crash: the first cleanly completed trigger run can
+            # still demonstrate input-dependent behavior. Replays establish
+            # that the observed output is deterministic, not incidental noise.
+            behavior_trigger = next((run for run in trigger_runs if run.completed), None)
+            if behavior_trigger is not None:
+                index = next(i for i, run in enumerate(trigger_runs) if run is behavior_trigger)
+                replay_runs = [
+                    _run_invocation(invocation, target_bytes, target_digest,
+                                    input_paths[index].read_bytes(), input_paths[index].name,
+                                    "replay")
+                    for _ in range(REPLAY_COUNT)
+                ]
 
         if any(run.timed_out for run in (*control_runs, *trigger_runs, *replay_runs)):
             verdict = INCONCLUSIVE
@@ -388,22 +427,63 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
         elif any(run.crashed for run in control_runs):
             verdict = REJECTED
             reasons = ["control_input_failed"]
-        elif chosen is None:
+        elif chosen is not None:
+            if all(run.attributed for run in replay_runs):
+                verdict = VERIFIED_TRIGGER
+                reasons = ["target_exception_attributed", "control_input_clean", "replay_stable"]
+            else:
+                verdict = INCONCLUSIVE
+                reasons = ["non_deterministic_trigger"]
+        elif behavior_trigger is not None and all(run.completed for run in replay_runs):
+            control_digest = next(
+                (run.output_digest for run in control_runs if run.completed), None
+            )
+            crafted_digest = behavior_trigger.output_digest
+            if control_digest is None or crafted_digest is None:
+                verdict = REJECTED
+                reasons = ["no_trigger_observed"]
+            else:
+                replay_consistent = all(
+                    run.output_digest == crafted_digest for run in replay_runs
+                )
+                differed = crafted_digest != control_digest
+                if differed and replay_consistent:
+                    verdict = VERIFIED_BEHAVIOR
+                    reasons = [
+                        "behavior_difference_observed",
+                        "control_input_clean",
+                        "replay_stable",
+                    ]
+                else:
+                    verdict = REJECTED
+                    reasons = ["no_behavior_difference"]
+        else:
             verdict = REJECTED
             reasons = (["target_not_involved"]
                        if any(run.crashed for run in trigger_runs)
                        else ["no_trigger_observed"])
-        elif all(run.attributed for run in replay_runs):
-            verdict = VERIFIED_TRIGGER
-            reasons = ["target_exception_attributed", "control_input_clean", "replay_stable"]
-        else:
-            verdict = INCONCLUSIVE
-            reasons = ["non_deterministic_trigger"]
+
+        observed_behavior: dict[str, object] | None = None
+        if verdict == VERIFIED_BEHAVIOR and behavior_trigger is not None:
+            control_digest = next(
+                run.output_digest for run in control_runs if run.completed
+            )
+            crafted_digest = behavior_trigger.output_digest
+            assert crafted_digest is not None
+            observed_behavior = {
+                "crafted_output_digest": crafted_digest,
+                "control_output_digest": control_digest,
+                "differed": crafted_digest != control_digest,
+                "replay_consistent": all(
+                    run.output_digest == crafted_digest for run in replay_runs
+                ),
+            }
 
         runs = [run.record() for run in (*control_runs, *trigger_runs, *replay_runs)]
         trigger_count = sum(
             1 for run in (*trigger_runs, *replay_runs) if run.attributed
         )
+        constraint_digest = manifest.get("constraint_digest")
         return {
             "schema_version": "1.0.0",
             "id": _observation_id(finding_id, kind, str(manifest["bundle_id"])),
@@ -424,7 +504,13 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
             "trigger_runs": trigger_count,
             "replay_runs": len(replay_runs),
             "untrusted_claims": None,
-            "verifier": {"name": "proof-entrypoint", "version": "2.0.0",
+            "observed_behavior": observed_behavior,
+            "constraint_digest": (
+                constraint_digest
+                if isinstance(constraint_digest, str) and _DIGEST.match(constraint_digest)
+                else None
+            ),
+            "verifier": {"name": "proof-entrypoint", "version": "2.1.0",
                          "image_digest": None},
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }

@@ -10,13 +10,14 @@ exit status alone never produces a vulnerability conclusion (ADR-036).
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from vulnweaver_contracts import (
     Evidence,
     EvidenceStrength,
     EvidenceType,
+    JsonObject,
     PocResult,
     SchemaVersion,
     VerificationObservation,
@@ -81,11 +82,41 @@ def observation_is_consistent(observation: VerificationObservation) -> bool:
             "control_input_failed"
         ]
     elif trigger_failure is None:
-        verdict = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS
-        reasons = [
-            "target_not_involved" if any(_run_crashed(run) for run in trigger)
-            else "no_trigger_observed"
-        ]
+        behavior_trigger = next((run for run in trigger if _run_completed(run)), None)
+        behavior_replay = (
+            len(replay) == MIN_REPLAY_RUNS and all(_run_completed(run) for run in replay)
+        )
+        behavior = observation.get("observed_behavior")
+        if (
+            behavior_trigger is not None
+            and behavior_replay
+            and isinstance(behavior, dict)
+            and behavior.get("differed") is True
+            and behavior.get("replay_consistent") is True
+            and _behavior_matches_runs(behavior, behavior_trigger, control, replay)
+        ):
+            verdict = VerificationOutcome.VERIFIED_BEHAVIOR
+            reasons = [
+                "behavior_difference_observed",
+                "control_input_clean",
+                "replay_stable",
+            ]
+        elif any(_run_crashed(run) for run in trigger):
+            verdict = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS
+            reasons = ["target_not_involved"]
+        elif behavior_trigger is not None and behavior_replay:
+            # The entrypoint distinguishes "no comparable output" from "no
+            # difference" by digest presence; mirror that exactly.
+            comparable = (
+                behavior_trigger.get("output_digest") is not None
+                and all(run.get("output_digest") is not None for run in replay)
+                and any(run.get("output_digest") is not None for run in control)
+            )
+            verdict = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS
+            reasons = ["no_behavior_difference" if comparable else "no_trigger_observed"]
+        else:
+            verdict = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS
+            reasons = ["no_trigger_observed"]
     elif (
         len(replay) == MIN_REPLAY_RUNS
         and all(_run_attributed(run) for run in replay)
@@ -101,6 +132,48 @@ def observation_is_consistent(observation: VerificationObservation) -> bool:
     )
 
 
+def _run_completed(run: Mapping[str, object]) -> bool:
+    return run["exit_code"] == 0 and not bool(run["timed_out"])
+
+
+def _behavior_matches_runs(
+    behavior: Mapping[str, object],
+    behavior_trigger: Mapping[str, object],
+    control: Sequence[Mapping[str, object]],
+    replay: Sequence[Mapping[str, object]],
+) -> bool:
+    """The claimed behavior must equal the digests the runs themselves recorded."""
+
+    crafted = behavior_trigger.get("output_digest")
+    control_digest = next(
+        (run.get("output_digest") for run in control if _run_completed(run)), None
+    )
+    replay_digests = {run.get("output_digest") for run in replay}
+    return (
+        isinstance(crafted, str)
+        and isinstance(control_digest, str)
+        and behavior.get("crafted_output_digest") == crafted
+        and behavior.get("control_output_digest") == control_digest
+        and replay_digests == {crafted}
+    )
+
+
+def behavior_is_verified(observation: VerificationObservation) -> bool:
+    """A stable, supervisor-computed output difference between crafted and control.
+
+    The original target ran to completion under the crafted input with output
+    that (a) differs from the control run and (b) reproduces byte-for-byte on
+    every replay. That is input-dependent behavior of the bound target — the
+    honest oracle behind the auth/injection policy facts — and it never claims
+    a crash or security impact by itself.
+    """
+
+    return (
+        observation_is_consistent(observation)
+        and str(observation["verdict"]) == VerificationOutcome.VERIFIED_BEHAVIOR
+    )
+
+
 def _run_crashed(run: Mapping[str, object]) -> bool:
     exit_code = run["exit_code"]
     return (exit_code is not None and exit_code != 0) or run["signal"] is not None
@@ -113,10 +186,14 @@ def _run_attributed(run: Mapping[str, object]) -> bool:
 def poc_result_from_observation(observation: VerificationObservation) -> PocResult:
     # The verdict arrives as plain JSON strings, so compare by value.
     verdict = str(observation["verdict"])
-    if verdict == VerificationOutcome.VERIFIED_TRIGGER:
+    if verdict in {
+        VerificationOutcome.VERIFIED_TRIGGER,
+        VerificationOutcome.VERIFIED_BEHAVIOR,
+    }:
         # The current verifier observes a repeatable Python exception in the
-        # selected target function. That is useful behavior evidence, but it
-        # does not establish security impact or an exploitable crash.
+        # selected target function, or a repeatable output difference. Both
+        # are useful behavior evidence, but neither establishes security
+        # impact or an exploitable crash.
         return PocResult.INCONCLUSIVE
     if verdict == VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS:
         return PocResult.NOT_EXPLOITABLE_UNDER_ENVIRONMENT
@@ -135,14 +212,17 @@ def evidence_from_observation(
     bundle_digest: str,
     created_at: str,
 ) -> Evidence:
-    """Build SUPPORTING evidence for one reproducible target-exception observation.
+    """Build SUPPORTING evidence for one reproducible target-observation.
 
-    A repeated exception is recorded for diagnosis, but does not prove a
-    vulnerability impact. The review gate must not derive crash facts from it.
+    A repeated exception or a repeated output difference is recorded for
+    diagnosis, but does not prove a vulnerability impact. The review gate must
+    not derive crash facts from it.
     """
 
-    if not observation_is_reproducible(observation):
-        raise ValueError("evidence is only derived from verified triggers")
+    if not (
+        observation_is_reproducible(observation) or behavior_is_verified(observation)
+    ):
+        raise ValueError("evidence is only derived from verified observations")
     crashed = next(
         (
             run
@@ -178,8 +258,86 @@ def evidence_from_observation(
             "stderr_ref": None,
             "replay_recipe": {
                 "kind": "verification_observation",
-                "reproducible": observation_is_reproducible(observation),
+                "reproducible": True,
                 "observation": stable_observation,
+            },
+            "created_at": created_at,
+        },
+    )
+
+
+def differential_evidence_from_observation(
+    observation: VerificationObservation,
+    *,
+    evidence_id: str,
+    finding_category: str,
+    finding_constraint_digest: str | None,
+    bundle_ref: str,
+    bundle_digest: str,
+    created_at: str,
+) -> Evidence | None:
+    """STRONG record of a supervisor-verified output difference (CR-04).
+
+    The markers below are not model claims and not target self-reports: every
+    value is derived from the trusted entrypoint's own observation after the
+    worker validated it against the bundle. ``constraint_digest`` binds the
+    probe to the constraint registered on the finding; when the observation
+    carries no matching digest the auth fact is withheld.
+    """
+
+    if not behavior_is_verified(observation):
+        return None
+    behavior = observation.get("observed_behavior")
+    if not isinstance(behavior, dict):
+        return None
+    constraint_digest = observation.get("constraint_digest")
+    constraint_bound = (
+        isinstance(constraint_digest, str)
+        and bool(constraint_digest)
+        and constraint_digest == finding_constraint_digest
+    )
+    category = finding_category.removeprefix("FindingCategory.")
+    if category == "auth_or_business_logic":
+        if not constraint_bound:
+            # Without the bound constraint the run proves input-dependence but
+            # says nothing about the registered security invariant.
+            return None
+        markers: JsonObject = {
+            "behavior_difference": (
+                f"crafted output {behavior['crafted_output_digest']} != "
+                f"control output {behavior['control_output_digest']}"
+            ),
+            "constraint_digest": constraint_digest,
+        }
+    elif category == "injection":
+        markers = {
+            "sink_reached": True,
+            "source": "crafted_input",
+            "sink": f"target_callable@{observation['target_binding']['digest']}",
+        }
+    else:
+        # Differential output says nothing about memory corruption or
+        # static-only findings; no record is honest there.
+        return None
+    return cast(
+        Evidence,
+        {
+            "schema_version": SchemaVersion.VALUE_1_0_0,
+            "id": evidence_id,
+            "type": EvidenceType.POC_VERIFICATION_RESULT,
+            "strength": EvidenceStrength.STRONG,
+            "artifact_ref": bundle_ref,
+            "digest": bundle_digest,
+            "tool": observation["verifier"],
+            "input_ref": bundle_ref,
+            "command_hash": observation["driver_digest"],
+            "exit_code": 0,
+            "stdout_ref": None,
+            "stderr_ref": None,
+            "replay_recipe": {
+                "kind": "poc_verification_result",
+                "reproducible": True,
+                "markers": markers,
             },
             "created_at": created_at,
         },

@@ -2,7 +2,9 @@
 
 > 本文记录代码审查发现的当前实现缺陷，不是修复完成记录。以代码、定向测试和复现为证据；历史 ADR 记录的是设计决策和当时的验证范围，不能替代本清单的当前状态。优先级中的 P0 表示结果可信度或核心链路已被破坏，P1 表示确定的漏报、确认阻断或数据语义错误，P2 表示覆盖透明度问题。
 
-> 后续进展（2026-10-04）：下表和 04d1281 章节保留各轮复审时的历史代码证据。针对 `main @ 2757f35` 的复核项已在 `main @ f5bc37e` 修复并部署：全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；重启后的真实 Runner 正反例 3 passed。目标异常映射为 `INCONCLUSIVE`，只产生 `SUPPORTING` observation，FindingReviewGate 不从中推导崩溃事实。受影响镜像已重建、API ready、Web 返回 200。CR-04 独立影响判据、CR-06 部分覆盖、CR-07/08 仍待处理。旧自动验证结论不得按新协议追认。
+> 后续进展（2026-10-04）：下表和 04d1281 章节保留各轮复审时的历史代码证据。针对 `main @ 2757f35` 的复核项已在 `main @ f5bc37e` 修复并部署：全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；重启后的真实 Runner 正反例 3 passed。目标异常映射为 `INCONCLUSIVE`，只产生 `SUPPORTING` observation，FindingReviewGate 不从中推导崩溃事实。受影响镜像已重建、API ready、Web 返回 200。旧自动验证结论不得按新协议追认。
+>
+> 第二轮修复（2026-10-04，本分支）：CR-04 剩余、CR-05、CR-06、CR-07、CR-08 已实现。CR-08：聚合 merge 逐集合记录 offered/retained/limit/截断原因（契约新增 `BinaryCoverage`），经 result 文档传入规划 facts 与 agent `artifact_facts`/`analysis_baseline`。CR-06：回退审计改为按页（64 函数/页）调用模型并逐页投影+checkpoint 续跑，deadline 兜底（ADR-027 口径 8h），消除 256 函数截断；读取证明键改为 `(version_id, path, line)`，跨版本同路径不再互相授权。CR-05：补二进制同函数双地址回归。CR-07：`PairRepository.neighborhood` 下推为递归 CTE（基准 2000 函数图 402ms→54ms，6000 函数 110ms），审计入口用 `has_functions` 廉价探针，agent 成功路径不再双重全量装载。CR-04 剩余：entrypoint 逐轮捕获有界输出并摘要，新增 `verified_behavior` 判定（crafted≠control 且重放一致）；worker 依据自校验 observation 派生 STRONG `POC_VERIFICATION_RESULT` 标记（注入：sink_reached；鉴权：behavior_difference+constraint_digest 绑定审核期登记约束的 SHA-256），gate 侧白名单恢复 markers 并将约束绑定映射为 `constraint_analysis`——鉴权类 Finding 自此具备独立判据链；注入类 `protection_analysis` 仍无独立来源、保持候选。定向验证见 `tests/proof/test_differential_verification.py`、`tests/proof/test_entrypoint.py`、`tests/orchestrator/test_semantic_audit_paging.py`、`tests/binary_analysis/test_coverage.py`、`tests/persistence/test_pair_neighborhood.py`。
 
 ## 范围和验证边界
 

@@ -195,6 +195,7 @@ def build_execution_bundle(
     input_refs: Sequence[str],
     control_refs: Sequence[str],
     created_at: str,
+    constraint_digest: str | None = None,
     max_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
 ) -> ExecutionBundle:
     """Assemble the versioned manifest and pack driver/target/inputs into CAS.
@@ -202,6 +203,8 @@ def build_execution_bundle(
     The caller supplies CAS references that were already resolved through the
     repositories (project ownership checks happen before this point); this
     function re-verifies digests so the manifest never lies about content.
+    ``constraint_digest`` binds the probe to the finding's registered security
+    constraint so the review gate can tie a differential observation to it.
     """
 
     if not input_refs:
@@ -220,7 +223,7 @@ def build_execution_bundle(
     inputs = [_load_member(store, ref, limit=64 * 1024) for ref in input_refs]
     controls = [_load_member(store, ref, limit=64 * 1024) for ref in control_refs]
 
-    manifest = cast(
+    manifest_value: ExecutionBundleManifest = cast(
         ExecutionBundleManifest,
         {
             "schema_version": SchemaVersion.VALUE_1_0_0,
@@ -238,9 +241,11 @@ def build_execution_bundle(
                 _member(f"{BUNDLE_CONTROL_PREFIX}{index:04d}", item.content)
                 for index, item in enumerate(controls)
             ],
+            "constraint_digest": constraint_digest,
             "created_at": created_at,
         },
     )
+    manifest = manifest_value
     validate_contract("ExecutionBundleManifest", manifest)
 
     members: list[tuple[str, bytes, int]] = [

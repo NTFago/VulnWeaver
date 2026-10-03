@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import types
 from pathlib import Path
 
 TARGET_EXCEPTION_EXIT_CODE = 10
 WORKER_ERROR_EXIT_CODE = 11
 CALLABLE_NOT_FOUND_EXIT_CODE = 12
+MAX_RETURN_CHARS = 2048
 
 
 def _nested_code_objects(code: types.CodeType) -> set[types.CodeType]:
@@ -85,7 +87,7 @@ def _run(target_path: Path, input_path: Path, invocation_path: Path, digest: str
             return CALLABLE_NOT_FOUND_EXIT_CODE
         target_codes = _nested_code_objects(target_callable.__code__)
         try:
-            target_callable(*call_prefix, value)
+            result = target_callable(*call_prefix, value)
         except BaseException as error:
             traceback = error.__traceback__
             while traceback is not None:
@@ -93,6 +95,20 @@ def _run(target_path: Path, input_path: Path, invocation_path: Path, digest: str
                     return TARGET_EXCEPTION_EXIT_CODE
                 traceback = traceback.tb_next
             return WORKER_ERROR_EXIT_CODE
+        # One machine-readable line binds the observed output to the callable's
+        # result; the supervisor digests the whole captured stdout. repr stays
+        # stable across runs (PYTHONHASHSEED=0) and is truncated to a bound.
+        try:
+            sys.stdout.write(
+                "VWRETURN "
+                + json.dumps(repr(result)[:MAX_RETURN_CHARS], ensure_ascii=True)
+                + "\n"
+            )
+            sys.stdout.flush()
+        except (OSError, ValueError, RecursionError):
+            # stdout is best-effort: a broken stream must not turn a clean
+            # return into a fake target exception.
+            pass
         return 0
     except BaseException:
         return WORKER_ERROR_EXIT_CODE

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, cast
@@ -17,6 +19,7 @@ from vulnweaver_contracts import (
     ArtifactVersion,
     Evidence,
     EvidenceRelation,
+    EvidenceType,
     ExecutionBundleManifest,
     FailureKind,
     Finding,
@@ -25,6 +28,7 @@ from vulnweaver_contracts import (
     Job,
     JobKind,
     JobStatus,
+    JsonObject,
     Poc,
     PocKind,
     PocResult,
@@ -60,6 +64,8 @@ from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_pr
 from .verifier import (
     REPORT_FILE_NAME,
     ObservationError,
+    behavior_is_verified,
+    differential_evidence_from_observation,
     evidence_from_observation,
     observation_is_consistent,
     observation_is_reproducible,
@@ -160,23 +166,27 @@ class ProofJobExecutor:
             )
             poc = cast(Poc, {**run.poc, "created_at": job["created_at"]})
             evidence = self._observation_evidence(job, request, run)
+            differential = await self._differential_evidence(job, request, run)
             evidence_ids: list[str] = []
             async with self._database.transaction() as repositories:
                 await repositories.pocs.create(poc)
-                if evidence is not None:
-                    await repositories.evidence.create(evidence)
+                # POC row and every evidence record commit atomically (P1-3).
+                for record in (evidence, differential):
+                    if record is None:
+                        continue
+                    await repositories.evidence.create(record)
                     await repositories.findings.link_evidence(
                         FindingEvidence(
                             schema_version=SchemaVersion.VALUE_1_0_0,
                             finding_id=finding["id"],
-                            evidence_id=evidence["id"],
+                            evidence_id=record["id"],
                             relation=EvidenceRelation.SUPPORTS,
                             weight=1.0,
                             created_by="vulnweaver-proof-verifier",
-                            created_at=evidence["created_at"],
+                            created_at=record["created_at"],
                         )
                     )
-                    evidence_ids.append(evidence["id"])
+                    evidence_ids.append(record["id"])
         except ScriptRefOwnershipError as error:
             return _worker_failure(
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
@@ -226,7 +236,9 @@ class ProofJobExecutor:
         observation = run.observation
         if observation is None:
             return None
-        if not observation_is_reproducible(observation):
+        if not (
+            observation_is_reproducible(observation) or behavior_is_verified(observation)
+        ):
             return None
         assert self._store is not None  # guarded by _prepare bundle construction
         evidence = evidence_from_observation(
@@ -237,6 +249,100 @@ class ProofJobExecutor:
             created_at=job["created_at"],
         )
         return evidence
+
+    async def _differential_evidence(
+        self,
+        job: Job,
+        request: ProofRequest,
+        run: ProofRun,
+    ) -> Evidence | None:
+        """STRONG record when the run verified input-dependent target behavior.
+
+        Only the worker's own validated observation supplies the markers, and
+        the auth variant additionally requires the probe to be bound to the
+        constraint registered on this finding (CR-04).
+        """
+
+        observation = run.observation
+        if observation is None or not behavior_is_verified(observation):
+            return None
+        assert self._store is not None
+        async with self._database.transaction() as repositories:
+            finding = await repositories.findings.get(request["finding_id"])
+            constraint_digest = await self._finding_constraint_digest(repositories, finding)
+        return differential_evidence_from_observation(
+            observation,
+            evidence_id=stable_id("evidence", "poc-verification", job["id"]),
+            finding_category=str(finding["category"]),
+            finding_constraint_digest=constraint_digest,
+            bundle_ref=request["script_ref"],
+            bundle_digest=self._store.verify(request["script_ref"]).digest,
+            created_at=job["created_at"],
+        )
+
+    async def _finding_constraint_digest(
+        self, repositories: Repositories, finding: Finding
+    ) -> str | None:
+        """Digest of the constraint the audit registered for this finding.
+
+        The constraint text lives in the audit report artifact referenced by
+        the finding's model evidence; a SHA-256 binding of it lets the review
+        gate tie a differential probe to one registered invariant. Findings
+        without a constraint (legacy or manual) stay unbound.
+        """
+
+        relations = await repositories.findings.list_evidence_relations(finding["id"])
+        for relation in relations:
+            try:
+                evidence = await repositories.evidence.get(relation["evidence_id"])
+            except EntityNotFound:
+                continue
+            if evidence["type"] is not EvidenceType.MODEL_EXPLANATION:
+                continue
+            constraint = await self._constraint_from_report(
+                evidence["artifact_ref"], finding
+            )
+            if constraint is not None:
+                normalized = unicodedata.normalize("NFKC", constraint).strip()
+                if not normalized:
+                    return None
+                return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return None
+
+    async def _constraint_from_report(
+        self, report_ref: str, finding: Finding
+    ) -> str | None:
+        if self._store is None or not report_ref:
+            return None
+        try:
+            buffer = io.BytesIO()
+            with self._store.open(report_ref) as source:
+                buffer.write(source.read(8 * 1024 * 1024 + 1))
+            report = json.loads(buffer.getvalue().decode("utf-8"))
+        except (ArtifactStoreError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        entries_value = report.get("report", {}).get("findings")
+        if not isinstance(entries_value, list):
+            return None
+        entries = cast(list[object], entries_value)
+        location = finding["location"]
+        for entry_value in entries:
+            if not isinstance(entry_value, dict):
+                continue
+            entry = cast(JsonObject, entry_value)
+            if str(entry.get("cwe_id")) != str(finding["cwe_id"]):
+                continue
+            same_line = (
+                entry.get("path") == location.get("path")
+                and entry.get("start_line") == location.get("start_line")
+            )
+            same_address = entry.get("address") == location.get("virtual_address")
+            if not (same_line or same_address):
+                continue
+            constraint = entry.get("constraint")
+            if isinstance(constraint, str) and constraint.strip():
+                return constraint
+        return None
 
     async def _target_binding(
         self, repositories: Repositories, finding: Finding
@@ -270,6 +376,7 @@ class ProofJobExecutor:
             raise AutoExploitError("proof.store_unavailable", FailureKind.DEPENDENCY)
         async with self._database.transaction() as repositories:
             binding, target_ref, artifact = await self._target_binding(repositories, finding)
+            constraint_digest = await self._finding_constraint_digest(repositories, finding)
         bundle = await asyncio.to_thread(
             build_execution_bundle,
             self._store,
@@ -281,6 +388,7 @@ class ProofJobExecutor:
             input_refs=[generated.crafted_input_ref],
             control_refs=[generated.control_input_ref],
             created_at=job["created_at"],
+            constraint_digest=constraint_digest,
         )
         artifact_id = stable_id("artifact", "execution-bundle", job["id"])
         version_id = stable_id(
@@ -717,7 +825,9 @@ def _observation_runs_match_bundle(
     if len(replay) not in {0, 2} or any(role != "replay" for role, _ in replay):
         return False
     if replay:
-        triggering = next(
+        # Replays follow either the crash-attributed trigger (memory shape) or
+        # the cleanly completed trigger whose output the behavior oracle diffs.
+        crash_trigger = next(
             (
                 run
                 for run in runs
@@ -728,7 +838,18 @@ def _observation_runs_match_bundle(
             ),
             None,
         )
-        if triggering is None or any(name != triggering["input_name"] for _, name in replay):
+        behavior_trigger = next(
+            (
+                run
+                for run in runs
+                if run["role"] == "trigger"
+                and run["exit_code"] == 0
+                and not run["timed_out"]
+            ),
+            None,
+        )
+        anchor = crash_trigger or behavior_trigger
+        if anchor is None or any(name != anchor["input_name"] for _, name in replay):
             return False
     return True
 
