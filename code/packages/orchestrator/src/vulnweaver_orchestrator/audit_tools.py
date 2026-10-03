@@ -342,6 +342,8 @@ class AuditWorkspace:
         self._files: dict[tuple[str, str], str | None] = {}
         self._documents: dict[str, JsonObject | None] = {}
         self._reader: SourceExcerptReader | None = None
+        self._read_source_lines: set[tuple[str, int]] = set()
+        self._read_binary_functions: set[str] = set()
 
     async def load(self) -> None:
         """Index the task's artifact versions and every function they hold."""
@@ -447,7 +449,16 @@ class AuditWorkspace:
         if ref is None:
             return {"found": False, "reason_code": "function_not_indexed"}
         function = ref.function
-        code, code_kind, truncated = await self._function_code(ref)
+        code, code_kind, truncated, read_start, read_end = await self._function_code(ref)
+        if code:
+            source = function["source_location"]
+            if source is not None and code_kind == "source" and read_start is not None:
+                self._read_source_lines.update(
+                    (source["path"], line)
+                    for line in range(read_start, (read_end or read_start) + 1)
+                )
+            elif source is None:
+                self._read_binary_functions.add(function["id"])
         summary = _function_summary(ref)
         summary.update(
             {
@@ -662,31 +673,38 @@ class AuditWorkspace:
                 return ref
         return None
 
-    async def _function_code(self, ref: AuditFunctionRef) -> tuple[str, str, bool]:
-        """Return (code, kind, truncated) for one indexed function."""
+    async def _function_code(
+        self, ref: AuditFunctionRef
+    ) -> tuple[str, str, bool, int | None, int | None]:
+        """Return code, kind, truncation and the exact source excerpt interval."""
 
         budget = self.limits.max_text_chars
         text = pseudocode_text(ref.function, limit=budget + 1)
         if text:
-            return text[:budget], "pseudocode", len(text) > budget
+            return text[:budget], "pseudocode", len(text) > budget, None, None
         source = ref.function["source_location"]
         if source is None:
-            return "", "unavailable", False
+            return "", "unavailable", False, None, None
         loader = self.fact_loader
         assert loader is not None
         facts = await loader.load(self.task_id, cast(JsonObject, dict(source)))
         if not facts.available or facts.excerpt is None:
-            return "", "unavailable", False
-        return facts.excerpt.text, "source", facts.excerpt.truncated
+            return "", "unavailable", False, None, None
+        excerpt = facts.excerpt
+        return excerpt.text, "source", excerpt.truncated, excerpt.start_line, excerpt.end_line
 
     async def _search_source(self, matcher: re.Pattern[str], limit: int) -> JsonObject:
         matches: list[JsonObject] = []
         scanned = 0
-        for ref in self._functions:
-            source = ref.function["source_location"]
-            if source is None:
-                continue
-            text = await self._read_file(ref.version_id, source["path"])
+        files = dict.fromkeys(
+            (ref.version_id, ref.function["source_location"]["path"])
+            for ref in self._functions
+            if ref.function["source_location"] is not None
+        )
+        for version_id, path in files:
+            if scanned >= self.limits.max_search_files or len(matches) >= limit:
+                break
+            text = await self._read_file(version_id, path)
             if text is None:
                 continue
             scanned += 1
@@ -694,18 +712,33 @@ class AuditWorkspace:
                 if len(matches) >= limit:
                     break
                 if matcher.search(line) is not None:
+                    self._read_source_lines.add((path, number))
                     matches.append(
                         cast(
                             JsonObject,
-                            {"path": source["path"], "line": number, "text": line.strip()[:512]},
+                            {"path": path, "line": number, "text": line.strip()[:512]},
                         )
                     )
-            if len(matches) >= limit or scanned >= self.limits.max_search_files:
-                break
         return cast(
             JsonObject,
-            {"scope": "source", "files_scanned": scanned, "matches": matches},
+            {
+                "scope": "source",
+                "files_available": len(files),
+                "files_scanned": scanned,
+                "files_unscanned": max(0, len(files) - scanned),
+                "matches": matches,
+            },
         )
+
+    def has_read_reported_code(
+        self, *, path: str | None, start_line: int | None, address: int | None
+    ) -> bool:
+        if address is not None:
+            ref = self.function_at_address(address)
+            return ref is not None and ref.function["id"] in self._read_binary_functions
+        return path is not None and start_line is not None and (
+            path, start_line
+        ) in self._read_source_lines
 
     async def _search_binary_strings(self, matcher: re.Pattern[str], limit: int) -> JsonObject:
         document = await self._binary_document()
@@ -925,6 +958,12 @@ class AuditStepExecutor:
             return _failed("finding_report.limit_reached", str(_MAX_REPORTED_FINDINGS))
         arguments = call.arguments
         address = _optional_int(arguments, "address")
+        path = _optional_str(arguments, "path")
+        start_line = _optional_int(arguments, "start_line")
+        if not self.workspace.has_read_reported_code(
+            path=path, start_line=start_line, address=address
+        ):
+            return _failed("finding_report.code_not_read", "read the reported code first")
         request = _optional_str(arguments, "verification_request")
         self.reported.append(
             ReportedFinding(
@@ -932,8 +971,8 @@ class AuditStepExecutor:
                 title=str(arguments["title"]),
                 severity=str(arguments["severity"]),
                 rationale=str(arguments["rationale"]),
-                path=_optional_str(arguments, "path"),
-                start_line=_optional_int(arguments, "start_line"),
+                path=path,
+                start_line=start_line,
                 end_line=_optional_int(arguments, "end_line"),
                 address=address,
                 verification_request=None if request in (None, "none") else request,

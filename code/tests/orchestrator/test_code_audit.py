@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -45,6 +46,7 @@ from vulnweaver_orchestrator import (
     SemanticAuditJobExecutor,
     SemanticAuditor,
 )
+from vulnweaver_orchestrator.audit_tools import AuditFunctionRef
 from vulnweaver_orchestrator.source_facts import SourceReviewFacts
 from vulnweaver_persistence import Database, DatabaseSettings
 from vulnweaver_source_analysis import SourceExcerpt
@@ -153,6 +155,74 @@ def source_function(identifier: str, version_id: str, path: str) -> PairFunction
         signature="def handle(request)",
         attributes={},
     )
+
+
+def test_source_search_counts_unique_files_before_applying_file_budget() -> None:
+    async def scenario() -> None:
+        workspace = AuditWorkspace(
+            cast(Database, None), cast(Any, None), "task:test",
+            limits=AuditWorkspaceLimits(max_search_files=2),
+        )
+        workspace._functions = [
+            AuditFunctionRef("version:test", source_function("function:a", "version:test", "a.py")),
+            AuditFunctionRef("version:test", source_function("function:b", "version:test", "a.py")),
+            AuditFunctionRef("version:test", source_function("function:c", "version:test", "b.py")),
+        ]
+        report_call = ScheduledToolCall(
+            step_id="report", tool=ToolRegistry(AUDIT_TOOLS).resolve("finding-report", "1.0.0"),
+            input_refs=(), task_id="task:test", plan_id="plan:test",
+            arguments={
+                "cwe_id": "CWE-95", "title": "second file issue", "severity": "high",
+                "path": "b.py", "start_line": 1, "rationale": "needle in code",
+            },
+        )
+        reporter = AuditStepExecutor(workspace)
+        unread = await reporter.execute(report_call)
+        assert unread["reason_code"] == "finding_report.code_not_read"
+        assert reporter.reported == []
+        with patch.object(workspace, "_read_file", new_callable=AsyncMock) as reader:
+            reader.side_effect = lambda version, path: {
+                "a.py": "no match\n", "b.py": "needle\n"
+            }[path]
+            result = await workspace.search(pattern="needle", scope="source", limit=10)
+        assert result["files_available"] == 2
+        assert result["files_scanned"] == 2
+        assert result["files_unscanned"] == 0
+        assert result["matches"][0]["path"] == "b.py"
+        assert reader.await_count == 2
+        assert (await reporter.execute(report_call))["recorded"] is True
+
+    asyncio.run(scenario())
+
+
+def test_truncated_function_excerpt_does_not_authorize_unread_tail() -> None:
+    class TruncatedLoader:
+        async def load(self, task_id: str, location: JsonObject) -> SourceReviewFacts:
+            return SourceReviewFacts(
+                True, "source_excerpt_truncated",
+                SourceExcerpt(
+                    artifact_version_id="version:test", archive_ref="cas://sha256/" + "a" * 64,
+                    archive_digest="sha256:" + "a" * 64, path="a.py",
+                    file_digest="sha256:" + "b" * 64, start_line=1, end_line=1,
+                    text="def handle(request):\n", truncated=True,
+                ),
+            )
+
+    async def scenario() -> None:
+        workspace = AuditWorkspace(
+            cast(Database, None), cast(Any, None), "task:test",
+            fact_loader=cast(Any, TruncatedLoader()),
+        )
+        ref = AuditFunctionRef(
+            "version:test", source_function("function:a", "version:test", "a.py")
+        )
+        workspace._functions = [ref]
+        workspace._functions_by_id = {ref.function["id"]: ref}
+        await workspace.read_function(function_id=ref.function["id"], path=None, start_line=None)
+        assert workspace.has_read_reported_code(path="a.py", start_line=1, address=None)
+        assert not workspace.has_read_reported_code(path="a.py", start_line=2, address=None)
+
+    asyncio.run(scenario())
 
 
 def binary_function(identifier: str, version_id: str) -> PairFunction:
@@ -336,6 +406,10 @@ def test_agent_investigates_then_reports_and_projection_anchors(
                             refs=[function_version],
                         ),
                         step("static-leads", {}, step_id="s2", refs=[function_version]),
+                        step(
+                            "code-function-read", {"function_id": functions[0]["id"]},
+                            step_id="s-read", refs=[function_version],
+                        ),
                     ],
                     "survey the index and the scanner leads",
                 ),
@@ -373,7 +447,10 @@ def test_agent_investigates_then_reports_and_projection_anchors(
                 ),
             ]
         )
-        agent = CodeAuditAgent(database, planner, LocalContentAddressedStore(tmp_path))
+        agent = CodeAuditAgent(
+            database, planner, LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+        )
         auditor = SemanticAuditor(
             database,
             planner,
