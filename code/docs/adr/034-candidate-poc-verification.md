@@ -7,7 +7,7 @@
 
 > **ADR-036 修复回访（2026-10-03）**：自动生成内容现为版本化 `ProofInvocation` 数据（目标函数路径和输入编码），模型不再提供可执行 Python；bundle 携带 finding ID、摘要绑定的原目标和输入，worker/复核核对目标绑定。该修复在本地分支 `fix/target-bound-verification`，静态检查通过，pytest 与真实 Runner 验收待运行；确认前仍按未验收处理。
 
-> **main@2757f35 复核回访（2026-10-03）**：审查又发现 manifest 成员比较遗漏 manifest，以及目标代码与报告器同进程执行可伪造 observation。修复分支 `fix/proof-supervisor-boundary` 将每轮目标调用移入限时子进程、父进程独立写报告，worker 交叉核对报告和 bundle，并使 PoC/evidence 幂等原子落库。全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；真实 Runner 正反例 3 passed。当前 `verified_trigger` 的 `target_exception_attributed` 只表示可重复目标异常，PoC 结果映射为 `INCONCLUSIVE`，仅记录 `SUPPORTING` evidence，review 不推导漏洞确认事实。
+> **main@f5bc37e 修复回访（2026-10-04）**：审查发现 manifest 成员比较遗漏 manifest，以及目标代码与报告器同进程执行可伪造 observation。现将每轮目标调用移入限时子进程、父进程独立写报告，worker 交叉核对报告和 bundle，并使 PoC/evidence 幂等原子落库。全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；部署后真实 Runner 正反例 3 passed。当前 `verified_trigger` 的 `target_exception_attributed` 只表示可重复目标异常，PoC 结果映射为 `INCONCLUSIVE`，仅记录 `SUPPORTING` evidence，review 不推导漏洞确认事实。相关镜像已重建并重启服务。
 
 ## 背景
 

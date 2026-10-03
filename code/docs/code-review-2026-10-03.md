@@ -2,7 +2,7 @@
 
 > 本文记录代码审查发现的当前实现缺陷，不是修复完成记录。以代码、定向测试和复现为证据；历史 ADR 记录的是设计决策和当时的验证范围，不能替代本清单的当前状态。优先级中的 P0 表示结果可信度或核心链路已被破坏，P1 表示确定的漏报、确认阻断或数据语义错误，P2 表示覆盖透明度问题。
 
-> 后续进展（2026-10-03）：下表和 04d1281 章节保留各轮复审时的历史代码证据。针对 `main @ 2757f35` 的复核项已在 `fix/proof-supervisor-boundary` 修复：Linux 全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；真实 Runner 正反例 3 passed。目标异常映射为 `INCONCLUSIVE`，只产生 `SUPPORTING` observation，FindingReviewGate 不从中推导崩溃事实。合并后的最终镜像重建与重启仍待验收。CR-04 独立影响判据、CR-06 部分覆盖、CR-07/08 仍待处理。旧自动验证结论不得按新协议追认。
+> 后续进展（2026-10-04）：下表和 04d1281 章节保留各轮复审时的历史代码证据。针对 `main @ 2757f35` 的复核项已在 `main @ f5bc37e` 修复并部署：全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；重启后的真实 Runner 正反例 3 passed。目标异常映射为 `INCONCLUSIVE`，只产生 `SUPPORTING` observation，FindingReviewGate 不从中推导崩溃事实。受影响镜像已重建、API ready、Web 返回 200。CR-04 独立影响判据、CR-06 部分覆盖、CR-07/08 仍待处理。旧自动验证结论不得按新协议追认。
 
 ## 范围和验证边界
 
