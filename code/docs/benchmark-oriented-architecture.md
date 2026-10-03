@@ -132,6 +132,8 @@ P0 首轮目标绑定验证已合并部署；后续复审发现模型可执行�
 
 首轮试验可选择约 20 个任务作为工程试点，覆盖不同项目和可验证缺陷，并添加对应缺陷的修复版对照。样本数是执行建议，不代表统计充分；正式比较需要更大、按项目隔离的集合和不确定性区间。首次验收重点是能否真实构建、触发、重放、拒绝伪证据，而非人为设一个漂亮成功率。
 
+首批 RealWorld 验收样本已于 2026-10-04 固定并登记：FFmpeg 8.1.2（CVE-2026-64830）与 7-Zip 26.00（CVE-2026-48095），均为 2026 年披露、官方工件哈希锁定。真值锚点（grader-only）与 R1/R2/R3 分轨验收标准见 `code/tests/fixtures/realworld/README.md`。
+
 ### 与现有模块的对应
 
 - `contracts`：新增版本化 TargetSnapshot、ExecutionBundle、InvestigationCase、VerificationObservation、CoverageManifest；生成消费者和契约测试同步升级。

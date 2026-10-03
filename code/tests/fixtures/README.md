@@ -41,6 +41,14 @@
 | `proof/driver_*.py` | 旧协议输入（负例） | 这些文件保留用于确认模型提供的可执行 Python 会被新 `ProofInvocation` 契约拒绝；不再作为 proof 驱动执行 |
 | `proof/smoke.py` | 其他 | 复核链路冒烟数据 |
 
+## 真实世界样本（登记制，不入库）
+
+`realworld/` 登记真实世界披露漏洞样本，作为 RealWorld 验收基准：FFmpeg 8.1.2
+（CVE-2026-64830，2026-07-22 披露）与 7-Zip 26.00（CVE-2026-48095，2026-06-05 披露）。
+与上述自编样本不同，原始工件不入库（第三方许可与体积），由
+`sh realworld/download.sh` 按锁定 SHA-256 从官方源幂等复现；真值锚点
+（grader-only）与 R1/R2/R3 分轨验收标准见 `realworld/README.md`。
+
 ## 构建与验证记录（2026-09-11，分支 `demo/test-fixtures`）
 
 - Docker 内实际构建全部样本，`build-all.sh` 完整重跑两次，`dist/` 哈希逐字节一致（可复现）。

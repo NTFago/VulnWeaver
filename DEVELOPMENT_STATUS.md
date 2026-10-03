@@ -38,6 +38,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 事项 | 状态 | 已确认结果与剩余动作 |
 |---|---|---|
+| RealWorld 验收样本登记（FFmpeg CVE-2026-64830 / 7-Zip CVE-2026-48095） | 已登记 | `code/tests/fixtures/realworld/` 登记两个 2026 年披露样本：10 个官方工件 SHA-256 锁定（不入库，`download.sh` 幂等复现）、真值锚点经漏洞版↔修复版源码 diff 核对（FFmpeg 缺陷在 `libavformat/mpeg.c` vobsub 队列索引，8.1.3 修复；7-Zip 在 `NtfsHandler.cpp` ClusterSizeLog 校验，26.01 收紧 `>30`→`>21`）、R1/R2/R3 分轨验收标准。R1 源码审计轨、R2 二进制导入轨待栈内执行验证；R3 目标绑定动态轨依赖 P1 C/C++ BuildProfile。 |
 | ADR-036 P0 目标绑定验证 | 已合并部署 | `main @ f5bc37e` 全量 Python 门禁通过；重建 proof-tool/sandbox-runner/dispatcher/analysis-worker 等镜像并重启应用栈，API ready、Web 200、数据库迁移为 0024。模型驱动的 candidate → target exception observation → **模型 re-review** → confirmed 全链仍需网关配置观察。 |
 | CR-05/06 剩余、CR-07、CR-08 | 进行中 | CR-05 必填约束身份指纹已实现待验证；CR-06 的 256 函数截断、跨版本同路径读取证明仍待处理；其后是全图邻域和聚合截断计数。 |
 | T60 大文件/项目扫描审计优化 | 待验证 | 拉格朗 18MB PE 的 `import/semantic_audit/report` 栈内成功（函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷）。反向规划偶发 `binary_planning_degraded`，需查明原因；聚合上限可能截断，见 CR-08。 |

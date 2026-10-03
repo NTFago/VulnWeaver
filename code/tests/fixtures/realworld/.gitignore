@@ -1,0 +1,3 @@
+# RealWorld 原始工件不入库：第三方许可（LGPL/GPL）与体积（约 35MB），
+# 且 benchmark 方案规定大型运行数据不提交仓库；由 download.sh 按 SHA256SUMS 复现。
+downloads/
