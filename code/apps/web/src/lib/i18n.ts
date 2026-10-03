@@ -97,6 +97,7 @@ export const evidenceTypeLabels: Record<EvidenceType, string> = {
   crash_record: "崩溃记录",
   reproduction_result: "复现结果",
   poc_verification_result: "PoC 验证结果",
+  verification_observation: "独立验证观测",
   exploit_record: "利用记录",
   review_conclusion: "复核结论",
   human_confirmation: "人工确认",

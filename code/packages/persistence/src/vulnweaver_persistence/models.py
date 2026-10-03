@@ -433,7 +433,9 @@ pocs = Table(
     ),
     Column("kind", String(32), nullable=False),
     Column("status", String(32), nullable=False),
-    Column("result", String(32), nullable=True),
+    # varchar(64): the contract value "not_exploitable_under_environment"
+    # never fit the original varchar(32) (0024).
+    Column("result", String(64), nullable=True),
     Column("script_ref", Text, nullable=False),
     Column("run_log_ref", Text, nullable=True),
     Column("image_digest", DIGEST, nullable=False),

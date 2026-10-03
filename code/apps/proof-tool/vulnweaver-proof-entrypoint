@@ -1,42 +1,438 @@
 #!/usr/local/bin/python3
-"""Execute one explicitly supplied Python proof recipe inside the sandbox."""
+"""Materialize one ExecutionBundle and independently observe the target.
+
+The bundle carries the generated driver, the read-only original target the
+finding is bound to, plus crafted and control inputs. This entrypoint is
+system-owned trusted code: it verifies every member digest before touching
+disk, runs the driver as a subprocess with the original target mounted at a
+fixed path, runs the control input first, replays the crafted input, and
+writes one ``execution-report.json`` observation. Driver stdout is recorded
+as untrusted claims only — the verdict comes exclusively from observed
+process results with target-attributed stack frames (ADR-036).
+"""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
-import runpy
-import traceback
+import os
+import re
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
 from pathlib import Path
+
+MANIFEST_NAME = "vulnweaver-execution-bundle.json"
+DRIVER_NAME = "driver.py"
+TARGET_NAME = "target"
+INPUT_PREFIX = "inputs/"
+CONTROL_PREFIX = "controls/"
+REPORT_NAME = "execution-report.json"
+
+MAX_BUNDLE_BYTES = 256 * 1024 * 1024
+MAX_MEMBER_BYTES = 256 * 1024 * 1024
+MAX_INPUT_BYTES = 64 * 1024
+MAX_CLAIM_BYTES = 4 * 1024
+RUN_TIMEOUT_SECONDS = 120
+REPLAY_COUNT = 2
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
+_CLAIM_LINE = "POC_MARKERS: "
+
+VERIFIED_TRIGGER = "verified_trigger"
+REJECTED = "rejected_under_test_conditions"
+INCONCLUSIVE = "inconclusive"
+ENVIRONMENT_ERROR = "environment_error"
+
+
+class BundleError(Exception):
+    """Bundle transport failed validation; never a claim about the target."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _digest(content: bytes) -> str:
+    return "sha256:" + hashlib.sha256(content).hexdigest()
+
+
+def _input_name_pattern(prefix: str) -> re.Pattern[str]:
+    return re.compile(re.escape(prefix) + r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _load_bundle(path: Path) -> dict[str, bytes]:
+    """Extract declared members after digest verification; reject the rest."""
+
+    try:
+        raw = path.read_bytes()
+    except OSError as error:
+        raise BundleError("bundle_unreadable") from error
+    if len(raw) > MAX_BUNDLE_BYTES:
+        raise BundleError("bundle_too_large")
+    members: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:*") as archive:
+            for info in archive:
+                if info.isdir():
+                    continue
+                if not info.isfile():
+                    # Symlinks, hardlinks and devices never enter the sandbox.
+                    raise BundleError("bundle_member_not_regular_file")
+                name = info.name
+                if name.startswith("./"):
+                    name = name[2:]
+                if (
+                    name != MANIFEST_NAME
+                    and name != DRIVER_NAME
+                    and name != TARGET_NAME
+                    and not _input_name_pattern(INPUT_PREFIX).match(name)
+                    and not _input_name_pattern(CONTROL_PREFIX).match(name)
+                ):
+                    raise BundleError("bundle_member_unexpected")
+                if name in members:
+                    raise BundleError("bundle_member_duplicate")
+                limit = (
+                    MAX_INPUT_BYTES
+                    if name.startswith(INPUT_PREFIX) or name.startswith(CONTROL_PREFIX)
+                    else MAX_MEMBER_BYTES
+                )
+                if info.size > limit:
+                    raise BundleError("bundle_member_too_large")
+                source = archive.extractfile(info)
+                if source is None:
+                    raise BundleError("bundle_member_unreadable")
+                content = source.read(limit + 1)
+                if len(content) != info.size:
+                    raise BundleError("bundle_member_truncated")
+                members[name] = content
+    except tarfile.TarError as error:
+        raise BundleError("bundle_not_tar") from error
+    if MANIFEST_NAME not in members or DRIVER_NAME not in members or TARGET_NAME not in members:
+        raise BundleError("bundle_member_missing")
+
+    try:
+        manifest = json.loads(members[MANIFEST_NAME].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BundleError("bundle_manifest_invalid") from error
+    _check_manifest_shape(manifest)
+
+    declared: dict[str, dict[str, object]] = {}
+    for member in [manifest["driver"], manifest["target"], *(manifest.get("inputs") or []),
+                   *(manifest.get("controls") or [])]:
+        declared[str(member["name"])] = member
+    if set(declared) - set(members):
+        raise BundleError("bundle_member_missing")
+    for name, member in declared.items():
+        content = members[name]
+        if member["digest"] != _digest(content):
+            raise BundleError("bundle_digest_mismatch")
+        if member["size_bytes"] != len(content):
+            raise BundleError("bundle_size_mismatch")
+    return members
+
+
+def _check_manifest_shape(manifest: object) -> None:
+    if not isinstance(manifest, dict):
+        raise BundleError("bundle_manifest_invalid")
+    required = ("schema_version", "bundle_id", "kind", "driver", "target", "target_binding",
+                "created_at")
+    if any(key not in manifest for key in required):
+        raise BundleError("bundle_manifest_invalid")
+    if manifest["schema_version"] != "1.0.0" or manifest["kind"] != "proof":
+        raise BundleError("bundle_manifest_unsupported")
+    if not isinstance(manifest["bundle_id"], str) or not manifest["bundle_id"]:
+        raise BundleError("bundle_manifest_invalid")
+    for member in (manifest["driver"], manifest["target"]):
+        if not _member_shape_ok(member):
+            raise BundleError("bundle_manifest_invalid")
+    for key in ("inputs", "controls"):
+        if manifest.get(key) is not None:
+            if not isinstance(manifest[key], list) or len(manifest[key]) > 8:
+                raise BundleError("bundle_manifest_invalid")
+            for member in manifest[key]:
+                if not _member_shape_ok(member):
+                    raise BundleError("bundle_manifest_invalid")
+    binding = manifest["target_binding"]
+    if not isinstance(binding, dict) or not all(
+        isinstance(binding.get(key), str) and binding[key]
+        for key in ("artifact_id", "version_id", "artifact_kind")
+    ) or not _DIGEST.match(str(binding.get("digest", ""))):
+        raise BundleError("bundle_manifest_invalid")
+    inputs = manifest.get("inputs") or []
+    controls = manifest.get("controls") or []
+    if not inputs or not controls:
+        raise BundleError("bundle_manifest_invalid")
+
+
+def _member_shape_ok(member: object) -> bool:
+    return (
+        isinstance(member, dict)
+        and _SAFE_NAME.match(str(member.get("name", ""))) is not None
+        and _DIGEST.match(str(member.get("digest", ""))) is not None
+        and isinstance(member.get("size_bytes"), int)
+        and member["size_bytes"] > 0
+    )
+
+
+def _write_member(directory: Path, name: str, content: bytes, mode: int) -> Path:
+    target = directory / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        raise BundleError("bundle_member_conflict")
+    target.write_bytes(content)
+    target.chmod(mode)
+    return target
+
+
+class _Run:
+    __slots__ = ("role", "input_name", "exit_code", "signal", "duration_millis",
+                 "target_frames", "timed_out", "stdout")
+
+    def __init__(self, role: str, input_name: str) -> None:
+        self.role = role
+        self.input_name = input_name
+        self.exit_code: int | None = None
+        self.signal: int | None = None
+        self.duration_millis = 0
+        self.target_frames = False
+        self.timed_out = False
+        self.stdout = b""
+
+    def record(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "input_name": self.input_name,
+            "exit_code": self.exit_code,
+            "signal": self.signal,
+            "duration_millis": self.duration_millis,
+            "target_frames": self.target_frames,
+            "timed_out": self.timed_out,
+        }
+
+    @property
+    def crashed(self) -> bool:
+        return self.exit_code is not None and self.exit_code != 0
+
+    @property
+    def attributed(self) -> bool:
+        return self.crashed and self.target_frames
+
+
+def _run_driver(python: str, driver: Path, target: Path, input_path: Path, role: str) -> _Run:
+    run = _Run(role, input_path.name)
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            [python, str(driver), str(target), str(input_path)],
+            capture_output=True,
+            timeout=RUN_TIMEOUT_SECONDS,
+            check=False,
+            cwd=str(driver.parent),
+            env={"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+                 "PYTHONHASHSEED": "0"},
+        )
+    except subprocess.TimeoutExpired as expired:
+        run.timed_out = True
+        run.duration_millis = int((time.monotonic() - started) * 1000)
+        run.stdout = (expired.stdout or b"")[:MAX_CLAIM_BYTES]
+        return run
+    run.duration_millis = int((time.monotonic() - started) * 1000)
+    run.exit_code = completed.returncode
+    if completed.returncode < 0:
+        run.signal = -completed.returncode
+    run.stdout = completed.stdout[:MAX_CLAIM_BYTES]
+    stderr = completed.stderr.decode("utf-8", errors="replace")
+    # Attribution: the crashing stack must run through the materialized
+    # original target, not only through the generated driver.
+    run.target_frames = str(target) in stderr
+    return run
+
+
+def _untrusted_claims(stdout: bytes) -> dict[str, object] | None:
+    text = stdout.decode("utf-8", errors="replace")
+    for line in reversed(text.splitlines()):
+        if line.startswith(_CLAIM_LINE):
+            try:
+                claims = json.loads(line[len(_CLAIM_LINE):])
+            except json.JSONDecodeError:
+                return None
+            return claims if isinstance(claims, dict) else None
+    return None
+
+
+def _observation_id(finding_id: str, kind: str, bundle_id: str) -> str:
+    seed = "\0".join((finding_id, kind, bundle_id)).encode("utf-8")
+    return "observation:" + hashlib.sha256(seed).hexdigest()[:32]
+
+
+def _member_echo(name: str, content: bytes) -> dict[str, object]:
+    return {"name": name, "digest": _digest(content), "size_bytes": len(content)}
+
+
+def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, object]:
+    members = _load_bundle(bundle_path)
+    manifest = json.loads(members[MANIFEST_NAME].decode("utf-8"))
+    target_binding = manifest["target_binding"]
+    driver_digest = _digest(members[DRIVER_NAME])
+    input_names = [str(member["name"]) for member in manifest["inputs"]]
+    control_names = [str(member["name"]) for member in manifest["controls"]]
+
+    workdir = Path(tempfile.mkdtemp(prefix="vw-proof-", dir=_work_root()))
+    try:
+        driver = _write_member(workdir, DRIVER_NAME, members[DRIVER_NAME], 0o555)
+        target = _write_member(workdir, TARGET_NAME, members[TARGET_NAME], 0o444)
+        input_paths = [
+            _write_member(workdir, name, members[name], 0o444) for name in input_names
+        ]
+        control_paths = [
+            _write_member(workdir, name, members[name], 0o444) for name in control_names
+        ]
+        python = sys.executable or "/usr/local/bin/python3"
+
+        control_runs = [_run_driver(python, driver, target, path, "control")
+                        for path in control_paths]
+        trigger_runs = [_run_driver(python, driver, target, path, "trigger")
+                        for path in input_paths]
+        reasons: list[str] = []
+        chosen: _Run | None = next((run for run in trigger_runs if run.attributed), None)
+        replay_runs: list[_Run] = []
+        if chosen is not None:
+            index = next(i for i, run in enumerate(trigger_runs) if run is chosen)
+            replay_runs = [_run_driver(python, driver, target, input_paths[index], "replay")
+                           for _ in range(REPLAY_COUNT)]
+
+        # The materialized target must still be the digested bytes after the
+        # driver ran; in-container tampering voids the observation.
+        if _digest(target.read_bytes()) != manifest["target"]["digest"]:
+            verdict = ENVIRONMENT_ERROR
+            reasons = ["target_modified"]
+            chosen = None
+        elif any(run.timed_out for run in (*control_runs, *trigger_runs, *replay_runs)):
+            verdict = INCONCLUSIVE
+            reasons = ["driver_timeout"]
+        elif any(run.crashed for run in control_runs):
+            verdict = REJECTED
+            reasons = ["control_input_failed"]
+        elif chosen is None:
+            verdict = REJECTED
+            reasons = (["target_not_involved"]
+                       if any(run.crashed for run in trigger_runs)
+                       else ["no_trigger_observed"])
+        elif all(run.attributed for run in replay_runs):
+            verdict = VERIFIED_TRIGGER
+            reasons = ["target_crash_attributed", "control_input_clean", "replay_stable"]
+        else:
+            verdict = INCONCLUSIVE
+            reasons = ["non_deterministic_trigger"]
+
+        runs = [run.record() for run in (*control_runs, *trigger_runs, *replay_runs)]
+        trigger_count = (
+            1 + sum(1 for run in replay_runs if run.attributed)
+            if chosen is not None
+            else 0
+        )
+        claims: dict[str, object] | None = None
+        for run in trigger_runs:
+            claims = _untrusted_claims(run.stdout)
+            if claims is not None:
+                break
+        return {
+            "schema_version": "1.0.0",
+            "id": _observation_id(finding_id, kind, str(manifest["bundle_id"])),
+            "kind": kind,
+            "finding_id": finding_id,
+            "verdict": verdict,
+            "verdict_reasons": reasons,
+            "driver_digest": driver_digest,
+            "target_binding": {
+                "artifact_id": target_binding["artifact_id"],
+                "version_id": target_binding["version_id"],
+                "artifact_kind": target_binding["artifact_kind"],
+                "digest": target_binding["digest"],
+            },
+            "inputs": [_member_echo(name, members[name]) for name in input_names],
+            "controls": [_member_echo(name, members[name]) for name in control_names],
+            "runs": runs,
+            "trigger_runs": trigger_count,
+            "replay_runs": len(replay_runs),
+            "untrusted_claims": claims,
+            "verifier": {"name": "proof-entrypoint", "version": "2.0.0",
+                         "image_digest": None},
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    finally:
+        for path in sorted(workdir.rglob("*"), reverse=True):
+            try:
+                if path.is_file() or path.is_symlink():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            except OSError:
+                pass
+        try:
+            workdir.rmdir()
+        except OSError:
+            pass
+
+
+def _work_root() -> str:
+    for candidate in ("/work", os.environ.get("TMPDIR", "/tmp")):
+        if candidate and os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+            return candidate
+    return tempfile.gettempdir()
+
+
+def _environment_report(finding_id: str, kind: str, code: str) -> dict[str, object]:
+    return {
+        "schema_version": "1.0.0",
+        "id": _observation_id(finding_id, kind, "invalid"),
+        "kind": kind,
+        "finding_id": finding_id,
+        "verdict": ENVIRONMENT_ERROR,
+        "verdict_reasons": [code],
+        "driver_digest": "sha256:" + "0" * 64,
+        "target_binding": {
+            "artifact_id": "artifact:unknown",
+            "version_id": "artifact-version:unknown",
+            "artifact_kind": "source_archive",
+            "digest": "sha256:" + "0" * 64,
+        },
+        "inputs": [],
+        "controls": [],
+        "runs": [],
+        "trigger_runs": 0,
+        "replay_runs": 0,
+        "untrusted_claims": None,
+        "verifier": {"name": "proof-entrypoint", "version": "2.0.0",
+                     "image_digest": None},
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--script", type=Path, required=True)
+    parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--finding-id", required=True)
     parser.add_argument("--kind", choices=("proof_of_concept", "exploit"), required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    result: dict[str, object] = {
-        "finding_id": args.finding_id,
-        "kind": args.kind,
-        "script": str(args.script),
-        "status": "succeeded",
-    }
     try:
-        namespace = runpy.run_path(str(args.script), run_name="__main__")
-        exported = namespace.get("PROOF_RESULT")
-        if isinstance(exported, dict):
-            result["details"] = exported
-    except Exception as error:  # The structured result is the tool contract.
-        result["status"] = "failed"
-        result["error"] = str(error)
-        result["traceback"] = traceback.format_exc(limit=8)
-    (args.output_dir / "result.json").write_text(
-        json.dumps(result, ensure_ascii=True, sort_keys=True), encoding="utf-8"
+        report = execute_bundle(args.bundle, args.finding_id, args.kind)
+    except BundleError as error:
+        report = _environment_report(args.finding_id, args.kind, error.code)
+    report_path = args.output_dir / REPORT_NAME
+    if report_path.is_symlink() or report_path.exists():
+        report_path.unlink()
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=True, sort_keys=True), encoding="utf-8"
     )
-    return 0 if result["status"] == "succeeded" else 1
+    return 0 if report["verdict"] != ENVIRONMENT_ERROR else 1
 
 
 if __name__ == "__main__":

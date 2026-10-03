@@ -37,6 +37,12 @@
 |---|---|---|
 | `teaching-samples/fuzz-overflow.c` | 源码（C，CWE-120 模式） | AFL++/CASR 模糊测试链路回放样本 |
 | `teaching-samples/ollvm-style-flattened.c` | 源码（C，平坦化形状） | T28 混淆识别与伪代码恢复回归；`obfuscated-*` 样本的形状参考 |
+| `proof/nested_config_parser.py` | 源码（Python，CWE-674 模式） | 目标绑定验证（ADR-036）正例目标：`[` 嵌套输入触发原样本内 RecursionError，`[a]b=c` 为对照输入 |
+| `proof/driver_invoking_target.py` | 驱动（正例） | 经 importlib 调用原样本的真实 `parse` 入口 |
+| `proof/driver_noop.py` | 驱动（负例） | 空驱动：不触达目标，必须不产生确认 |
+| `proof/driver_forged_markers.py` | 驱动（负例） | 自报 `POC_MARKERS` + 驱动自崩：主张必须被忽略 |
+| `proof/driver_reimplemented.py` | 驱动（负例） | 驱动内重实现缺陷模式（错误目标）：崩溃帧不在原样本内 |
+| `proof/driver_tampering.py` | 驱动（负例） | 篡改材料化目标：运行后摘要校验必须作废观测 |
 | `proof/smoke.py` | 其他 | 复核链路冒烟数据 |
 
 ## 构建与验证记录（2026-09-11，分支 `demo/test-fixtures`）

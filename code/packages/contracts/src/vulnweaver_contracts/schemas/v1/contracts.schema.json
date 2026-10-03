@@ -50,7 +50,7 @@
     },
     "EvidenceType": {
       "type": "string",
-      "enum": ["model_explanation", "tool_output", "code_snippet", "dataflow_path", "crash_record", "reproduction_result", "poc_verification_result", "exploit_record", "review_conclusion", "human_confirmation"]
+      "enum": ["model_explanation", "tool_output", "code_snippet", "dataflow_path", "crash_record", "reproduction_result", "poc_verification_result", "verification_observation", "exploit_record", "review_conclusion", "human_confirmation"]
     },
     "EvidenceStrength": {
       "type": "string",
@@ -1043,6 +1043,92 @@
         "timeout_seconds": {"type": "integer", "minimum": 1}
       }
     },
+    "ExecutionBundleKind": {
+      "type": "string",
+      "enum": ["proof"]
+    },
+    "BundleFileMember": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "digest", "size_bytes"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 268435456}
+      }
+    },
+    "TargetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "version_id", "artifact_kind", "digest"],
+      "properties": {
+        "artifact_id": {"$ref": "#/$defs/Identifier"},
+        "version_id": {"$ref": "#/$defs/Identifier"},
+        "artifact_kind": {"$ref": "#/$defs/ArtifactKind"},
+        "digest": {"$ref": "#/$defs/Sha256Digest"}
+      }
+    },
+    "ExecutionBundleManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "bundle_id", "kind", "driver", "target", "target_binding", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "bundle_id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/ExecutionBundleKind"},
+        "driver": {"$ref": "#/$defs/BundleFileMember"},
+        "target": {"$ref": "#/$defs/BundleFileMember"},
+        "target_binding": {"$ref": "#/$defs/TargetBinding"},
+        "inputs": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
+        "controls": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "VerificationOutcome": {
+      "type": "string",
+      "enum": ["verified_trigger", "rejected_under_test_conditions", "inconclusive", "environment_error"]
+    },
+    "VerificationRunRole": {
+      "type": "string",
+      "enum": ["control", "trigger", "replay"]
+    },
+    "VerificationRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "input_name", "exit_code", "signal", "duration_millis", "target_frames", "timed_out"],
+      "properties": {
+        "role": {"$ref": "#/$defs/VerificationRunRole"},
+        "input_name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "exit_code": {"type": ["integer", "null"]},
+        "signal": {"type": ["integer", "null"]},
+        "duration_millis": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "target_frames": {"type": "boolean"},
+        "timed_out": {"type": "boolean"}
+      }
+    },
+    "VerificationObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "id", "kind", "finding_id", "verdict", "verdict_reasons", "driver_digest", "target_binding", "inputs", "controls", "runs", "trigger_runs", "replay_runs", "verifier", "created_at"],
+      "properties": {
+        "schema_version": {"$ref": "#/$defs/SchemaVersion"},
+        "id": {"$ref": "#/$defs/Identifier"},
+        "kind": {"$ref": "#/$defs/PocKind"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
+        "verdict": {"$ref": "#/$defs/VerificationOutcome"},
+        "verdict_reasons": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}},
+        "driver_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "target_binding": {"$ref": "#/$defs/TargetBinding"},
+        "inputs": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
+        "controls": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
+        "runs": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/VerificationRun"}},
+        "trigger_runs": {"type": "integer", "minimum": 0},
+        "replay_runs": {"type": "integer", "minimum": 0},
+        "untrusted_claims": {"anyOf": [{"$ref": "#/$defs/JsonObject"}, {"type": "null"}]},
+        "verifier": {"$ref": "#/$defs/ToolIdentity"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
     "Review": {
       "type": "object",
       "additionalProperties": false,
@@ -1688,6 +1774,8 @@
     {"$ref": "#/$defs/FuzzRequest"},
     {"$ref": "#/$defs/FuzzResult"},
     {"$ref": "#/$defs/FuzzToolSummary"},
-    {"$ref": "#/$defs/CrashManifest"}
+    {"$ref": "#/$defs/CrashManifest"},
+    {"$ref": "#/$defs/ExecutionBundleManifest"},
+    {"$ref": "#/$defs/VerificationObservation"}
   ]
 }

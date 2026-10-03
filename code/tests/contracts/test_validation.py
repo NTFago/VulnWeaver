@@ -478,3 +478,93 @@ def test_action_plan_proposal_rejects_identity_fields_and_missing_rationale() ->
             "ActionPlanProposal",
             {"schema_version": "1.0.0", "steps": []},
         )
+
+
+def test_execution_bundle_manifest_accepts_members_and_rejects_bad_names() -> None:
+    payload = {
+        "schema_version": "1.0.0",
+        "bundle_id": "execution-bundle:job-1",
+        "kind": "proof",
+        "driver": {
+            "name": "driver.py",
+            "digest": "sha256:" + "a" * 64,
+            "size_bytes": 128,
+        },
+        "target": {
+            "name": "target",
+            "digest": "sha256:" + "b" * 64,
+            "size_bytes": 4096,
+        },
+        "target_binding": {
+            "artifact_id": "artifact:sample",
+            "version_id": "artifact-version:sample",
+            "artifact_kind": "source_archive",
+            "digest": "sha256:" + "b" * 64,
+        },
+        "inputs": [
+            {"name": "inputs/0000", "digest": "sha256:" + "c" * 64, "size_bytes": 64}
+        ],
+        "controls": [
+            {"name": "controls/0000", "digest": "sha256:" + "d" * 64, "size_bytes": 8}
+        ],
+        "created_at": "2026-10-03T08:00:00Z",
+    }
+    validate_contract("ExecutionBundleManifest", payload)
+    payload["inputs"] = [
+        {"name": "inputs/../evil", "digest": "sha256:" + "c" * 64, "size_bytes": 64}
+    ]
+    with pytest.raises(ContractValidationError):
+        validate_contract("ExecutionBundleManifest", payload)
+    payload["inputs"] = [
+        {"name": "inputs/0000", "digest": "not-a-digest", "size_bytes": 64}
+    ]
+    with pytest.raises(ContractValidationError):
+        validate_contract("ExecutionBundleManifest", payload)
+
+
+def test_verification_observation_contract_enforces_typed_verdicts() -> None:
+    payload = {
+        "schema_version": "1.0.0",
+        "id": "observation:" + "a" * 32,
+        "kind": "proof_of_concept",
+        "finding_id": "finding:sample",
+        "verdict": "verified_trigger",
+        "verdict_reasons": ["target_crash_attributed", "replay_stable"],
+        "driver_digest": "sha256:" + "a" * 64,
+        "target_binding": {
+            "artifact_id": "artifact:sample",
+            "version_id": "artifact-version:sample",
+            "artifact_kind": "source_archive",
+            "digest": "sha256:" + "b" * 64,
+        },
+        "inputs": [
+            {"name": "inputs/0000", "digest": "sha256:" + "c" * 64, "size_bytes": 64}
+        ],
+        "controls": [
+            {"name": "controls/0000", "digest": "sha256:" + "d" * 64, "size_bytes": 8}
+        ],
+        "runs": [
+            {
+                "role": "control",
+                "input_name": "0000",
+                "exit_code": 0,
+                "signal": None,
+                "duration_millis": 3,
+                "target_frames": False,
+                "timed_out": False,
+            }
+        ],
+        "trigger_runs": 3,
+        "replay_runs": 2,
+        "untrusted_claims": {"sink_reached": True},
+        "verifier": {"name": "proof-entrypoint", "version": "2.0.0", "image_digest": None},
+        "created_at": "2026-10-03T08:00:00Z",
+    }
+    validate_contract("VerificationObservation", payload)
+    payload["verdict"] = "definitely_hacked"
+    with pytest.raises(ContractValidationError):
+        validate_contract("VerificationObservation", payload)
+    payload["verdict"] = "inconclusive"
+    payload["verdict_reasons"] = ["UPPERCASE_REASON"]
+    with pytest.raises(ContractValidationError):
+        validate_contract("VerificationObservation", payload)

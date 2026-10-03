@@ -25,7 +25,7 @@ export type FindingCategory = "memory_corruption" | "injection" | "auth_or_busin
 
 export type Severity = "info" | "low" | "medium" | "high" | "critical";
 
-export type EvidenceType = "model_explanation" | "tool_output" | "code_snippet" | "dataflow_path" | "crash_record" | "reproduction_result" | "poc_verification_result" | "exploit_record" | "review_conclusion" | "human_confirmation";
+export type EvidenceType = "model_explanation" | "tool_output" | "code_snippet" | "dataflow_path" | "crash_record" | "reproduction_result" | "poc_verification_result" | "verification_observation" | "exploit_record" | "review_conclusion" | "human_confirmation";
 
 export type EvidenceStrength = "contextual" | "supporting" | "strong";
 
@@ -673,6 +673,66 @@ export interface ProofRequest {
   permission_mode: PermissionMode;
   resource_budget: ResourceBudget;
   timeout_seconds: number;
+}
+
+export type ExecutionBundleKind = "proof";
+
+export interface BundleFileMember {
+  name: string;
+  digest: Sha256Digest;
+  size_bytes: number;
+}
+
+export interface TargetBinding {
+  artifact_id: Identifier;
+  version_id: Identifier;
+  artifact_kind: ArtifactKind;
+  digest: Sha256Digest;
+}
+
+export interface ExecutionBundleManifest {
+  schema_version: SchemaVersion;
+  bundle_id: Identifier;
+  kind: ExecutionBundleKind;
+  driver: BundleFileMember;
+  target: BundleFileMember;
+  target_binding: TargetBinding;
+  inputs?: Array<BundleFileMember>;
+  controls?: Array<BundleFileMember>;
+  created_at: string;
+}
+
+export type VerificationOutcome = "verified_trigger" | "rejected_under_test_conditions" | "inconclusive" | "environment_error";
+
+export type VerificationRunRole = "control" | "trigger" | "replay";
+
+export interface VerificationRun {
+  role: VerificationRunRole;
+  input_name: string;
+  exit_code: number | null;
+  signal: number | null;
+  duration_millis: number;
+  target_frames: boolean;
+  timed_out: boolean;
+}
+
+export interface VerificationObservation {
+  schema_version: SchemaVersion;
+  id: Identifier;
+  kind: PocKind;
+  finding_id: Identifier;
+  verdict: VerificationOutcome;
+  verdict_reasons: Array<string>;
+  driver_digest: Sha256Digest;
+  target_binding: TargetBinding;
+  inputs: Array<BundleFileMember>;
+  controls: Array<BundleFileMember>;
+  runs: Array<VerificationRun>;
+  trigger_runs: number;
+  replay_runs: number;
+  untrusted_claims?: JsonObject | null;
+  verifier: ToolIdentity;
+  created_at: string;
 }
 
 export interface Review {
