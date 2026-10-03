@@ -337,6 +337,57 @@ def test_auth_differential_without_bound_constraint_does_not_confirm(
     asyncio.run(scenario())
 
 
+def test_injection_with_protection_enumeration_confirms(
+    persistence_database_url: str,
+) -> None:
+    """CR-04 closed loop: sink reached + enumerated protections confirm injection.
+
+    All three policy facts derive from the one strong worker record:
+    ``minimal_reproduction`` is its base, ``source_to_sink_path`` comes from
+    ``sink_reached``, and ``protection_analysis`` comes from the deterministic
+    control-plane enumeration of the digest-bound target source.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        gate = FindingReviewGate(database)
+        try:
+            finding_id, _ = await _seed(database, FindingCategory.INJECTION)
+            await _attach(
+                database,
+                finding_id,
+                _evidence(
+                    "evidence:poc-injection:" + uuid4().hex,
+                    evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
+                    strength=EvidenceStrength.STRONG,
+                    replay_recipe={
+                        "kind": "poc_verification_result",
+                        "reproducible": True,
+                        "markers": {
+                            "sink_reached": True,
+                            "source": "crafted_input",
+                            "sink": "target_callable@sha256:" + "4" * 64,
+                            "protections_observed": [
+                                "dangerous_sink:eval@parse:2",
+                            ],
+                        },
+                    },
+                    tool=ToolIdentity(name="proof-entrypoint", version="2.1.0", image_digest=None),
+                    artifact_ref="cas://sha256/" + "e" * 64,
+                ),
+            )
+            result = await gate.submit(_review(finding_id))
+            assert result.decision is not None
+            assert result.decision.allowed is True, result.decision.reason_codes
+            async with database.transaction() as repositories:
+                stored = await repositories.findings.get(finding_id)
+            assert stored["status"] is FindingStatus.CONFIRMED
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_injection_sink_reach_still_requires_protection_analysis(
     persistence_database_url: str,
 ) -> None:

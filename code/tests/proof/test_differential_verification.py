@@ -386,6 +386,119 @@ async def _seed_auth_finding(
     return task_id, f"finding:{suffix}", _constraint_digest(CONSTRAINT)
 
 
+async def _seed_injection_finding(
+    database: Database,
+    suffix: str,
+    store: LocalContentAddressedStore,
+) -> tuple[str, str]:
+    """Injection finding over an eval-shaped target, without audit constraint."""
+
+    project_id = f"project:{suffix}"
+    version_id = f"artifact-version:{suffix}"
+    task_id = f"task:{suffix}"
+    version = dict(artifact_version(version_id, artifact_id=f"artifact:{suffix}"))
+    target = store.put_stream(
+        io.BytesIO(b"def parse(value):\n    return eval(value)\n"), max_bytes=1024 * 1024
+    )
+    version["digest"] = target.digest
+    version["object_ref"] = target.object_ref
+    async with database.transaction() as repositories:
+        await repositories.projects.add(cast(Any, _enabled_project(project_id)))
+        await repositories.artifacts.add(
+            artifact(f"artifact:{suffix}", project_id=project_id, current_version_id=version_id)
+        )
+        await repositories.artifacts.add_version(cast(Any, version))
+        await repositories.tasks.create(
+            task(
+                task_id,
+                project_id=project_id,
+                artifact_version_ids=[version_id],
+                idempotency_key=f"task-key:{suffix}",
+            )
+        )
+        finding = cast(
+            Finding,
+            {
+                "schema_version": "1.0.0",
+                "id": f"finding:{suffix}",
+                "task_id": task_id,
+                "category": FindingCategory.INJECTION,
+                "cwe_id": "CWE-95",
+                "title": "eval on request data",
+                "severity": Severity.HIGH,
+                "confidence": 0.6,
+                "location": {
+                    "artifact_version_id": version_id,
+                    "path": "app.py",
+                    "start_line": 2,
+                    "start_column": 1,
+                    "end_line": 2,
+                    "end_column": 24,
+                },
+                "dataflow": [],
+                "call_path": [],
+                "status": FindingStatus.CANDIDATE,
+                "evidence_ids": [],
+                "review_ids": [],
+                "poc_ids": [],
+                "fix_suggestion": "remove eval",
+                "created_at": TIMESTAMP,
+            },
+        )
+        await repositories.findings.create(finding)
+    return task_id, f"finding:{suffix}"
+
+
+def test_differential_run_for_injection_carries_protection_enumeration(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """The injection marker list comes from the control-plane AST scan (CR-04)."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        store = LocalContentAddressedStore(cast(Any, tmp_path))
+        task_id, finding_id = await _seed_injection_finding(database, suffix, store)
+        observation = _behavior_observation(finding_id, constraint_digest=None)
+        executor = ProofJobExecutor(
+            database,
+            ProofExecutionService(
+                BehaviorSandbox(store, observation),
+                tool_name="proof-tool",
+                tool_version="1.0.0",
+                store=store,
+            ),
+            store=store,
+            script_generator=ExploitScriptGenerator(database, FakePocModel(), store),
+        )
+        try:
+            result = await executor.execute(_poc_job(task_id, finding_id, suffix), asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
+            assert len(result["evidence_ids"]) == 2
+            async with database.transaction() as repositories:
+                records = [
+                    await repositories.evidence.get(evidence_id)
+                    for evidence_id in result["evidence_ids"]
+                ]
+            strong = next(
+                record
+                for record in records
+                if record["type"] == "poc_verification_result"
+            )
+            markers = strong["replay_recipe"]["markers"]
+            assert markers["sink_reached"] is True
+            protections = markers["protections_observed"]
+            assert isinstance(protections, list) and protections
+            # The enumeration documents the eval sink the sandbox actually ran.
+            assert any(
+                entry.startswith("dangerous_sink:eval@") for entry in protections
+            )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_differential_run_writes_strong_poc_verification_evidence(
     persistence_database_url: str, tmp_path: object
 ) -> None:

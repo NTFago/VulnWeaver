@@ -114,6 +114,53 @@ def load_execution_bundle_manifest(
     return typed_manifest, _digest_of(bundle.content)
 
 
+def load_execution_bundle_member(
+    store: ArtifactStore,
+    object_ref: str,
+    member_name: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_BUNDLE_BYTES,
+) -> bytes | None:
+    """Return one digest-verified bundle member's bytes, or ``None``.
+
+    Callers use this to run control-plane analyses (e.g. the protection
+    enumerator) over exactly the bytes the sandbox executed — the driver and
+    the original target — never over a re-fetched copy that could have drifted.
+    """
+
+    manifest, _bundle_digest = load_execution_bundle_manifest(
+        store, object_ref, max_bytes=max_bytes
+    )
+    declared = [
+        manifest["driver"],
+        manifest["target"],
+        *(manifest.get("inputs") or []),
+        *(manifest.get("controls") or []),
+    ]
+    member = next((item for item in declared if item["name"] == member_name), None)
+    if member is None:
+        return None
+    bundle = _load_member(store, object_ref, limit=max_bytes)
+    try:
+        with tarfile.open(fileobj=io.BytesIO(bundle.content), mode="r:*") as archive:
+            for info in archive:
+                name = info.name[2:] if info.name.startswith("./") else info.name
+                if name != member_name or not info.isfile():
+                    continue
+                source = archive.extractfile(info)
+                if source is None:
+                    return None
+                content = source.read(max_bytes + 1)
+                if len(content) != info.size:
+                    return None
+                if _digest_of(content) != member["digest"]:
+                    return None
+                return content
+    except tarfile.TarError:
+        return None
+    return None
+
+
 class ExecutionBundleError(ValueError):
     """Raised when bundle members are missing or the bundle exceeds limits."""
 

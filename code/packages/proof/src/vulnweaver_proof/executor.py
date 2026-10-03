@@ -56,10 +56,14 @@ from .auto_exploit import (
     stable_id,
 )
 from .bundle import (
+    BUNDLE_DRIVER_NAME,
+    BUNDLE_TARGET_NAME,
     ExecutionBundleError,
     build_execution_bundle,
     load_execution_bundle_manifest,
+    load_execution_bundle_member,
 )
+from .protection_analysis import scan_target_protections
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 from .verifier import (
     REPORT_FILE_NAME,
@@ -258,9 +262,11 @@ class ProofJobExecutor:
     ) -> Evidence | None:
         """STRONG record when the run verified input-dependent target behavior.
 
-        Only the worker's own validated observation supplies the markers, and
-        the auth variant additionally requires the probe to be bound to the
-        constraint registered on this finding (CR-04).
+        Only the worker's own validated observation supplies the markers. The
+        auth variant additionally requires the probe to be bound to the
+        constraint registered on this finding; the injection variant carries
+        the deterministic protection enumeration over the exact bound target
+        source (CR-04).
         """
 
         observation = run.observation
@@ -270,6 +276,10 @@ class ProofJobExecutor:
         async with self._database.transaction() as repositories:
             finding = await repositories.findings.get(request["finding_id"])
             constraint_digest = await self._finding_constraint_digest(repositories, finding)
+        category = str(finding["category"]).removeprefix("FindingCategory.")
+        protections = (
+            await self._protections_observed(request) if category == "injection" else None
+        )
         return differential_evidence_from_observation(
             observation,
             evidence_id=stable_id("evidence", "poc-verification", job["id"]),
@@ -278,7 +288,45 @@ class ProofJobExecutor:
             bundle_ref=request["script_ref"],
             bundle_digest=self._store.verify(request["script_ref"]).digest,
             created_at=job["created_at"],
+            protections_observed=protections,
         )
+
+    async def _protections_observed(self, request: ProofRequest) -> list[str] | None:
+        """Enumerate protections in the digest-bound target source (CR-04).
+
+        The scan reads the driver and target members back from the CAS bundle —
+        the same digest-verified bytes the sandbox executed — so the
+        enumeration cannot drift from what ran. A failed or unresolvable scan
+        returns ``None`` and the evidence simply carries no protection marker.
+        """
+
+        if self._store is None:
+            return None
+
+        def _scan() -> list[str] | None:
+            assert self._store is not None
+            driver = load_execution_bundle_member(
+                self._store, request["script_ref"], BUNDLE_DRIVER_NAME
+            )
+            target = load_execution_bundle_member(
+                self._store, request["script_ref"], BUNDLE_TARGET_NAME
+            )
+            if driver is None or target is None:
+                return None
+            try:
+                invocation: object = json.loads(driver.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return None
+            if not isinstance(invocation, dict):
+                return None
+            invocation_document = cast(JsonObject, invocation)
+            callable_path = invocation_document.get("target_callable")
+            if not isinstance(callable_path, str):
+                return None
+            scan = scan_target_protections(target, callable_path)
+            return scan.marker() if scan is not None else None
+
+        return await asyncio.to_thread(_scan)
 
     async def _finding_constraint_digest(
         self, repositories: Repositories, finding: Finding

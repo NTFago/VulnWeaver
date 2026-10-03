@@ -18,6 +18,7 @@ from vulnweaver_contracts import (
     EvidenceStrength,
     EvidenceType,
     JsonObject,
+    JsonValue,
     PocResult,
     SchemaVersion,
     VerificationObservation,
@@ -275,6 +276,7 @@ def differential_evidence_from_observation(
     bundle_ref: str,
     bundle_digest: str,
     created_at: str,
+    protections_observed: list[str] | None = None,
 ) -> Evidence | None:
     """STRONG record of a supervisor-verified output difference (CR-04).
 
@@ -282,7 +284,9 @@ def differential_evidence_from_observation(
     value is derived from the trusted entrypoint's own observation after the
     worker validated it against the bundle. ``constraint_digest`` binds the
     probe to the constraint registered on the finding; when the observation
-    carries no matching digest the auth fact is withheld.
+    carries no matching digest the auth fact is withheld. For injection,
+    ``protections_observed`` carries the deterministic control-plane protection
+    enumeration over the digest-bound target source.
     """
 
     if not behavior_is_verified(observation):
@@ -297,12 +301,13 @@ def differential_evidence_from_observation(
         and constraint_digest == finding_constraint_digest
     )
     category = finding_category.removeprefix("FindingCategory.")
+    markers: JsonObject
     if category == "auth_or_business_logic":
         if not constraint_bound:
             # Without the bound constraint the run proves input-dependence but
             # says nothing about the registered security invariant.
             return None
-        markers: JsonObject = {
+        markers = {
             "behavior_difference": (
                 f"crafted output {behavior['crafted_output_digest']} != "
                 f"control output {behavior['control_output_digest']}"
@@ -315,6 +320,8 @@ def differential_evidence_from_observation(
             "source": "crafted_input",
             "sink": f"target_callable@{observation['target_binding']['digest']}",
         }
+        if protections_observed:
+            markers["protections_observed"] = cast(JsonValue, protections_observed)
     else:
         # Differential output says nothing about memory corruption or
         # static-only findings; no record is honest there.
