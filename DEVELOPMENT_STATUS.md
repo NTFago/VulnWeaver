@@ -6,7 +6,7 @@
 
 ## 当前焦点
 
-2026-10-03 用户已接受 [`ADR-036`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)，首轮 **P0 目标绑定验证实现已合并部署**（main `6f81486`）。本地分支 `fix/target-bound-verification` 已实现 CR-09–11 修复：模型只提交受限的 Python 函数调用描述，不再执行任意驱动代码；目标摘要在打包时与绑定摘要相等，入口从 bundle 内存加载原目标字节；bundle 绑定 Finding ID，worker 和复核再核对 artifact/version/digest。CR-05 的 `constraint` 已设为模型输出必填，并参与归一化身份指纹。**当前改动尚未运行 pytest 或真实 Runner 验收，未合并、未部署；这些条目待验证。**静态检查通过：Ruff、Pyright、契约生成检查；proof 入口 AST 解析通过。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。
+2026-10-03 用户已接受 [`ADR-036`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)。CR-09–11 修复已合并到 `main`（`62315c5`）并完成本地镜像重建与容器重启：模型只提交受限的 Python 函数调用描述，不再执行任意驱动代码；目标摘要在打包时与绑定摘要相等，入口从 bundle 内存加载原目标字节；bundle 绑定 Finding ID，worker 和复核再核对 artifact/version/digest。CR-05 的 `constraint` 已设为模型输出必填，并参与归一化身份指纹。静态检查通过；本次已确认 Compose 服务启动、数据库/Redis 健康、API `/health/ready` 返回 ready、Web 返回 200。pytest 和真实 Runner 验收仍待后续专门运行。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。逐项审查缺陷代码证据见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
@@ -82,6 +82,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-03 | main `62315c5` 本地部署 | 重建 api/web/analysis-worker/dispatcher/orchestrator/binary-tools/sandbox-runner 镜像并 `docker compose up -d`；PostgreSQL 与 Redis healthy，迁移和 artifact-init 正常退出，API `/health/ready` 返回 `{"status":"ready"}`，Web `127.0.0.1:8080` 返回 200。未运行 pytest/真实 Runner。 |
 | 2026-10-03 | 本轮修复静态检查（Linux dev 容器） | 修改后的相关 Python 文件 Ruff 通过；Proof/Orchestrator Pyright 0 errors；contracts 生成及 `--check` 通过；`git diff --check` 通过。未运行 pytest、真实 Runner、镜像构建或部署。 |
 | 2026-10-03 | 本地修复静态检查（Linux dev 容器） | 受影响 Python 文件 Ruff 通过，Proof/Orchestrator Pyright 0 errors，contracts `--check` 通过，proof 入口 AST 解析通过。未运行 pytest、真实 Runner、镜像构建或部署。 |
 | 2026-10-03 | ADR-036 P0 合并后静态复审（main `04d1281`） | 沿 bundle→entrypoint→worker→review 与手动 proof API 追踪，发现 CR-09–11。未运行新负例的真实 Runner 验收；既有 2 passed 不能排除这些构造。 |
