@@ -8,11 +8,13 @@
 
 2026-10-04 已完成 `main @ f5bc37e` 部署。针对 `2757f35` 的复核发现 bundle 精确成员检查漏掉 manifest，以及目标代码和报告器共进程可伪造 observation；现已修复为入口严格要求 manifest、目标每轮在一次性子进程运行并设 30 秒超时、worker 依据 CAS bundle manifest 交叉核对 observation。同期修复 callable 来源校验、报告自洽与 bundle 全字段核对、PoC/evidence 原子幂等写入、TIMEOUT/ENVIRONMENT 重试，以及 agentic Finding 报告必填 constraint。
 
-2026-10-04 第二轮（分支 `feat/realworld-acceptance-samples`，提交 `a7baad8`/`1fb5b40`/`92bb0d7`）：审查清单剩余缺陷 CR-04 剩余、CR-05、CR-06、CR-07、CR-08 已实现并部署。要点：①CR-08 聚合逐集合截断账目（`BinaryCoverage` 契约）进入 result 文档、规划 facts 与 agent `artifact_facts`/`analysis_baseline`，imports 独立 `max_imports` 上限；②CR-06 回退审计按页（64 函数/页）调用并逐页投影+checkpoint 续跑（deadline 8h 兜底），消除 256 函数截断；读取证明键改为 `(version_id, path, line)`，跨版本同路径不再互相授权；③CR-07 `PairRepository.neighborhood` 下推递归 CTE（2000 函数图 402ms→54ms、6000 函数 110ms，基准脚本入库），审计入口 `has_functions` 廉价探针消除双重全量装载；④CR-04 剩余：entrypoint 逐轮捕获有界输出并摘要，新增 `verified_behavior` 判定（crafted≠control 且重放一致），worker 依据自校验 observation 派生 STRONG `POC_VERIFICATION_RESULT`（注入 sink_reached；鉴权 behavior_difference+constraint_digest 绑定审核期约束 SHA-256），gate 恢复 markers 白名单并把约束绑定映射为 `constraint_analysis`——鉴权类自此具备独立判据链，注入类 `protection_analysis` 仍无独立来源、保持候选。全量 Python 门禁 735 passed / 4 skipped、覆盖率 81.79%；真实 Runner 正反例 3 passed；受影响 9 个镜像已重建、栈已重启、migrate exit 0（0024）、API ready、Web 200。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md) 顶部第二轮修复说明。
+2026-10-04 第二轮（分支 `feat/realworld-acceptance-samples`，提交 `a7baad8`/`1fb5b40`/`92bb0d7`）：审查清单剩余缺陷 CR-04 剩余、CR-05、CR-06、CR-07、CR-08 已实现并部署。要点：①CR-08 聚合逐集合截断账目（`BinaryCoverage` 契约）进入 result 文档、规划 facts 与 agent `artifact_facts`/`analysis_baseline`，imports 独立 `max_imports` 上限；②CR-06 回退审计按页（64 函数/页）调用并逐页投影+checkpoint 续跑（deadline 8h 兜底），消除 256 函数截断；读取证明键改为 `(version_id, path, line)`，跨版本同路径不再互相授权；③CR-07 `PairRepository.neighborhood` 下推递归 CTE（2000 函数图 402ms→54ms、6000 函数 110ms，基准脚本入库），审计入口 `has_functions` 廉价探针消除双重全量装载；④CR-04 剩余：entrypoint 逐轮捕获有界输出并摘要，新增 `verified_behavior` 判定（crafted≠control 且重放一致），worker 依据自校验 observation 派生 STRONG `POC_VERIFICATION_RESULT`（注入 sink_reached；鉴权 behavior_difference+constraint_digest 绑定审核期约束 SHA-256），gate 恢复 markers 白名单并把约束绑定映射为 `constraint_analysis`。全量 Python 门禁 735 passed / 4 skipped、覆盖率 81.79%；真实 Runner 正反例 3 passed；受影响 9 个镜像已重建、栈已重启、migrate exit 0（0024）、API ready、Web 200。
+
+2026-10-04 第三轮（同分支，提交 `708a4f4`）：CR-04 收尾。注入类 `protection_analysis` 独立判据落地——控制面 AST 保护枚举器对 bundle 摘要锁定的目标源码确定性枚举危险 sink/守卫/校验/净化构造，marker 经 worker 注入类 STRONG 证据，gate 全链确认注入 Finding 回归通过；独立崩溃/利用 oracle 立项评估完成（建议 P0.5 解释器信号 `crash_kind`）。全量 Python 门禁 **742 passed / 4 skipped**（覆盖率 81.8%，此前一轮 735+1 项并行偶发 error 复跑确认稳定）；Ruff/Pyright/contracts/TypeScript 门禁通过；重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启，migrate exit 0、`/health/ready` ready、Web 200、真实 Runner 验收 3 passed。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md) 与 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)。
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。逐项审查缺陷代码证据见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
-当前目标绑定验证的**能力边界**：本地分支将目标范围收窄为可从 UTF-8 Python 源文件导入并调用的函数；C/C++ 原项目构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1；注入类 `protection_analysis` 仍无独立判据来源（该类 Finding 依旧不能被自动证据确认，保持候选或人工复核）；能证明安全影响的独立崩溃/利用 oracle 仍未立项。
+当前目标绑定验证的**能力边界**：本地分支将目标范围收窄为可从 UTF-8 Python 源文件导入并调用的函数；C/C++ 原项目构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1，sanitizer 崩溃 oracle 随该轨立项；内存破坏类 Finding 在纯 Python 目标边界内结构性不可确认（无解释器信号来源，见 oracle 评估 §1），保持候选是正确行为而非缺陷。
 
 ## 当前阻碍与审查缺陷（2026-10-03 清单，2026-10-04 状态）
 
@@ -20,7 +22,7 @@
 |---|---|---|
 | CR-01、CR-02 / P0 | 已完成（P0 范围） | 执行输入与元数据分离为 bundle 成员并逐成员摘要校验；原目标以只读成员绑定（TargetBinding：artifact/version/digest）；`SandboxStatus` 成功不再产生任何漏洞结论，结论仅由可信入口的 `VerificationObservation` 决定。真实 Runner 正反例验收通过（`tests/proof/test_target_bound_runner.py`，opt-in）。C/C++ 目标构建绑定转 P1。 |
 | CR-03 / P1 | 已完成 | 生成的受限调用描述与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
-| CR-04 / P1 | 基本完成 | 鉴权类独立判据已闭环：proof 入口逐轮捕获有界输出并摘要，`verified_behavior`（crafted≠control、重放一致）经 worker 自校验后派生 STRONG `POC_VERIFICATION_RESULT`，`constraint_digest` 绑定审核期登记约束，gate 映射出 `constraint_analysis`/`behavior_difference`/`reachable_path`，鉴权 Finding 可被证据确认（模型复核仍为提案方）。注入类 `source_to_sink_path` 已可派生，但 `protection_analysis` 仍无独立来源——注入 Finding 继续保持候选。独立崩溃/利用 oracle（安全影响的独立证明）仍未立项。 |
+| CR-04 / P1 | 已完成 | 三类独立判据全部闭环：①鉴权——`verified_behavior` 差分 oracle + `constraint_digest` 绑定审核期约束，gate 派生 `constraint_analysis`/`behavior_difference`/`reachable_path`；②注入——proof worker 对 bundle 摘要锁定的目标源码运行控制面 AST 保护枚举器（`vulnweaver_proof.protection_analysis`：危险 sink、异常守卫、输入校验、净化器、安全替代，确定性且无法解析即不声明），marker 进入 STRONG 证据，gate 派生 `source_to_sink_path` + `protection_analysis`（回归 `tests/orchestrator/test_confirmation_facts.py::test_injection_with_protection_enumeration_confirms` 全链确认）；③独立崩溃/利用 oracle 已完成立项评估（[`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)）：建议 P0.5 采纳 supervisor 计算的解释器信号 `crash_kind`（契约与验收范围已明确），sanitizer 轨挂靠 P1 BuildProfile，模型声明影响断言的方案因红线 8 否决。 |
 | CR-05 / P1 | 已完成 | 必填 constraint + `_issue_identity` 归一指纹（NFKC/空白/大小写）进入 evidence 身份；同任务 CWE+精确位置稳定去重；同函数不同源码行回归通过；新增同函数双地址（二进制）回归通过。 |
 | CR-06 / P1 | 已完成 | 回退审计分页化（64 函数/页）+ 逐页投影与 checkpoint 续跑，8h deadline 兜底（TIMEOUT 可重试），消除 256 函数截断；报告聚合记录 audited/total 覆盖。源码搜索按唯一文件计数（此前已修）；finding-report 读取证明键为 `(version_id, path, line)`，跨版本同路径读取不再互相授权（回归 `tests/orchestrator/test_code_audit.py`）。 |
 | CR-07 / P1 | 已完成（本轮量化+优化） | 基准：2000 函数图 neighborhood depth1 402ms→**54ms**，6000 函数 **110ms**（`code/scripts/benchmark_pair_neighborhood.py`）。邻域下推递归 CTE，只取到达子图；审计入口以 `has_functions` 探针替代全量装载，agent 成功路径零重复装载、回退路径单次装载。`pair.neighborhood` 全图入 Python 的旧实现已移除；`agent_runs.save_progress` 写放大与 ProjectView N+1 仍是候选项（见下一步 8）。 |
@@ -90,6 +92,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支（`708a4f4`）CR-04 收尾门禁与栈内部署 | `pnpm run check:python`：**742 passed / 4 skipped**（上一轮曾出现 1 项 worker 并行偶发 error，隔离/目录级/全量复跑均通过确认为偶发）；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、宿主机 `/health/ready` 返回 ready、Web 200；真实 Runner 定向验收 **3 passed**。注入全链确认回归 `test_injection_with_protection_enumeration_confirms` 通过。 |
 | 2026-10-04 | 分支 `feat/realworld-acceptance-samples`（`92bb0d7`）CR-04~08 修复门禁与栈内部署 | `pnpm run check:python`：**735 passed / 4 skipped**，覆盖率 **81.79%**；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests、`vite build` 通过。4 项跳过为 3 个需 Runner 配置的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**（`SANDBOX_RUNNER_URL`/`SANDBOX_RUNNER_TOKEN` 取自栈 `.env`）。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate exit 0（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` ready、Web 200（web 容器需 `--force-recreate` 刷新 nginx 上游缓存，见经验教训）。 |
 | 2026-10-04 | main `f5bc37e` 修复门禁与本地部署 | `pnpm run check:python`：**711 passed / 4 skipped**，覆盖率 **81.69%**；Ruff、Pyright、contracts `--check` 通过。跳过项为 3 个需 Runner 环境的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate 成功（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` 返回 ready、Web 返回 200、analysis-worker/dispatcher/orchestrator 正常启动。 |
 | 2026-10-03 | main `62315c5` 本地部署 | 重建 api/web/analysis-worker/dispatcher/orchestrator/binary-tools/sandbox-runner 镜像并 `docker compose up -d`；PostgreSQL 与 Redis healthy，迁移和 artifact-init 正常退出，API `/health/ready` 返回 `{"status":"ready"}`，Web `127.0.0.1:8080` 返回 200。未运行 pytest/真实 Runner。 |
@@ -105,11 +108,11 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：CR-04 收尾与真实项目闭环**
+**下一步：真实项目闭环与 oracle P0.5 提案**
 
-1. **CR-04 残余**：注入类 `protection_analysis` 独立来源（候选方向：独立静态工具对 source→sink 路径的保护缺失分析，按 ADR-036 阶段提案）；能证明安全影响的独立崩溃/利用 oracle 立项评估。
-2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。完成后 R3 目标绑定动态轨可执行。
-3. **审查清单回归观察**：用真实模型在栈内走一次 candidate → 差分/异常 observation → 模型 re-review → confirmed（鉴权教学样本），确认 `POC_VERIFICATION_RESULT` 标记与复核提示词兼容；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
+1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。
+2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计；完成后 R3 目标绑定动态轨可执行。
+3. **审查清单回归观察**：用真实模型在栈内走一次 candidate → 差分/异常 observation → 模型 re-review → confirmed（鉴权与注入教学样本各一次），确认 `POC_VERIFICATION_RESULT` 标记与复核提示词兼容；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
 
 **收尾与观察（非阻塞）**
 
