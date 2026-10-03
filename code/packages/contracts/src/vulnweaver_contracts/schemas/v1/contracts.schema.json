@@ -627,6 +627,34 @@
         "raw_output": {"anyOf": [{"type": "string", "maxLength": 1048576}, {"type": "null"}]}
       }
     },
+    "BinaryCollectionStats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offered", "retained", "limit", "truncated", "reason"],
+      "properties": {
+        "offered": {"type": "integer", "minimum": 0},
+        "retained": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 0},
+        "truncated": {"type": "boolean"},
+        "reason": {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 1024}, {"type": "null"}]}
+      }
+    },
+    "BinaryCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["functions", "instructions", "basic_blocks", "xrefs", "pseudocode", "symbolic_facts", "imports", "strings", "complete"],
+      "properties": {
+        "functions": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "instructions": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "basic_blocks": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "xrefs": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "pseudocode": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "symbolic_facts": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "imports": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "strings": {"$ref": "#/$defs/BinaryCollectionStats"},
+        "complete": {"type": "boolean"}
+      }
+    },
     "BinaryAnalysisResult": {
       "type": "object",
       "additionalProperties": false,
@@ -655,6 +683,7 @@
         "imports": {"type": "array", "items": {"$ref": "#/$defs/BinaryImport"}},
         "tool_runs": {"type": "array", "items": {"$ref": "#/$defs/BinaryToolRun"}},
         "status": {"$ref": "#/$defs/BinaryAnalysisStatus"},
+        "coverage": {"$ref": "#/$defs/BinaryCoverage"},
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
@@ -1093,12 +1122,13 @@
         "target_binding": {"$ref": "#/$defs/TargetBinding"},
         "inputs": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
         "controls": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
+        "constraint_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
     "VerificationOutcome": {
       "type": "string",
-      "enum": ["verified_trigger", "rejected_under_test_conditions", "inconclusive", "environment_error"]
+      "enum": ["verified_trigger", "verified_behavior", "rejected_under_test_conditions", "inconclusive", "environment_error"]
     },
     "VerificationRunRole": {
       "type": "string",
@@ -1115,7 +1145,19 @@
         "signal": {"type": ["integer", "null"]},
         "duration_millis": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "target_frames": {"type": "boolean"},
-        "timed_out": {"type": "boolean"}
+        "timed_out": {"type": "boolean"},
+        "output_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]}
+      }
+    },
+    "ObservedBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["crafted_output_digest", "control_output_digest", "differed", "replay_consistent"],
+      "properties": {
+        "crafted_output_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "control_output_digest": {"$ref": "#/$defs/Sha256Digest"},
+        "differed": {"type": "boolean"},
+        "replay_consistent": {"type": "boolean"}
       }
     },
     "VerificationObservation": {
@@ -1137,6 +1179,8 @@
         "trigger_runs": {"type": "integer", "minimum": 0},
         "replay_runs": {"type": "integer", "minimum": 0},
         "untrusted_claims": {"anyOf": [{"$ref": "#/$defs/JsonObject"}, {"type": "null"}]},
+        "observed_behavior": {"anyOf": [{"$ref": "#/$defs/ObservedBehavior"}, {"type": "null"}]},
+        "constraint_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
         "verifier": {"$ref": "#/$defs/ToolIdentity"},
         "created_at": {"type": "string", "format": "date-time"}
       }

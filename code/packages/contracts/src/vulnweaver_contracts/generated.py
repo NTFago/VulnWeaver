@@ -223,6 +223,7 @@ class ExecutionBundleKind(StrEnum):
 
 class VerificationOutcome(StrEnum):
     VERIFIED_TRIGGER = 'verified_trigger'
+    VERIFIED_BEHAVIOR = 'verified_behavior'
     REJECTED_UNDER_TEST_CONDITIONS = 'rejected_under_test_conditions'
     INCONCLUSIVE = 'inconclusive'
     ENVIRONMENT_ERROR = 'environment_error'
@@ -513,6 +514,24 @@ class BinaryToolRun(TypedDict):
     reason: str | None
     raw_output: str | None
 
+class BinaryCollectionStats(TypedDict):
+    offered: int
+    retained: int
+    limit: int
+    truncated: bool
+    reason: str | None
+
+class BinaryCoverage(TypedDict):
+    functions: BinaryCollectionStats
+    instructions: BinaryCollectionStats
+    basic_blocks: BinaryCollectionStats
+    xrefs: BinaryCollectionStats
+    pseudocode: BinaryCollectionStats
+    symbolic_facts: BinaryCollectionStats
+    imports: BinaryCollectionStats
+    strings: BinaryCollectionStats
+    complete: bool
+
 class BinaryAnalysisResult(TypedDict):
     schema_version: SchemaVersion
     artifact_version_id: Identifier
@@ -537,6 +556,7 @@ class BinaryAnalysisResult(TypedDict):
     imports: list[BinaryImport]
     tool_runs: list[BinaryToolRun]
     status: BinaryAnalysisStatus
+    coverage: NotRequired[BinaryCoverage]
     created_at: str
 
 class PairFunction(TypedDict):
@@ -806,6 +826,7 @@ class ExecutionBundleManifest(TypedDict):
     target_binding: TargetBinding
     inputs: NotRequired[list[BundleFileMember]]
     controls: NotRequired[list[BundleFileMember]]
+    constraint_digest: NotRequired[Sha256Digest | None]
     created_at: str
 
 class VerificationRun(TypedDict):
@@ -816,6 +837,13 @@ class VerificationRun(TypedDict):
     duration_millis: int
     target_frames: bool
     timed_out: bool
+    output_digest: NotRequired[Sha256Digest | None]
+
+class ObservedBehavior(TypedDict):
+    crafted_output_digest: Sha256Digest
+    control_output_digest: Sha256Digest
+    differed: bool
+    replay_consistent: bool
 
 class VerificationObservation(TypedDict):
     schema_version: SchemaVersion
@@ -832,6 +860,8 @@ class VerificationObservation(TypedDict):
     trigger_runs: int
     replay_runs: int
     untrusted_claims: NotRequired[JsonObject | None]
+    observed_behavior: NotRequired[ObservedBehavior | None]
+    constraint_digest: NotRequired[Sha256Digest | None]
     verifier: ToolIdentity
     created_at: str
 

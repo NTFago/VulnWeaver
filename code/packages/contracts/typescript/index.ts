@@ -381,6 +381,26 @@ export interface BinaryToolRun {
   raw_output: string | null;
 }
 
+export interface BinaryCollectionStats {
+  offered: number;
+  retained: number;
+  limit: number;
+  truncated: boolean;
+  reason: string | null;
+}
+
+export interface BinaryCoverage {
+  functions: BinaryCollectionStats;
+  instructions: BinaryCollectionStats;
+  basic_blocks: BinaryCollectionStats;
+  xrefs: BinaryCollectionStats;
+  pseudocode: BinaryCollectionStats;
+  symbolic_facts: BinaryCollectionStats;
+  imports: BinaryCollectionStats;
+  strings: BinaryCollectionStats;
+  complete: boolean;
+}
+
 export interface BinaryAnalysisResult {
   schema_version: SchemaVersion;
   artifact_version_id: Identifier;
@@ -405,6 +425,7 @@ export interface BinaryAnalysisResult {
   imports: Array<BinaryImport>;
   tool_runs: Array<BinaryToolRun>;
   status: BinaryAnalysisStatus;
+  coverage?: BinaryCoverage;
   created_at: string;
 }
 
@@ -707,10 +728,11 @@ export interface ExecutionBundleManifest {
   target_binding: TargetBinding;
   inputs?: Array<BundleFileMember>;
   controls?: Array<BundleFileMember>;
+  constraint_digest?: Sha256Digest | null;
   created_at: string;
 }
 
-export type VerificationOutcome = "verified_trigger" | "rejected_under_test_conditions" | "inconclusive" | "environment_error";
+export type VerificationOutcome = "verified_trigger" | "verified_behavior" | "rejected_under_test_conditions" | "inconclusive" | "environment_error";
 
 export type VerificationRunRole = "control" | "trigger" | "replay";
 
@@ -722,6 +744,14 @@ export interface VerificationRun {
   duration_millis: number;
   target_frames: boolean;
   timed_out: boolean;
+  output_digest?: Sha256Digest | null;
+}
+
+export interface ObservedBehavior {
+  crafted_output_digest: Sha256Digest;
+  control_output_digest: Sha256Digest;
+  differed: boolean;
+  replay_consistent: boolean;
 }
 
 export interface VerificationObservation {
@@ -739,6 +769,8 @@ export interface VerificationObservation {
   trigger_runs: number;
   replay_runs: number;
   untrusted_claims?: JsonObject | null;
+  observed_behavior?: ObservedBehavior | null;
+  constraint_digest?: Sha256Digest | null;
   verifier: ToolIdentity;
   created_at: string;
 }
