@@ -1,5 +1,8 @@
 # 项目文档索引与事实边界
 
+- [`benchmark-oriented-architecture.md`](benchmark-oriented-architecture.md)：2026-10-03 真实目标构建、调查、独立验证和隔离评测的改进方案，含实施顺序与验收；尚未实现。
+- [`adr/036-target-bound-verification-and-benchmark-evaluation.md`](adr/036-target-bound-verification-and-benchmark-evaluation.md)：上述公共契约与判定边界变更提案。
+
 当前实现状态以根目录 [`DEVELOPMENT_STATUS.md`](../../DEVELOPMENT_STATUS.md) 和代码为准。2026-10-03 的主链路代码审查及未修复缺陷见 [`code-review-2026-10-03.md`](code-review-2026-10-03.md)。自动 PoC/Exploit 的成功状态目前不等于目标样本漏洞已复现；确认事实传递、Finding 粒度与大样本覆盖也存在未解决问题。
 
 - 根目录《系统架构设计与技术选型》《系统实现模块拆分》描述目标架构和验收条件，不能替代当前实现验收。

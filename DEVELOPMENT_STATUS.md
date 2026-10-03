@@ -6,6 +6,10 @@
 
 ## 当前焦点
 
+2026-10-03 架构改进提案已形成：[`面向真实世界 benchmark 的架构改进`](code/docs/benchmark-oriented-architecture.md) 与 [`ADR-036（提议）`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)。保留控制面，优先建立真实目标构建、可证伪调查、独立验证和隔离评测；设计文档已完成，P0–P4 实现均未开始。新增能力缺口：当前源码 harness 路径编译独立生成程序，未在该路径构建/链接原项目，不能将其崩溃作为原项目漏洞证据。
+
+下一项可执行工作：固定一个授权开源解析器目标，设计版本化 TargetSnapshot/ExecutionBundle/VerificationObservation 契约；在 Linux 容器经真实 Runner 添加原目标正例及空脚本、假成功标记、错误目标、harness 自身崩溃负例，随后修复 CR-01 至 CR-04。当前未运行外部 benchmark，未测性能，也未实现上述新能力；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
+
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前首要焦点是修复 2026-10-03 主链路代码审查发现的结果可信度、确认断链和漏报问题；逐项代码证据、风险与验收入口见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
 历史记录显示部署栈曾重建运行，且导入、语义审计、报告及 fuzz 的指定样本链路曾通过；本轮未重新检查服务在线状态，也未验证真实 PoC/Exploit 全链。自动 PoC/Exploit 的 `COMPLETED`/`EXPLOITABLE` 目前不能视为样本漏洞已复现。
@@ -23,6 +27,8 @@
 本轮是文档与代码事实校正，不包含缺陷修复；历史任务的“完成”只代表当时写明的局部交付和测试，不能覆盖上表的未解决问题。
 
 ## 进行中
+
+本轮架构设计的验证范围：代码路径核对、官方 benchmark 任务/评测器资料核对、Markdown 本地链接检查与 `git diff --check`；纯文档变更，不运行 Python 工作区测试或样本。性能表中的瓶颈尚未量化，官方 benchmark 成绩与未来验收指标均未冒充现有结果。
 
 | 事项 | 负责人 / 分支 | 状态 |
 |---|---|---|
