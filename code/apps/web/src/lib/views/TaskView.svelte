@@ -85,7 +85,7 @@
   export let onSubmitReview: (outcome: FindingStatus, rationale: string) => Promise<boolean> = async () => false;
   export let onSubmitAnnotation: (note: string) => Promise<boolean> = async () => false;
 
-  let proofScriptRef = "";
+  let proofBundleRef = "";
   let proofImageDigest = "sha256:";
   let reviewOutcome: FindingStatus = "candidate";
   let reviewRationale = "";
@@ -207,7 +207,7 @@
   }
 
   function createProof(kind: "proof_of_concept" | "exploit"): void {
-    onCreateProof(kind, proofScriptRef, proofImageDigest);
+    onCreateProof(kind, proofBundleRef, proofImageDigest);
   }
 </script>
 
@@ -273,7 +273,7 @@
       <p>{selectedFinding.fix_suggestion}</p>
       <small>位置：{"path" in selectedFinding.location ? `${selectedFinding.location.path}:${selectedFinding.location.start_line}` : `0x${selectedFinding.location.virtual_address.toString(16)}`} · 证据：{selectedFinding.evidence_ids.length} 条 · 复现记录：{selectedFinding.poc_ids.length} 条</small>
       <div class="proof-actions">
-        <label>脚本引用<input bind:value={proofScriptRef} placeholder="CAS 对象引用" /></label>
+        <label>验证包引用<input bind:value={proofBundleRef} placeholder="当前 Finding 的 DERIVED ExecutionBundle CAS 引用" /></label>
         <label>镜像摘要<input bind:value={proofImageDigest} placeholder="sha256:..." /></label>
         <button class="secondary" on:click={() => createProof("proof_of_concept")} disabled={busy}>发起概念验证</button>
         {#if selectedFinding.status === "confirmed" && project?.exploit_validation_enabled}<button class="danger" on:click={() => createProof("exploit")} disabled={busy}>发起利用验证</button>{/if}

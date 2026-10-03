@@ -132,6 +132,9 @@ class ProofJobExecutor:
             # slow runner cannot pin a pooled connection for the whole timeout.
             async with self._database.transaction() as repositories:
                 finding = await repositories.findings.get(request["finding_id"])
+                expected_target_binding, _, _ = await self._target_binding(
+                    repositories, finding
+                )
                 finding_status = finding["status"]
                 task = await repositories.tasks.get(finding["task_id"])
                 project = await repositories.projects.get(task["project_id"])
@@ -146,6 +149,7 @@ class ProofJobExecutor:
                 exploit_validation_enabled=exploit_validation_enabled,
                 cancellation=cancellation,
                 kind=kind,
+                expected_target_binding=expected_target_binding,
             )
             poc = run.poc
             async with self._database.transaction() as repositories:
@@ -260,6 +264,7 @@ class ProofJobExecutor:
             build_execution_bundle,
             self._store,
             bundle_id=f"execution-bundle:{job['id']}",
+            finding_id=finding["id"],
             driver_ref=generated.script_ref,
             target_binding=binding,
             target_ref=target_ref,
@@ -472,6 +477,7 @@ class ProofExecutionService:
         exploit_validation_enabled: bool,
         cancellation: asyncio.Event,
         kind: PocKind = PocKind.PROOF_OF_CONCEPT,
+        expected_target_binding: TargetBinding | None = None,
     ) -> ProofRun:
         try:
             validate_contract("ProofRequest", request)
@@ -508,7 +514,9 @@ class ProofExecutionService:
             },
         )
         result = await self._sandbox.run(sandbox_request, cancellation)
-        observation = self._read_observation(request, kind, result)
+        observation = self._read_observation(
+            request, kind, result, expected_target_binding=expected_target_binding
+        )
         status, poc_result = self._poc_outcome(result, observation)
         return ProofRun(
             self._poc(
@@ -523,7 +531,12 @@ class ProofExecutionService:
         )
 
     def _read_observation(
-        self, request: ProofRequest, kind: PocKind, result: SandboxResult
+        self,
+        request: ProofRequest,
+        kind: PocKind,
+        result: SandboxResult,
+        *,
+        expected_target_binding: TargetBinding | None,
     ) -> VerificationObservation | None:
         """Load and validate the trusted entrypoint report from CAS, if any."""
 
@@ -549,9 +562,17 @@ class ProofExecutionService:
         except (ArtifactStoreError, OSError, UnicodeDecodeError, ValueError, ObservationError):
             return None
         # A report for a different request or finding is never trusted.
+        if expected_target_binding is None:
+            return None
         if observation["finding_id"] != request["finding_id"]:
             return None
         if str(observation["kind"]) != kind.value:
+            return None
+        observed_binding = observation["target_binding"]
+        if any(
+            observed_binding.get(key) != expected_target_binding.get(key)
+            for key in ("artifact_id", "version_id", "artifact_kind", "digest")
+        ):
             return None
         return observation
 

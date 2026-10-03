@@ -1,14 +1,10 @@
 #!/usr/local/bin/python3
-"""Materialize one ExecutionBundle and independently observe the target.
+"""Run a constrained invocation against one immutable Python source target.
 
-The bundle carries the generated driver, the read-only original target the
-finding is bound to, plus crafted and control inputs. This entrypoint is
-system-owned trusted code: it verifies every member digest before touching
-disk, runs the driver as a subprocess with the original target mounted at a
-fixed path, runs the control input first, replays the crafted input, and
-writes one ``execution-report.json`` observation. Driver stdout is recorded
-as untrusted claims only — the verdict comes exclusively from observed
-process results with target-attributed stack frames (ADR-036).
+The model supplies only a callable path and input encoding; it cannot supply
+Python code. The trusted entrypoint compiles the digest-checked target bytes
+in memory, calls the selected function, and attributes exceptions by code
+object identity. The target is never materialized as a writable file.
 """
 
 from __future__ import annotations
@@ -19,15 +15,14 @@ import io
 import json
 import os
 import re
-import subprocess
-import sys
 import tarfile
 import tempfile
 import time
+import types
 from pathlib import Path
 
 MANIFEST_NAME = "vulnweaver-execution-bundle.json"
-DRIVER_NAME = "driver.py"
+DRIVER_NAME = "driver.json"
 TARGET_NAME = "target"
 INPUT_PREFIX = "inputs/"
 CONTROL_PREFIX = "controls/"
@@ -36,12 +31,9 @@ REPORT_NAME = "execution-report.json"
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_INPUT_BYTES = 64 * 1024
-MAX_CLAIM_BYTES = 4 * 1024
-RUN_TIMEOUT_SECONDS = 120
 REPLAY_COUNT = 2
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
-_CLAIM_LINE = "POC_MARKERS: "
 
 VERIFIED_TRIGGER = "verified_trigger"
 REJECTED = "rejected_under_test_conditions"
@@ -125,7 +117,7 @@ def _load_bundle(path: Path) -> dict[str, bytes]:
     for member in [manifest["driver"], manifest["target"], *(manifest.get("inputs") or []),
                    *(manifest.get("controls") or [])]:
         declared[str(member["name"])] = member
-    if set(declared) - set(members):
+    if set(declared) != set(members):
         raise BundleError("bundle_member_missing")
     for name, member in declared.items():
         content = members[name]
@@ -139,13 +131,19 @@ def _load_bundle(path: Path) -> dict[str, bytes]:
 def _check_manifest_shape(manifest: object) -> None:
     if not isinstance(manifest, dict):
         raise BundleError("bundle_manifest_invalid")
-    required = ("schema_version", "bundle_id", "kind", "driver", "target", "target_binding",
+    required = ("schema_version", "bundle_id", "finding_id", "kind", "driver", "target", "target_binding",
                 "created_at")
     if any(key not in manifest for key in required):
         raise BundleError("bundle_manifest_invalid")
     if manifest["schema_version"] != "1.0.0" or manifest["kind"] != "proof":
         raise BundleError("bundle_manifest_unsupported")
     if not isinstance(manifest["bundle_id"], str) or not manifest["bundle_id"]:
+        raise BundleError("bundle_manifest_invalid")
+    if not isinstance(manifest["finding_id"], str) or not manifest["finding_id"]:
+        raise BundleError("bundle_manifest_invalid")
+    if not _member_shape_ok(manifest["driver"]) or manifest["driver"].get("name") != DRIVER_NAME:
+        raise BundleError("bundle_manifest_invalid")
+    if not _member_shape_ok(manifest["target"]) or manifest["target"].get("name") != TARGET_NAME:
         raise BundleError("bundle_manifest_invalid")
     for member in (manifest["driver"], manifest["target"]):
         if not _member_shape_ok(member):
@@ -157,6 +155,9 @@ def _check_manifest_shape(manifest: object) -> None:
             for member in manifest[key]:
                 if not _member_shape_ok(member):
                     raise BundleError("bundle_manifest_invalid")
+                expected_prefix = INPUT_PREFIX if key == "inputs" else CONTROL_PREFIX
+                if not str(member["name"]).startswith(expected_prefix):
+                    raise BundleError("bundle_manifest_invalid")
     binding = manifest["target_binding"]
     if not isinstance(binding, dict) or not all(
         isinstance(binding.get(key), str) and binding[key]
@@ -167,6 +168,8 @@ def _check_manifest_shape(manifest: object) -> None:
     controls = manifest.get("controls") or []
     if not inputs or not controls:
         raise BundleError("bundle_manifest_invalid")
+    if manifest["target_binding"]["digest"] != manifest["target"]["digest"]:
+        raise BundleError("target_binding_digest_mismatch")
 
 
 def _member_shape_ok(member: object) -> bool:
@@ -191,7 +194,7 @@ def _write_member(directory: Path, name: str, content: bytes, mode: int) -> Path
 
 class _Run:
     __slots__ = ("role", "input_name", "exit_code", "signal", "duration_millis",
-                 "target_frames", "timed_out", "stdout")
+                 "target_frames", "timed_out")
 
     def __init__(self, role: str, input_name: str) -> None:
         self.role = role
@@ -201,7 +204,6 @@ class _Run:
         self.duration_millis = 0
         self.target_frames = False
         self.timed_out = False
-        self.stdout = b""
 
     def record(self) -> dict[str, object]:
         return {
@@ -223,46 +225,61 @@ class _Run:
         return self.crashed and self.target_frames
 
 
-def _run_driver(python: str, driver: Path, target: Path, input_path: Path, role: str) -> _Run:
-    run = _Run(role, input_path.name)
+def _code_object_ids(code: types.CodeType) -> set[int]:
+    result = {id(code)}
+    for value in code.co_consts:
+        if isinstance(value, types.CodeType):
+            result.update(_code_object_ids(value))
+    return result
+
+
+def _run_invocation(
+    invocation: dict[str, str],
+    target_bytes: bytes,
+    target_digest: str,
+    input_bytes: bytes,
+    input_name: str,
+    role: str,
+) -> _Run:
+    run = _Run(role, input_name)
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            [python, str(driver), str(target), str(input_path)],
-            capture_output=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
-            cwd=str(driver.parent),
-            env={"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-                 "PYTHONHASHSEED": "0"},
-        )
-    except subprocess.TimeoutExpired as expired:
-        run.timed_out = True
-        run.duration_millis = int((time.monotonic() - started) * 1000)
-        run.stdout = (expired.stdout or b"")[:MAX_CLAIM_BYTES]
-        return run
+        mode = invocation["input_mode"]
+        value: object = input_bytes
+        if mode == "text":
+            value = input_bytes.decode("utf-8")
+        elif mode == "json":
+            value = json.loads(input_bytes)
+        source = target_bytes.decode("utf-8")
+        filename = f"vulnweaver-target://{target_digest.removeprefix('sha256:')}"
+        code = compile(source, filename, "exec")
+        target_code_ids = _code_object_ids(code)
+        namespace: dict[str, object] = {
+            "__name__": "__vulnweaver_target__",
+            "__file__": filename,
+        }
+        exec(code, namespace, namespace)
+        target_callable: object = namespace
+        for part in invocation["target_callable"].split("."):
+            if isinstance(target_callable, dict):
+                target_callable = target_callable.get(part)
+            else:
+                target_callable = getattr(target_callable, part, None)
+        if not callable(target_callable):
+            raise ValueError("target callable is not available")
+        target_callable(value)
+    except BaseException as error:
+        run.exit_code = 1
+        traceback = error.__traceback__
+        while traceback is not None:
+            if id(traceback.tb_frame.f_code) in locals().get("target_code_ids", set()):
+                run.target_frames = True
+                break
+            traceback = traceback.tb_next
+    else:
+        run.exit_code = 0
     run.duration_millis = int((time.monotonic() - started) * 1000)
-    run.exit_code = completed.returncode
-    if completed.returncode < 0:
-        run.signal = -completed.returncode
-    run.stdout = completed.stdout[:MAX_CLAIM_BYTES]
-    stderr = completed.stderr.decode("utf-8", errors="replace")
-    # Attribution: the crashing stack must run through the materialized
-    # original target, not only through the generated driver.
-    run.target_frames = str(target) in stderr
     return run
-
-
-def _untrusted_claims(stdout: bytes) -> dict[str, object] | None:
-    text = stdout.decode("utf-8", errors="replace")
-    for line in reversed(text.splitlines()):
-        if line.startswith(_CLAIM_LINE):
-            try:
-                claims = json.loads(line[len(_CLAIM_LINE):])
-            except json.JSONDecodeError:
-                return None
-            return claims if isinstance(claims, dict) else None
-    return None
 
 
 def _observation_id(finding_id: str, kind: str, bundle_id: str) -> str:
@@ -277,44 +294,64 @@ def _member_echo(name: str, content: bytes) -> dict[str, object]:
 def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, object]:
     members = _load_bundle(bundle_path)
     manifest = json.loads(members[MANIFEST_NAME].decode("utf-8"))
+    if manifest["finding_id"] != finding_id:
+        raise BundleError("bundle_finding_mismatch")
     target_binding = manifest["target_binding"]
     driver_digest = _digest(members[DRIVER_NAME])
+    try:
+        invocation = json.loads(members[DRIVER_NAME].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BundleError("invocation_invalid") from error
+    if (
+        not isinstance(invocation, dict)
+        or set(invocation) != {"target_callable", "input_mode"}
+        or not isinstance(invocation.get("target_callable"), str)
+        or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0,7}",
+            invocation["target_callable"],
+        )
+        or any(part.startswith("__") for part in invocation["target_callable"].split("."))
+        or invocation.get("input_mode") not in {"text", "bytes", "json"}
+    ):
+        raise BundleError("invocation_invalid")
     input_names = [str(member["name"]) for member in manifest["inputs"]]
     control_names = [str(member["name"]) for member in manifest["controls"]]
 
     workdir = Path(tempfile.mkdtemp(prefix="vw-proof-", dir=_work_root()))
     try:
-        driver = _write_member(workdir, DRIVER_NAME, members[DRIVER_NAME], 0o555)
-        target = _write_member(workdir, TARGET_NAME, members[TARGET_NAME], 0o444)
         input_paths = [
             _write_member(workdir, name, members[name], 0o444) for name in input_names
         ]
         control_paths = [
             _write_member(workdir, name, members[name], 0o444) for name in control_names
         ]
-        python = sys.executable or "/usr/local/bin/python3"
-
-        control_runs = [_run_driver(python, driver, target, path, "control")
-                        for path in control_paths]
-        trigger_runs = [_run_driver(python, driver, target, path, "trigger")
-                        for path in input_paths]
+        target_bytes = members[TARGET_NAME]
+        target_digest = manifest["target"]["digest"]
+        control_runs = [
+            _run_invocation(invocation, target_bytes, target_digest,
+                            path.read_bytes(), path.name, "control")
+            for path in control_paths
+        ]
+        trigger_runs = [
+            _run_invocation(invocation, target_bytes, target_digest,
+                            path.read_bytes(), path.name, "trigger")
+            for path in input_paths
+        ]
         reasons: list[str] = []
         chosen: _Run | None = next((run for run in trigger_runs if run.attributed), None)
         replay_runs: list[_Run] = []
         if chosen is not None:
             index = next(i for i, run in enumerate(trigger_runs) if run is chosen)
-            replay_runs = [_run_driver(python, driver, target, input_paths[index], "replay")
-                           for _ in range(REPLAY_COUNT)]
+            replay_runs = [
+                _run_invocation(invocation, target_bytes, target_digest,
+                                input_paths[index].read_bytes(), input_paths[index].name,
+                                "replay")
+                for _ in range(REPLAY_COUNT)
+            ]
 
-        # The materialized target must still be the digested bytes after the
-        # driver ran; in-container tampering voids the observation.
-        if _digest(target.read_bytes()) != manifest["target"]["digest"]:
-            verdict = ENVIRONMENT_ERROR
-            reasons = ["target_modified"]
-            chosen = None
-        elif any(run.timed_out for run in (*control_runs, *trigger_runs, *replay_runs)):
+        if any(run.timed_out for run in (*control_runs, *trigger_runs, *replay_runs)):
             verdict = INCONCLUSIVE
-            reasons = ["driver_timeout"]
+            reasons = ["target_timeout"]
         elif any(run.crashed for run in control_runs):
             verdict = REJECTED
             reasons = ["control_input_failed"]
@@ -336,11 +373,6 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
             if chosen is not None
             else 0
         )
-        claims: dict[str, object] | None = None
-        for run in trigger_runs:
-            claims = _untrusted_claims(run.stdout)
-            if claims is not None:
-                break
         return {
             "schema_version": "1.0.0",
             "id": _observation_id(finding_id, kind, str(manifest["bundle_id"])),
@@ -360,7 +392,7 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
             "runs": runs,
             "trigger_runs": trigger_count,
             "replay_runs": len(replay_runs),
-            "untrusted_claims": claims,
+            "untrusted_claims": None,
             "verifier": {"name": "proof-entrypoint", "version": "2.0.0",
                          "image_digest": None},
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

@@ -522,17 +522,17 @@
     artifactVersions = new Map(artifactVersions);
   }
 
-  async function createProof(kind: "proof_of_concept" | "exploit", scriptRef: string, imageDigest: string): Promise<void> {
+  async function createProof(kind: "proof_of_concept" | "exploit", bundleRef: string, imageDigest: string): Promise<void> {
     if (!selectedFinding) return;
-    if (!scriptRef || !imageDigest || imageDigest === "sha256:") {
-      error = "请填写脚本引用和固定镜像摘要"; return;
+    if (!bundleRef || !imageDigest || imageDigest === "sha256:") {
+      error = "请填写当前 Finding 的验证包引用和固定镜像摘要"; return;
     }
     const budget = selectedTask?.resource_budget ?? selectedProject?.resource_budget;
     if (!budget) { error = "请先选择任务"; return; }
     begin();
     try {
       const job = await api.createProof(selectedFinding.id, {
-        script_ref: scriptRef, image_digest: imageDigest,
+        script_ref: bundleRef, image_digest: imageDigest,
         permission_mode: selectedProject?.permission_mode ?? "request_permission",
         resource_budget: budget, kind,
       });

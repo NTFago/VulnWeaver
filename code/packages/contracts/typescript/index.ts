@@ -652,9 +652,16 @@ export interface Poc {
   created_at: string;
 }
 
+export interface ProofInvocation {
+  target_callable: string;
+  input_mode: "text" | "bytes" | "json";
+}
+
 export interface ExploitScript {
   schema_version: SchemaVersion;
-  script: string;
+  driver: ProofInvocation;
+  crafted_input: string;
+  control_input: string;
   rationale: string;
 }
 
@@ -693,6 +700,7 @@ export interface TargetBinding {
 export interface ExecutionBundleManifest {
   schema_version: SchemaVersion;
   bundle_id: Identifier;
+  finding_id: Identifier;
   kind: ExecutionBundleKind;
   driver: BundleFileMember;
   target: BundleFileMember;
@@ -801,6 +809,7 @@ export interface SemanticAuditFinding {
   title: string;
   severity: Severity;
   rationale: string;
+  constraint: string;
   path?: string;
   start_line?: number;
   end_line?: number;

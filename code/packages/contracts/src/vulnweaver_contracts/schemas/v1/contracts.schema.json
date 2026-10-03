@@ -994,13 +994,24 @@
         "created_at": {"type": "string", "format": "date-time"}
       }
     },
+    "ProofInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_callable", "input_mode"],
+      "properties": {
+        "target_callable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*){0,7}$", "maxLength": 256},
+        "input_mode": {"type": "string", "enum": ["text", "bytes", "json"]}
+      }
+    },
     "ExploitScript": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "script", "rationale"],
+      "required": ["schema_version", "driver", "crafted_input", "control_input", "rationale"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
-        "script": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "driver": {"$ref": "#/$defs/ProofInvocation"},
+        "crafted_input": {"type": "string", "minLength": 1, "maxLength": 65536},
+        "control_input": {"type": "string", "minLength": 1, "maxLength": 65536},
         "rationale": {"type": "string", "minLength": 1, "maxLength": 8192}
       }
     },
@@ -1071,10 +1082,11 @@
     "ExecutionBundleManifest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "bundle_id", "kind", "driver", "target", "target_binding", "created_at"],
+      "required": ["schema_version", "bundle_id", "finding_id", "kind", "driver", "target", "target_binding", "created_at"],
       "properties": {
         "schema_version": {"$ref": "#/$defs/SchemaVersion"},
         "bundle_id": {"$ref": "#/$defs/Identifier"},
+        "finding_id": {"$ref": "#/$defs/Identifier"},
         "kind": {"$ref": "#/$defs/ExecutionBundleKind"},
         "driver": {"$ref": "#/$defs/BundleFileMember"},
         "target": {"$ref": "#/$defs/BundleFileMember"},
@@ -1221,7 +1233,7 @@
         "SemanticAuditFinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["cwe_id", "title", "severity", "rationale"],
+      "required": ["cwe_id", "title", "severity", "rationale", "constraint"],
       "oneOf": [
         {"required": ["path", "start_line"]},
         {"required": ["address"]}
@@ -1231,6 +1243,7 @@
         "title": {"type": "string", "minLength": 1, "maxLength": 256},
         "severity": {"$ref": "#/$defs/Severity"},
         "rationale": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "constraint": {"type": "string", "minLength": 1, "maxLength": 1024},
         "path": {"type": "string", "minLength": 1, "maxLength": 1024},
         "start_line": {"type": "integer", "minimum": 1},
         "end_line": {"type": "integer", "minimum": 1},

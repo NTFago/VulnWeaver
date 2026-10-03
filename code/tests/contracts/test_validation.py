@@ -484,9 +484,10 @@ def test_execution_bundle_manifest_accepts_members_and_rejects_bad_names() -> No
     payload = {
         "schema_version": "1.0.0",
         "bundle_id": "execution-bundle:job-1",
+        "finding_id": "finding:sample",
         "kind": "proof",
         "driver": {
-            "name": "driver.py",
+            "name": "driver.json",
             "digest": "sha256:" + "a" * 64,
             "size_bytes": 128,
         },

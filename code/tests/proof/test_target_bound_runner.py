@@ -66,17 +66,19 @@ CONTROL = "[a]b=c\n"
 TIMESTAMP = "2026-10-03T08:00:00Z"
 
 
-def _driver(name: str) -> str:
-    return (FIXTURES / name).read_text(encoding="utf-8")
-
-
 class StubModel:
-    """Returns one fixed driver program plus its crafted and control inputs."""
+    """Returns one fixed invocation plus its crafted and control inputs."""
 
     def __init__(self, driver_name: str) -> None:
         self._output = {
             "schema_version": "1.0.0",
-            "script": _driver(driver_name),
+            "driver": {
+                "target_callable": (
+                    "parse" if driver_name == "driver_invoking_target.py"
+                    else "missing_target_callable"
+                ),
+                "input_mode": "text",
+            },
             "crafted_input": CRAFTED,
             "control_input": CONTROL,
             "rationale": "target-bound acceptance driver",
