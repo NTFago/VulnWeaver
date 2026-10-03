@@ -143,6 +143,12 @@ def _derived_poc_facts(
         difference = markers.get("behavior_difference")
         if isinstance(difference, str) and difference:
             derived.update({"behavior_difference", "reachable_path"})
+        # CR-04: the proof worker binds the differential probe to the finding's
+        # registered constraint by digest before writing this evidence, so a
+        # digest marker means the registered invariant was the probed one.
+        constraint_digest = markers.get("constraint_digest")
+        if isinstance(constraint_digest, str) and constraint_digest.startswith("sha256:"):
+            derived.add("constraint_analysis")
     return derived
 
 
@@ -311,6 +317,10 @@ def _safe_replay_facts(evidence_type: EvidenceType, recipe: JsonObject) -> JsonO
             "diagnostic_selector",
             "pair_snapshot",
             "result",
+            # CR-04: POC verification results carry the typed markers the proof
+            # worker derived from its own validated observation. Model output
+            # never writes this evidence type, so the markers are machine facts.
+            "markers",
         )
         if key in recipe
     }

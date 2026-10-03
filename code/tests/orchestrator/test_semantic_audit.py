@@ -505,3 +505,66 @@ def test_two_same_cwe_findings_at_distinct_lines_in_one_function_survive(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_two_same_cwe_findings_at_distinct_binary_addresses_survive(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """CR-05 binary case: two same-CWE issues in one function keep both addresses."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        task_id, version_id, _artifact_id = await _seed_binary(database, suffix)
+        base_address = 0x401000
+        async with database.transaction() as repositories:
+            function = pair_function(f"pair-fn:{suffix}", version_id, "src/unused.py")
+            function["source_location"] = None
+            function["binary_location"] = {
+                "artifact_version_id": version_id,
+                "image_base": 0x400000,
+                "virtual_address": base_address,
+                "file_offset": 0x1000,
+                "instruction_end": base_address + 64,
+            }
+            await repositories.pair.import_graph([function], [], [], None, created_at=NOW)
+
+        def binary_finding(address: int, title: str) -> dict[str, object]:
+            return {
+                "cwe_id": "CWE-120",
+                "title": title,
+                "severity": "high",
+                "address": address,
+                "rationale": "unbounded copy into stack buffer",
+                "constraint": f"copy at 0x{address:x} must bound length by destination capacity",
+            }
+
+        model = FakeAuditModel(
+            report(
+                [
+                    binary_finding(base_address, "first unchecked copy"),
+                    binary_finding(base_address + 16, "second unchecked copy"),
+                ]
+            )
+        )
+        auditor = SemanticAuditor(
+            database, model, LocalContentAddressedStore(cast(Any, tmp_path))
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        audit_job = semantic_job(f"job:audit:{suffix}", task_id)
+        try:
+            result = await executor.execute(audit_job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+            assert len(findings) == 2
+            assert {item["location"]["virtual_address"] for item in findings} == {
+                base_address,
+                base_address + 16,
+            }
+            # Both candidates survived: no same-CWE collision dropped either.
+            assert len(result["evidence_ids"]) == 2
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

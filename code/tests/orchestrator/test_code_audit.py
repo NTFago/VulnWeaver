@@ -226,6 +226,58 @@ def test_truncated_function_excerpt_does_not_authorize_unread_tail() -> None:
     asyncio.run(scenario())
 
 
+def test_read_proof_is_scoped_to_the_artifact_version() -> None:
+    """CR-06: reading one version's copy of a path proves nothing about another.
+
+    Two versions of one project may carry the same path; a report anchored to
+    version B's function needs a read of version B's file, not version A's.
+    """
+
+    class VersionedLoader:
+        async def load(self, task_id: str, location: JsonObject) -> SourceReviewFacts:
+            version = str(location["artifact_version_id"])
+            return SourceReviewFacts(
+                True, None,
+                SourceExcerpt(
+                    artifact_version_id=version,
+                    archive_ref="cas://sha256/" + "a" * 64,
+                    archive_digest="sha256:" + "a" * 64,
+                    path=str(location["path"]),
+                    file_digest="sha256:" + "b" * 64,
+                    start_line=1,
+                    end_line=2,
+                    text="def handle(request):\n    return eval(request)\n",
+                    truncated=False,
+                ),
+            )
+
+    async def scenario() -> None:
+        workspace = AuditWorkspace(
+            cast(Database, None), cast(Any, None), "task:test",
+            fact_loader=cast(Any, VersionedLoader()),
+        )
+        ref_a = AuditFunctionRef(
+            "version:a", source_function("function:a", "version:a", "src/app.py")
+        )
+        ref_b = AuditFunctionRef(
+            "version:b", source_function("function:b", "version:b", "src/app.py")
+        )
+        workspace._functions = [ref_a, ref_b]
+        workspace._functions_by_id = {ref.function["id"]: ref for ref in (ref_a, ref_b)}
+        # Read version B's copy of the shared path.
+        await workspace.read_function(function_id="function:b", path=None, start_line=None)
+        # The reported location resolves to version A (the audit anchor version):
+        # version B's read does not authorize it.
+        assert not workspace.has_read_reported_code(
+            path="src/app.py", start_line=1, address=None
+        )
+        # Reading version A's own copy authorizes the report.
+        await workspace.read_function(function_id="function:a", path=None, start_line=None)
+        assert workspace.has_read_reported_code(path="src/app.py", start_line=1, address=None)
+
+    asyncio.run(scenario())
+
+
 def binary_function(identifier: str, version_id: str) -> PairFunction:
     """Binary PAIR functions carry a *list* of decompiler records."""
 

@@ -84,15 +84,18 @@ def test_inspects_x64_pe_and_extracts_strings(tmp_path: Path) -> None:
     sample = tmp_path / "sample.exe"
     sample.write_bytes(pe64_sample())
     metadata = inspect_binary(sample)
-    strings = extract_strings(
+    extraction = extract_strings(
         sample, metadata, BinaryAnalysisLimits(max_strings=20, min_string_chars=5)
     )
+    strings = extraction.strings
     assert metadata.format == "pe"
     assert metadata.architecture == "x86_64"
     assert metadata.image_base == 0x140000000
     assert metadata.entry_point == 0x140001000
     assert metadata.sections[0]["virtual_address"] == 0x140001000
     assert any(item["value"] == "hello-binary" for item in strings)
+    assert extraction.offered == len(strings)
+    assert extraction.truncated is False
 
 
 @pytest.mark.parametrize(

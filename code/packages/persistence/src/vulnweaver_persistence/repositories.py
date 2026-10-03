@@ -9,7 +9,20 @@ from enum import StrEnum
 from typing import Any, TypedDict, cast
 from uuid import uuid4
 
-from sqlalchemy import Column, RowMapping, Table, delete, func, literal_column, select, text, update
+from sqlalchemy import (
+    Column,
+    RowMapping,
+    Table,
+    case,
+    delete,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy import exists as exists_
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
@@ -2049,6 +2062,18 @@ class PairRepository:
         ).mappings()
         return [_pair_function_from_row(row) for row in rows]
 
+    async def has_functions(self, artifact_version_id: str) -> bool:
+        """Cheap membership probe so callers can scope without a full load."""
+
+        row = (
+            await self._connection.execute(
+                select(pair_functions.c.id)
+                .where(pair_functions.c.artifact_version_id == artifact_version_id)
+                .limit(1)
+            )
+        ).first()
+        return row is not None
+
     async def list_functions_page(
         self,
         artifact_version_ids: Sequence[str],
@@ -2169,56 +2194,96 @@ class PairRepository:
     async def neighborhood(
         self, artifact_version_id: str, function_id: str, *, depth: int = 1
     ) -> dict[str, object]:
+        """Nodes/edges/functions within ``depth`` undirected hops of the anchor.
+
+        The walk runs as a recursive CTE in the database (CR-07): the previous
+        implementation transferred every node and edge of the version into
+        Python before selecting the neighborhood, so each diagnostic or
+        call-path step paid for the whole graph. The seed is every node that
+        belongs to the anchor function; each level expands once across both
+        edge directions.
+        """
+
         if depth < 0 or depth > 8:
             raise ValueError("PAIR neighborhood depth must be between 0 and 8")
-        nodes = list(
+        anchor_nodes = (
+            select(pair_nodes.c.id.label("node_id"), literal(0).label("depth"))
+            .where(
+                pair_nodes.c.artifact_version_id == artifact_version_id,
+                pair_nodes.c.function_id == function_id,
+            )
+        ).cte(name="pair_walk", recursive=True)
+        expansion = (
+            select(
+                case(
+                    (
+                        pair_edges.c.source_node_id == anchor_nodes.c.node_id,
+                        pair_edges.c.target_node_id,
+                    ),
+                    else_=pair_edges.c.source_node_id,
+                ).label("node_id"),
+                (anchor_nodes.c.depth + 1).label("depth"),
+            )
+            .join(
+                anchor_nodes,
+                or_(
+                    pair_edges.c.source_node_id == anchor_nodes.c.node_id,
+                    pair_edges.c.target_node_id == anchor_nodes.c.node_id,
+                ),
+            )
+            .where(
+                pair_edges.c.artifact_version_id == artifact_version_id,
+                anchor_nodes.c.depth < depth,
+            )
+        )
+        walk = anchor_nodes.union(expansion)
+        selected = select(walk.c.node_id).distinct().scalar_subquery()
+        node_rows = (
             (
                 await self._connection.execute(
-                    select(pair_nodes).where(
-                        pair_nodes.c.artifact_version_id == artifact_version_id
-                    )
+                    select(pair_nodes)
+                    .where(pair_nodes.c.id.in_(selected))
+                    .order_by(pair_nodes.c.id)
                 )
-            ).mappings()
+            )
+            .mappings()
+            .all()
         )
-        edges = list(
+        edge_rows = (
             (
                 await self._connection.execute(
-                    select(pair_edges).where(
-                        pair_edges.c.artifact_version_id == artifact_version_id
+                    select(pair_edges)
+                    .where(
+                        pair_edges.c.source_node_id.in_(selected),
+                        pair_edges.c.target_node_id.in_(selected),
                     )
+                    .order_by(pair_edges.c.id)
                 )
-            ).mappings()
+            )
+            .mappings()
+            .all()
         )
-        node_values = [_pair_node_from_row(row) for row in nodes]
-        edge_values = [_pair_edge_from_row(row) for row in edges]
-        function_nodes = {node["id"] for node in node_values if node["function_id"] == function_id}
-        selected_nodes = set(function_nodes)
-        for _ in range(depth):
-            for edge in edge_values:
-                if (
-                    edge["source_node_id"] in selected_nodes
-                    or edge["target_node_id"] in selected_nodes
-                ):
-                    selected_nodes.update({edge["source_node_id"], edge["target_node_id"]})
-        selected_edges = [
-            edge
-            for edge in edge_values
-            if edge["source_node_id"] in selected_nodes and edge["target_node_id"] in selected_nodes
-        ]
-        selected_function_ids = {
-            node["function_id"]
-            for node in node_values
-            if node["id"] in selected_nodes and node["function_id"]
-        }
-        functions = [
-            function
-            for function in await self.list_functions(artifact_version_id)
-            if function["id"] in selected_function_ids
-        ]
+        selected_function_ids = (
+            select(pair_nodes.c.function_id)
+            .where(pair_nodes.c.id.in_(selected), pair_nodes.c.function_id.is_not(None))
+            .distinct()
+            .scalar_subquery()
+        )
+        function_rows = (
+            (
+                await self._connection.execute(
+                    select(pair_functions)
+                    .where(pair_functions.c.id.in_(selected_function_ids))
+                    .order_by(pair_functions.c.name, pair_functions.c.id)
+                )
+            )
+            .mappings()
+            .all()
+        )
         return {
-            "functions": functions,
-            "nodes": [node for node in node_values if node["id"] in selected_nodes],
-            "edges": selected_edges,
+            "functions": [_pair_function_from_row(row) for row in function_rows],
+            "nodes": [_pair_node_from_row(row) for row in node_rows],
+            "edges": [_pair_edge_from_row(row) for row in edge_rows],
         }
 
     async def _insert_or_verify(

@@ -355,7 +355,7 @@ class AuditWorkspace:
         self._files: dict[tuple[str, str], str | None] = {}
         self._documents: dict[str, JsonObject | None] = {}
         self._reader: SourceExcerptReader | None = None
-        self._read_source_lines: set[tuple[str, int]] = set()
+        self._read_source_lines: set[tuple[str, str, int]] = set()
         self._read_binary_functions: set[str] = set()
 
     async def load(self) -> None:
@@ -467,7 +467,7 @@ class AuditWorkspace:
             source = function["source_location"]
             if source is not None and code_kind == "source" and read_start is not None:
                 self._read_source_lines.update(
-                    (source["path"], line)
+                    (ref.version_id, source["path"], line)
                     for line in range(read_start, (read_end or read_start) + 1)
                 )
             elif source is None:
@@ -522,7 +522,7 @@ class AuditWorkspace:
         if document is None:
             return {"available": False, "reason_code": "binary_facts_unavailable"}
         if kind == "summary":
-            return cast(
+            summary = cast(
                 JsonObject,
                 {
                     "available": True,
@@ -541,6 +541,13 @@ class AuditWorkspace:
                     },
                 },
             )
+            coverage = document.get("coverage")
+            if isinstance(coverage, Mapping):
+                # CR-08: an incomplete analysis must not read as complete. The
+                # agent sees which collections were capped and why, so it can
+                # treat "no finding" inside those regions as inconclusive.
+                summary["coverage"] = cast(JsonValue, coverage)
+            return summary
         if kind == "obfuscation":
             return cast(
                 JsonObject,
@@ -579,18 +586,26 @@ class AuditWorkspace:
                                 "status": str(run.get("status")),
                             }
                         )
-                baseline["binary"] = cast(
-                    JsonObject,
-                    {
-                        "analysis_version_id": version_id,
-                        "produced_at": version["created_at"],
-                        "symbolic_targets": config.get("target_addresses"),
-                        "tool_runs": runs[:16],
-                        "symbolic_facts": (
-                            len(_as_list(document.get("symbolic_facts"))) if document else 0
-                        ),
-                    },
-                )
+                binary_baseline: dict[str, object] = {
+                    "analysis_version_id": version_id,
+                    "produced_at": version["created_at"],
+                    "symbolic_targets": config.get("target_addresses"),
+                    "tool_runs": runs[:16],
+                    "symbolic_facts": (
+                        len(_as_list(document.get("symbolic_facts"))) if document else 0
+                    ),
+                }
+                coverage = document.get("coverage") if document else None
+                if isinstance(coverage, Mapping):
+                    truncated = sorted(
+                        name
+                        for name, stats in cast(Mapping[str, object], coverage).items()
+                        if isinstance(stats, Mapping)
+                        and cast(Mapping[str, object], stats).get("truncated")
+                    )
+                    if truncated:
+                        binary_baseline["truncated_collections"] = truncated
+                baseline["binary"] = cast(JsonObject, binary_baseline)
             elif fmt == "source-import-result" and baseline["source_index"] is None:
                 baseline["source_index"] = {
                     "index_version_id": version_id,
@@ -725,7 +740,7 @@ class AuditWorkspace:
                 if len(matches) >= limit:
                     break
                 if matcher.search(line) is not None:
-                    self._read_source_lines.add((path, number))
+                    self._read_source_lines.add((version_id, path, number))
                     matches.append(
                         cast(
                             JsonObject,
@@ -749,9 +764,25 @@ class AuditWorkspace:
         if address is not None:
             ref = self.function_at_address(address)
             return ref is not None and ref.function["id"] in self._read_binary_functions
-        return path is not None and start_line is not None and (
-            path, start_line
-        ) in self._read_source_lines
+        if path is None or start_line is None:
+            return False
+        # The read proof is version-scoped: two versions of one project may
+        # carry the same path, and reading version A's copy proves nothing
+        # about version B's (CR-06). The proof must match the version of the
+        # indexed function the reported location anchors to.
+        ref = self._resolve_source_ref(path, start_line)
+        if ref is None:
+            return False
+        return (ref.version_id, path, start_line) in self._read_source_lines
+
+    def _resolve_source_ref(self, path: str, start_line: int) -> AuditFunctionRef | None:
+        for ref in self._functions:
+            source = ref.function["source_location"]
+            if source is None or source["path"] != path:
+                continue
+            if source["start_line"] <= start_line <= source["end_line"]:
+                return ref
+        return None
 
     async def _search_binary_strings(self, matcher: re.Pattern[str], limit: int) -> JsonObject:
         document = await self._binary_document()

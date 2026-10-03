@@ -97,21 +97,40 @@ def inspect_binary(path: str | Path, limits: BinaryAnalysisLimits | None = None)
     return replace(metadata, packed=False, packer=None)
 
 
+@dataclass(frozen=True, slots=True)
+class StringExtraction:
+    """Extracted strings plus honest truncation accounting (CR-08).
+
+    ``offered`` counts every candidate string in the input for both encodings,
+    including those dropped because the configured cap was reached, so callers
+    can tell "the binary had no more strings" from "the extractor stopped".
+    """
+
+    strings: tuple[BinaryString, ...]
+    offered: int
+    limit: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.offered > len(self.strings)
+
+
 def extract_strings(
     path: str | Path,
     metadata: BinaryMetadata,
     limits: BinaryAnalysisLimits | None = None,
-) -> tuple[BinaryString, ...]:
+) -> StringExtraction:
     configured = limits or BinaryAnalysisLimits()
     data = Path(path).read_bytes()
-    records: list[BinaryString] = []
-    records.extend(_ascii_strings(data, metadata, configured))
-    if len(records) < configured.max_strings:
-        records.extend(
-            _utf16le_strings(data, metadata, configured, configured.max_strings - len(records))
-        )
+    ascii_records, ascii_offered = _ascii_strings(data, metadata, configured)
+    utf16_records, utf16_offered = _utf16le_strings(data, metadata, configured)
+    offered = ascii_offered + utf16_offered
+    records = list(ascii_records)
+    remaining = configured.max_strings - len(records)
+    records.extend(utf16_records[: max(0, remaining)])
     records.sort(key=lambda item: (item["file_offset"], item["encoding"]))
-    return tuple(records[: configured.max_strings])
+    kept = tuple(records[: configured.max_strings])
+    return StringExtraction(strings=kept, offered=offered, limit=configured.max_strings)
 
 
 def _inspect_elf(
@@ -479,8 +498,10 @@ def _pe_architecture(machine: int) -> BinaryArchitecture:
 
 def _ascii_strings(
     data: bytes, metadata: BinaryMetadata, limits: BinaryAnalysisLimits
-) -> list[BinaryString]:
+) -> tuple[list[BinaryString], int]:
+    """Return (kept, offered): kept stops at the cap, offered counts every run."""
     records: list[BinaryString] = []
+    offered = 0
     start: int | None = None
     for index, value in enumerate(data + b"\0"):
         if 0x20 <= value <= 0x7E or value in (9,):
@@ -488,30 +509,31 @@ def _ascii_strings(
                 start = index
             continue
         if start is not None and index - start >= limits.min_string_chars:
-            raw = data[start:index][: limits.max_string_chars]
-            records.append(
-                BinaryString(
-                    value=raw.decode("ascii", "replace"),
-                    encoding="ascii",
-                    file_offset=start,
-                    virtual_address=metadata.offset_to_virtual_address(start),
+            offered += 1
+            if len(records) < limits.max_strings:
+                raw = data[start:index][: limits.max_string_chars]
+                records.append(
+                    BinaryString(
+                        value=raw.decode("ascii", "replace"),
+                        encoding="ascii",
+                        file_offset=start,
+                        virtual_address=metadata.offset_to_virtual_address(start),
+                    )
                 )
-            )
-            if len(records) >= limits.max_strings:
-                break
         start = None
-    return records
+    return records, offered
 
 
 def _utf16le_strings(
     data: bytes,
     metadata: BinaryMetadata,
     limits: BinaryAnalysisLimits,
-    remaining: int,
-) -> list[BinaryString]:
+) -> tuple[list[BinaryString], int]:
+    """Return (kept, offered): kept stops at the cap, offered counts every run."""
     records: list[BinaryString] = []
+    offered = 0
     index = 0
-    while index + 1 < len(data) and len(records) < remaining:
+    while index + 1 < len(data):
         start = index
         chars: list[int] = []
         while index + 1 < len(data):
@@ -523,16 +545,18 @@ def _utf16le_strings(
             if len(chars) >= limits.max_string_chars:
                 break
         if len(chars) >= limits.min_string_chars:
-            records.append(
-                BinaryString(
-                    value=bytes(chars).decode("ascii"),
-                    encoding="utf-16le",
-                    file_offset=start,
-                    virtual_address=metadata.offset_to_virtual_address(start),
+            offered += 1
+            if len(records) < limits.max_strings:
+                records.append(
+                    BinaryString(
+                        value=bytes(chars).decode("ascii"),
+                        encoding="utf-16le",
+                        file_offset=start,
+                        virtual_address=metadata.offset_to_virtual_address(start),
+                    )
                 )
-            )
         index = max(index + 2, start + 2)
-    return records
+    return records, offered
 
 
 def _packer_from_sections(sections: tuple[BinarySection, ...]) -> str | None:

@@ -514,6 +514,10 @@ def _model_executors(
         gateway,
         store,
         fuzz_dispatcher=cast(Any, fuzz_dispatcher),
+        # The paged fallback shares the durable checkpoint store: a deadline
+        # stop or worker crash resumes from the saved page instead of losing
+        # coverage to a fresh start (CR-06).
+        checkpoint_store=PostgresCheckpointStore(database),
         # The agent's verification_request=fuzz launches its campaign at audit
         # settlement instead of waiting for review (ADR-031); every enforcement
         # gate stays inside the scheduler and the project opt-in.

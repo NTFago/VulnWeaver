@@ -21,6 +21,7 @@ from vulnweaver_contracts import (
     ArtifactVersion,
     BinaryAnalysisResult,
     BinaryAnalysisStatus,
+    BinaryCoverage,
     BinaryPseudocode,
     BinaryToolRun,
     FailureKind,
@@ -421,6 +422,7 @@ class BinaryImportExecutor:
             await asyncio.to_thread(self._copy_input, object_ref, input_path)
             original_metadata = await asyncio.to_thread(inspect_binary, input_path, self._limits)
             aggregate = BinaryAnalysisAggregate(original_metadata)
+            aggregate.record_limits(self._limits)
             aggregate.tool_runs.append(_header_run())
 
             unpack_outcome = await self._unpacker_chain.run(
@@ -498,6 +500,7 @@ class BinaryImportExecutor:
                 analyzed_object_ref = stored_unpacked.object_ref
                 produced.append(unpacked_version_id)
                 aggregate = BinaryAnalysisAggregate(metadata)
+                aggregate.record_limits(self._limits)
                 aggregate.packed = True
                 aggregate.packer = original_metadata.packer or (
                     "UPX" if method == "upx" else method
@@ -507,8 +510,14 @@ class BinaryImportExecutor:
                 aggregate.packed = True
 
             _validate_symbolic_targets(target_addresses, metadata)
-            aggregate.strings = list(
-                await asyncio.to_thread(extract_strings, analyzed_path, metadata, self._limits)
+            string_extraction = await asyncio.to_thread(
+                extract_strings, analyzed_path, metadata, self._limits
+            )
+            aggregate.strings = list(string_extraction.strings)
+            aggregate.record_string_extraction(
+                offered=string_extraction.offered,
+                retained=len(string_extraction.strings),
+                limit=string_extraction.limit,
             )
             adapters: Sequence[BinaryToolAdapter] = self._adapters
             if self._sandbox is not None and self._sandbox_image_digest:
@@ -1055,6 +1064,7 @@ def _build_result(
         tool_runs=aggregate.tool_runs,
         status=status,
         created_at=created_at,
+        coverage=cast(BinaryCoverage, aggregate.coverage()),
     )
 
 
@@ -1188,6 +1198,7 @@ def _planning_facts(job: Job, aggregate: BinaryAnalysisAggregate) -> JsonObject:
     assessments = assess_control_flow_flattening(
         aggregate.basic_blocks, aggregate.xrefs
     )
+    coverage = aggregate.coverage()
     return cast(
         JsonObject,
         {
@@ -1203,6 +1214,13 @@ def _planning_facts(job: Job, aggregate: BinaryAnalysisAggregate) -> JsonObject:
             "basic_block_count": len(aggregate.basic_blocks),
             "xref_count": len(aggregate.xrefs),
             "pseudocode_count": len(aggregate.pseudocode),
+            # Truncation is a first-class planning input: a collection capped by
+            # limits means the agent cannot treat the retained set as complete.
+            "coverage_incomplete": [
+                name
+                for name, stats in coverage.items()
+                if isinstance(stats, dict) and stats.get("truncated")
+            ],
         },
     )
 

@@ -47,6 +47,37 @@ _DOCUMENT: JsonObject = {
             "raw_output": None,
         }
     ],
+    "coverage": {
+        "functions": {
+            "offered": 20001,
+            "retained": 20000,
+            "limit": 20000,
+            "truncated": True,
+            "reason": "1 unique items dropped: functions limit 20000 reached",
+        },
+        "instructions": {
+            "offered": 10, "retained": 10, "limit": 200000, "truncated": False, "reason": None,
+        },
+        "basic_blocks": {
+            "offered": 10, "retained": 10, "limit": 100000, "truncated": False, "reason": None,
+        },
+        "xrefs": {
+            "offered": 10, "retained": 10, "limit": 200000, "truncated": False, "reason": None,
+        },
+        "pseudocode": {
+            "offered": 10, "retained": 10, "limit": 20000, "truncated": False, "reason": None,
+        },
+        "symbolic_facts": {
+            "offered": 1, "retained": 1, "limit": 8, "truncated": False, "reason": None,
+        },
+        "imports": {
+            "offered": 0, "retained": 0, "limit": 20000, "truncated": False, "reason": None,
+        },
+        "strings": {
+            "offered": 0, "retained": 0, "limit": 50000, "truncated": False, "reason": None,
+        },
+        "complete": False,
+    },
 }
 
 
@@ -117,8 +148,37 @@ def test_workspace_reports_the_pre_audit_analysis_baseline(
                 {"tool": "ghidra", "version": "11.4", "status": "succeeded"}
             ]
             assert binary["symbolic_facts"] == 1
+            # CR-08: truncation recorded by the import chain reaches the baseline
+            # so the agent knows the retained function set is not the full image.
+            assert binary["truncated_collections"] == ["functions"]
             # No source archive in this task: the source slot stays empty.
             assert baseline["source_index"] is None
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_artifact_facts_summary_exposes_coverage(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        suffix = uuid.uuid4().hex[:12]
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path)
+        try:
+            task_id = await _seed(database, store, suffix)
+            workspace = AuditWorkspace(database, store, task_id)
+            await workspace.load()
+            summary = await workspace.artifact_facts(kind="summary")
+            assert summary["available"] is True
+            coverage = summary["coverage"]
+            assert isinstance(coverage, dict)
+            functions = coverage["functions"]
+            assert isinstance(functions, dict)
+            assert functions["truncated"] is True
+            assert functions["retained"] == 20000
+            assert coverage["complete"] is False
         finally:
             await database.dispose()
 

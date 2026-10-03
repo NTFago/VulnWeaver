@@ -249,6 +249,135 @@ def test_a_crash_alone_does_not_confirm_an_injection_finding(
     asyncio.run(scenario())
 
 
+def test_bound_differential_poc_confirms_an_auth_finding(
+    persistence_database_url: str,
+) -> None:
+    """CR-04: a constraint-bound behavior difference plus strong evidence confirms.
+
+    The strong record is the proof worker's own ``POC_VERIFICATION_RESULT`` —
+    its markers come from the trusted entrypoint's validated observation, and
+    the ``constraint_digest`` marker binds the probe to the registered
+    invariant. The model review proposes; this evidence chain establishes.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        gate = FindingReviewGate(database)
+        try:
+            finding_id, _ = await _seed(database, FindingCategory.AUTH_OR_BUSINESS_LOGIC)
+            await _attach(
+                database,
+                finding_id,
+                _evidence(
+                    "evidence:poc-diff:" + uuid4().hex,
+                    evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
+                    strength=EvidenceStrength.STRONG,
+                    replay_recipe={
+                        "kind": "poc_verification_result",
+                        "reproducible": True,
+                        "markers": {
+                            "behavior_difference": (
+                                "crafted output sha256:" + "1" * 64
+                                + " != control output sha256:" + "2" * 64
+                            ),
+                            "constraint_digest": "sha256:" + "3" * 64,
+                        },
+                    },
+                    tool=ToolIdentity(name="proof-entrypoint", version="2.1.0", image_digest=None),
+                    artifact_ref="cas://sha256/" + "e" * 64,
+                ),
+            )
+            result = await gate.submit(_review(finding_id))
+            assert result.decision is not None
+            assert result.decision.allowed is True, result.decision.reason_codes
+            async with database.transaction() as repositories:
+                stored = await repositories.findings.get(finding_id)
+            assert stored["status"] is FindingStatus.CONFIRMED
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_auth_differential_without_bound_constraint_does_not_confirm(
+    persistence_database_url: str,
+) -> None:
+    """An unbound behavior difference proves input-dependence, not the invariant."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        gate = FindingReviewGate(database)
+        try:
+            finding_id, _ = await _seed(database, FindingCategory.AUTH_OR_BUSINESS_LOGIC)
+            await _attach(
+                database,
+                finding_id,
+                _evidence(
+                    "evidence:poc-diff:" + uuid4().hex,
+                    evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
+                    strength=EvidenceStrength.STRONG,
+                    replay_recipe={
+                        "kind": "poc_verification_result",
+                        "reproducible": True,
+                        "markers": {
+                            "behavior_difference": "outputs differ",
+                        },
+                    },
+                    tool=ToolIdentity(name="proof-entrypoint", version="2.1.0", image_digest=None),
+                    artifact_ref="cas://sha256/" + "e" * 64,
+                ),
+            )
+            result = await gate.submit(_review(finding_id))
+            assert result.persisted is False
+            assert result.decision is not None
+            assert "missing_fact:constraint_analysis" in result.decision.reason_codes
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_injection_sink_reach_still_requires_protection_analysis(
+    persistence_database_url: str,
+) -> None:
+    """source_to_sink_path now derives, but the injection policy stays intact."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        gate = FindingReviewGate(database)
+        try:
+            finding_id, _ = await _seed(database, FindingCategory.INJECTION)
+            await _attach(
+                database,
+                finding_id,
+                _evidence(
+                    "evidence:poc-sink:" + uuid4().hex,
+                    evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
+                    strength=EvidenceStrength.STRONG,
+                    replay_recipe={
+                        "kind": "poc_verification_result",
+                        "reproducible": True,
+                        "markers": {
+                            "sink_reached": True,
+                            "source": "crafted_input",
+                            "sink": "target_callable@sha256:" + "4" * 64,
+                        },
+                    },
+                    tool=ToolIdentity(name="proof-entrypoint", version="2.1.0", image_digest=None),
+                    artifact_ref="cas://sha256/" + "e" * 64,
+                ),
+            )
+            result = await gate.submit(_review(finding_id))
+            assert result.persisted is False
+            assert result.decision is not None
+            assert "missing_fact:protection_analysis" in result.decision.reason_codes
+            assert "missing_fact:source_to_sink_path" not in result.decision.reason_codes
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_a_review_revision_is_distinct_from_the_first_review(
     persistence_database_url: str,
 ) -> None:
