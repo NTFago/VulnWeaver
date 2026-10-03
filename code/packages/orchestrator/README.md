@@ -8,7 +8,9 @@
 
 ## 独立复核
 
-`IndependentModelReviewer(database, gateway, store).review(finding_id, attempt_key=...)` 是显式调用的复核应用服务，尚未接入常驻消费者。调用方注入已配置 `ModelTier.REVIEW` 的模型网关和服务自有工件库。
+`IndependentModelReviewer(database, gateway, store).review(finding_id, attempt_key=...)` 是复核应用服务；`ReviewJobExecutor` 已在 `apps/analysis-worker` 装配，Review Job 可通过 Worker 执行。调用方注入复核模型网关和服务自有工件库。
+
+**当前确认链路阻碍（2026-10-03）**：PoC 证据中的 `markers` 在 `reviews._safe_replay_facts` 被过滤，注入类相关事实无法由真实 PoC 证据传至 `FindingPolicy`；鉴权类 `constraint_analysis` 没有自动推导来源。审计侧同函数同 CWE 候选会撞 ID，`finding-report` 也未强制代码读取。详见 [`../../docs/code-review-2026-10-03.md`](../../docs/code-review-2026-10-03.md) 的 CR-04/05/06。
 
 - 复用 v1 `Review` Schema，只接受模型的 outcome/rationale；Finding/Review 身份、模型来源、时间与历史关联由服务确定。
 - 输入来自 `ReviewFactContext`，排除静态审计自由推理、模型解释及历史复核结论。`SourceReviewFactLoader` 只读取任务输入列表中且属于同一项目的源码归档，校验摘要后按位置裁剪源码，经过网关脱敏送入模型。缺失或截断的源码不能支持确认或判误报，服务将此类提议降为不可验证。
@@ -31,4 +33,4 @@ uv run --no-sync ruff check .
 
 Windows 宿主运行 psycopg 异步测试时需在 pytest 启动前设置 `asyncio.WindowsSelectorEventLoopPolicy()`；Linux/Dev Container 不需要此设置。集成测试使用独立临时数据库和模拟模型，不运行不可信样本，也不调用付费模型。
 
-后续工作：按静态 Job 完成事件调度复核、扩展函数调用邻域、Task 聚合、人工 Annotation、工作台查询。当前不能视为 T15 或 P2 整体验收完成。
+上述命令是模块级门禁，不包含真实自动 PoC → 证据 → 复核全链。该链路通过真实 runner 正反例前，不能视为完整 Finding 确认验收。

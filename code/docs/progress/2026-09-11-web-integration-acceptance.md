@@ -1,5 +1,7 @@
 # 中文审计工作台整合与验收
 
+> 历史 Web 整合验收，仅覆盖文中指定的页面和数据流。当前自动 PoC/Exploit 与 Finding 确认的代码缺陷见 [`../code-review-2026-10-03.md`](../code-review-2026-10-03.md)，不能由工作台能展示结果推断结果已被真实样本验证。
+
 日期：2026-09-11。分支：`feat/web-audit-integration`。基线：`origin/main@3fcbe1e`；收尾时通过 `git ls-remote` 再次确认主线未变化。
 
 ## 集成边界

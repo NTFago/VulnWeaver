@@ -1,5 +1,7 @@
 # M16 中文审计报告模块设计
 
+> **当前事实边界（2026-10-03）**：报告只呈现上游保存的数据，不能把 `Poc.result=exploitable`、Finding `confirmed` 或二进制分析 Job 成功自行解释为真实样本已被完整验证。自动 proof 执行、样本输入、PoC 事实传递、同函数候选去重及截断透明度存在未修复缺陷；详见 [`code-review-2026-10-03.md`](code-review-2026-10-03.md)。以下历史布局验收不覆盖这些上游语义。
+
 - 日期：2026-09-11
 - 状态：整体设计及 RPT-UI 实现说明；事实准确性、代码摘录与专业排版已落地，公共快照协议与报告版本方案仍见 [ADR-026（提议）](adr/026-report-snapshots-and-revisions.md)。
 - 工作位置：`.worktree/task-reports`，分支 `feat/report-professional-layout`，实现基线 `348fbbc`。

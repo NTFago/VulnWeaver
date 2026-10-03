@@ -2,13 +2,25 @@
 
 > 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；历史课设阶段的任务明细见 Git 历史、PR 与 `code/docs/progress/`。
 
-更新时间：2026-10-02（Asia/Shanghai）
+更新时间：2026-10-03（Asia/Shanghai）
 
 ## 当前焦点
 
-系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前主线（用户新 goal）：**agent 主导挖掘、降低对工具结果的依赖、长线作战**——T48 项目级调查记忆已落地（ADR-030）。
+系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前首要焦点是修复 2026-10-03 主链路代码审查发现的结果可信度、确认断链和漏报问题；逐项代码证据、风险与验收入口见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
-部署栈已在本分支上**全部重建并运行**（postgres/redis/api/orchestrator/dispatcher/analysis-worker/sandbox-runner/web/binary-tools 全部 Up），模型经 Web 设置接入，栈内端到端已通过（见验证记录）。
+历史记录显示部署栈曾重建运行，且导入、语义审计、报告及 fuzz 的指定样本链路曾通过；本轮未重新检查服务在线状态，也未验证真实 PoC/Exploit 全链。自动 PoC/Exploit 的 `COMPLETED`/`EXPLOITABLE` 目前不能视为样本漏洞已复现。
+
+## 当前阻碍与审查缺陷（2026-10-03）
+
+| 编号 | 状态 | 影响与解除条件 |
+|---|---|---|
+| CR-01、CR-02 / P0 | 受阻 | 自动生成的 Python 脚本被存为 JSON，proof entrypoint 执行的是外层 JSON 表达式；沙箱请求又只提供脚本，没有目标样本。工具退出成功会被映射为 `EXPLOITABLE`。解除条件：修复脚本格式、目标输入协议与基于样本观测的成功判据，并完成真实 runner 正反例验收。当前暂停将自动验证状态解释为漏洞可利用结论。 |
+| CR-03 / P1 | 未开始 | PoC 被登记为原样本的新版本并推进 `current_version_id`。解除条件：独立派生工件、原样本当前版本不变的数据库回归。 |
+| CR-04 / P1 | 受阻 | PoC 证据写入 `markers`，复核事实白名单删除它；鉴权类 `constraint_analysis` 缺自动事实来源。解除条件：证据到政策门禁的真实数据库链路测试及事实映射修复。 |
+| CR-05、CR-06 / P1 | 未开始 | 同函数同 CWE 候选发生 ID 冲突而丢弃；源码搜索按函数计文件数，回退审计截到 256 函数；`finding-report` 没有强制读代码。解除条件：锚点粒度、搜索覆盖与报告门禁的正反例回归。 |
+| CR-07 / P1、CR-08 / P2 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图；二进制聚合达上限后静默截断。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准、按需查询与显式覆盖记录。 |
+
+本轮是文档与代码事实校正，不包含缺陷修复；历史任务的“完成”只代表当时写明的局部交付和测试，不能覆盖上表的未解决问题。
 
 ## 进行中
 
@@ -21,15 +33,17 @@
 | T56 任务活动反馈与轮询性能优化 | ZCode / 已合并 main `b210d1d`（feat/task-activity-feedback，待推送 origin） | **完成（代码+测试，已合并已部署）**：新增 `GET /api/tasks/{id}/activity` 轻量活性快照（task 状态 + jobs 轻列含 lease 心跳时间 + agent run 摘要——SQL 侧 `jsonb_path_query_first` 只取最新决策、不传 decisions JSONB + 审计检查点（轮次/调查日志尾部/累计 usage）+ 增量事件（`after` 游标）+ 服务端计算 `latest_activity_at`），一次请求替代前端原每 4 秒 10+ 请求的全量刷新风暴。前端改**两层轮询**：activity 每 3s；仅当结构签名变化（作业状态/尝试次数、运行状态、任务状态）或有新事件时才全量刷新读模型；events 全量刷新与 WS 重连改增量游标（原先每次 from -1 重复拉前 100 条）。性能修复：audit-trail 逐 job `get_result` N+1 改批量 `get_results`（IN 一次查询）；`tasks(project_id, created_at DESC)` 索引补齐（迁移 0022，`list_for_project` 原为顺序扫描）；WS 服务端轮询 0.5s→1s。UI：TaskView 任务头部新增"后台心跳"条（`后台工作中 / 活动变慢 / 长时间无活动` 三档 + 最近活动 X 秒前 + 已用时 + 运行中作业数 + 审计调查第 N 轮 + 最新动作及其时间），AgentPanel 新增调查进度块（轮次 + 调查日志尾部 3 条 + 累计 token），每秒本地计时。顺带修复 main 既有缺口：web `evidenceTypeLabels` 缺 T53 新增的 `poc_verification_result`（svelte-check 1 error）。门禁（dev 容器）：全量 `pytest -n 4` **649 passed / 5 skipped**、ruff、pyright 0 errors、svelte-check 0 errors、web tests **17 passed**、vite build 通过。部署：api/web/analysis-worker/dispatcher/orchestrator 镜像已重建、迁移 0022 已应用、activity 端点线上实测（真实任务数据返回正确）。**待验证**：真实长任务期间观察 UI 心跳/轮次/日志反馈节奏 |
 | T55 多语言源码审计支持（4→13 种语言） | ZCode / 已合并 main `76fe571` 并推送 origin（`7a491c0`）；analysis-worker 镜像已重建、栈已重启（2026-10-02） | **完成（代码+测试，已合并已部署，待栈内多语言 E2E）**：语言配置从 indexer.py 三处硬编码（扩展名表/语法节点表/能力循环）+ static_executor.py 两处硬编码（执行门槛/调度筛选）收敛为单一注册表 `packages/source-analysis/src/vulnweaver_source_analysis/languages.py`（`LanguageSpec`：扩展名、语法模块、函数/调用/类节点类型、callee 字段、静态工具覆盖集）。支持语言新增 JavaScript/TypeScript/Go/Rust/C#/PHP/Ruby/Kotlin/Swift；tree-sitter 语法包经 tuna 镜像全部解析成功（kotlin 1.1.0、swift 0.7.3 为社区包，其余官方）。结构性适配：Kotlin/Swift 语法 call 节点无 callee 字段，索引器增加"首个非参数容器具名子节点"兜底；Rust call 字段实为 `function`、`impl` 块按实现类型限定方法作用域；PHP 普通调用节点名为 `function_call_expression`，`new` 计为调用；构建文件识别新增 go.mod/Cargo.toml/package.json/composer.json/Gemfile/`.csproj`/`.sln`。semgrep 规则 2→16 条（js/ts/go/rust/csharp/php/ruby/kotlin，CWE-95/78/89/502/703），经 pin 版 semgrep 1.130.0 `--validate` 通过并对 9 语言最小无害样本逐条命中验证；调度器/执行器按注册表语言交集选工具（go/rust 项目不再误派 cppcheck）。前端零改动（语言在契约中为自由字符串、UI 纯数据驱动，已核实）。dev 容器全量 `pytest -n 4` **647 passed / 5 skipped**、ruff、pyright 0 errors。部署后已在 worker 容器内验证 13 个语法包全部可构建 Parser、注册表语言清单正确。**待验证**：真实模型 E2E 用多语言样本仓库跑一次索引→静态线索→审计链路 |
 | T54 agent 上下文分层：调查日志与窗口兜底（ADR-035） | ZCode / 已合并 main `654b5bc`（origin/feat/agent-context-journal 未推送，本地分支已清理） | **完成（代码+测试，已合并，待栈内 E2E）**：调研主流 harness（Claude Code/Codex/Gemini CLI/Cline/Roo/SWE-agent/Aider）上下文管理后补齐审计循环的结构性缺口——此前每轮无状态提示只带上一轮反馈，两轮之前模型完全失忆。落地三层模型：钉住头部（指令/objective/工具目录/静态上下文含 ADR-030 记忆）+ **压缩中间**（`investigation_journal`：上一轮之前所有轮次的确定性单行摘要，步骤/计划拒绝各一条，默认 48 条上限、最老先出、`max_journal_entries=0` 可关）+ 原样尾部（`last_feedback` 不变）；与 feedback 按轮次号结构性去重。journal 进 `LoopProgress`/`LoopResume` 与审计检查点，断点续跑不丢调查史。网关 `_fit_context_window` 兜底加固：system 消息永不裁剪、无可裁时不发虚假 `context_window_trimmed` 决策。`static_leads` 补 200 条上限+`total_leads`（原为静态上下文唯一无界列表）。**待验证**：栈内真实模型 E2E（系统提示新增 journal 使用句，按提示词纪律需固定样本回归） |
-| T53 候选 Finding 自动 PoC 复现验证（ADR-034） | ZCode / `feat/candidate-poc-verification` | **完成（代码+测试，未栈内 E2E）**：CANDIDATE Finding 在审计/复核结算后自动投放一次 PoC 复现 PROOF Job（`PocVerificationScheduler`，幂等键 `poc_verification:<finding_id>`；门禁=项目 `exploit_validation_enabled` + proof 镜像 pin + 脚本安全校验）；脚本生成 baseline `poc_verification`（提示词要求最小复现 + 末行 `POC_MARKERS:` 结构化标记）；executor 从沙箱 stdout 解析标记，COMPLETED 运行落 `POC_VERIFICATION_RESULT` STRONG 证据并携带 `evidence_ids`（激活既有 PROOF 证据→定向 re-review 路径）；`derive_established_facts` 新增注入类（`source_to_sink_path`/`protection_analysis`）与认证类（`behavior_difference`/`reachable_path`）推导——确认仍只走独立 re-review + `evaluate_confirmation`，"模型自我确认"红线不变。契约新增证据类型 + 迁移 0021 放开 `evidence.type` CHECK。dev 容器全量 `pytest -n 4` **616 passed / 5 skipped**、ruff、pyright 0 errors。**待验证**：栈内真实模型端到端（投放到沙箱真跑） |
+| T53 候选 Finding 自动 PoC 复现验证（ADR-034） | ZCode / `feat/candidate-poc-verification` | **受阻（2026-10-03 代码审查推翻自动验证闭环结论；原局部测试通过仍为历史事实）**：CANDIDATE Finding 在审计/复核结算后自动投放一次 PoC 复现 PROOF Job（`PocVerificationScheduler`，幂等键 `poc_verification:<finding_id>`；门禁=项目 `exploit_validation_enabled` + proof 镜像 pin + 脚本安全校验）；脚本生成 baseline `poc_verification`（提示词要求最小复现 + 末行 `POC_MARKERS:` 结构化标记）；executor 从沙箱 stdout 解析标记，COMPLETED 运行落 `POC_VERIFICATION_RESULT` STRONG 证据并携带 `evidence_ids`（激活既有 PROOF 证据→定向 re-review 路径）；`derive_established_facts` 新增注入类（`source_to_sink_path`/`protection_analysis`）与认证类（`behavior_difference`/`reachable_path`）推导——确认仍只走独立 re-review + `evaluate_confirmation`，"模型自我确认"红线不变。契约新增证据类型 + 迁移 0021 放开 `evidence.type` CHECK。dev 容器全量 `pytest -n 4` **616 passed / 5 skipped**、ruff、pyright 0 errors。**待验证**：栈内真实模型端到端（投放到沙箱真跑） |
 | **缺陷（已修复，待部署）**：项目删除 500——`DeletionRepository` 按单一 `created_at DESC` 删除自引用表，时间戳并列时顺序不定 | ZCode / 已合并 main `78842fd`（origin/fix/project-delete-fk-tie，本地分支与 worktree 已清理） | **根因（2026-09-30，线上复现）**：`repositories.py` `delete_project`/`_delete_task_rows` 删除 `artifact_versions`（自引用 FK `parent_version_id`）、`reviews`（`supersedes_review_id`）、`annotations`（`supersedes_annotation_id`）时按 `created_at DESC` 单遍删除，假设"子版本时间戳更晚"；但工件管道在同一事务内为父子版本传入同一 `now()`，线上已有 **31 对 `created_at` 相同的父子版本**（15/18 个 e2e 残留项目受影响）。并列时 Postgres 返回顺序不定，父行先删即触发 RESTRICT FK → `sqlalchemy.exc.IntegrityError` 未映射到任何 API 错误 → 落入 catch-all → 500 "an unexpected internal error occurred"，事务回滚，重试恒失败。**修复**（`fix/persistence` 叶子优先迭代删除，三处自引用链统一走 `_delete_chain_leaves`，环链抛结构化不变量错误）：新增回归测试 `tests/persistence/test_deletion_repository.py` 3 例（修复前红/修复后绿）；定向 77 passed、ruff、pyright 0 errors；**用修复代码对线上 18 个残留项目回滚式试删 18/18 全通过**（事务内 93 个版本清空后 ROLLBACK，现场未动）。**待办**：用户暂缓镜像重建——部署后界面删除即恢复；`IntegrityError`→结构化 409 的错误映射仍可改进。注意 `alembic/versions/0011_finding_candidates.py`、`0012_review_history.py` 的建表语句与线上库不符（库中无这三张表但版本号已到 0020，属迁移文件事后改写），后续迁移变更勿把这组表当作删除遗漏项 |
 | T52 模型接入重构：供应商注册表（ADR-033） | ZCode / `feat/model-provider-registry` | **完成（待合并）**：网关新增供应商注册表（`model_providers`+`agent_model_bindings`+`provider_api_keys`，每智能体绑定供应商模型并可配备用）、第三种线格式 OpenAI Responses、每模型上下文/最大输出元数据；任务级限制放开（审计 deadline 默认 8h、逆向规划 2h、上限 7 天；`resource_budget.max_model_tokens` 不再透传为输出上限，harness 8192 硬编码删除；单请求超时上限 600→3600s）；API 设置新增供应商校验/密钥合并/模型探测端点；Web 设置页重做为供应商卡片+绑定；旧 `model_tiers`/`review_model_*` 配置保留回退。已重建 api/orchestrator/analysis-worker/web 镜像并重启栈，worker 正常起循环 |
 | T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
-| T50 扫描器诊断证据化（ADR-032） | ZCode / 本分支 | **完成**：diagnostics 只落 TOOL_OUTPUT 证据（selector 补 severity/message），不再直接成为 CANDIDATE Finding；static-leads 改从证据层读线索；成为 Finding 的唯一路径是 agent 亲读代码后重新报告锚定 |
+| T50 扫描器诊断证据化（ADR-032） | ZCode / 本分支 | **完成**：diagnostics 只落 TOOL_OUTPUT 证据（selector 补 severity/message），不再直接成为 CANDIDATE Finding；static-leads 改从证据层读线索；成为 Finding 的路径是 agent 调用 finding-report 后重新报告锚定；代码读取目前未由执行器强制校验（CR-06） |
 | T51 动态验证链路端到端打通 | ZCode / 本分支 | **完成**：afl-casr 镜像构建并注册；修复 4 个链路断点（harness-compile schema 条件必填 / entrypoint fuzz 参数必填与 bundle 白名单 / `AFL_NOOPT=0` 静默禁用插桩 / execs 竞态超预算）；`e2e_dynamic_verification.py` 全链全绿：审计→评审→fuzz 投放→harness 生成→AFL 真实执行→结果契约通过 |
 | T49 agent 引导的动态验证投放（ADR-031） | ZCode / 本分支 | **完成**：审计结算时 agent 显式 `verification_request=fuzz` 的候选立即投放 fuzz 战役（早于 review；opt-in 门禁 + 每审计上限 4 + 调度器幂等去重全保留）；提示词同步为"请求即发起有界战役" |
 | T48 项目级调查记忆（ADR-030） | ZCode / 已合并 `f6d354a` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
 | T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
+
+口径校正：T60 记录的 **20,000 函数 / 200,000 指令**恰好等于当前聚合上限，不能据此推断该 PE 的事实已全部索引；需要 CR-08 的截断计数才能判定覆盖范围。T58 的前端分页改善不包含 CR-07 的审计/PAIR 后端全量查询。T53 原局部测试通过，但自动 PoC 闭环按 CR-01/02/04 重新列为受阻。
 
 T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
@@ -66,6 +80,8 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-03 | 文档同步检查 | 盘点 71 个 Markdown 文档（含本轮新增索引与审查清单），按审查缺陷修改 19 个直接受影响文档；`git diff --check` 通过，19 个修改文档的相对 Markdown 链接均可解析。未修改无关样本说明、包 README 和历史 ADR 的原始决策记录；本轮没有代码变更，未重跑全量代码门禁。 |
+| 2026-10-03 | 主链路只读 code review（Linux dev 容器） | 定向测试 21 passed + 11 passed；无害 JSON 包装执行复现“内部脚本未运行但外层成功”；`_safe_replay_facts` 最小调用复现 markers 被过滤。未运行真实 PoC/Exploit 沙箱全链、大样本性能基准或全量测试；通过的模拟测试不覆盖 CR-01/02/04。详见 `code/docs/code-review-2026-10-03.md`。 |
 | 2026-10-02 | T57 二进制超时可配置（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**659 passed / 5 skipped**（新增：沙箱失败分类 3——timeout→TIMEOUT 可重试/transport→DEPENDENCY/cancelled→ToolCancelled + 请求超时跟随 limits 无 600 硬顶、executor 超时映射 1、deployment_config 新旋钮 1、worker 客户端超时派生 4、runner client 86400 边界 1、API 设置往返+越界拒绝并入既有用例）；ruff 通过；pyright **0 errors**；svelte-check 0 errors、web 17 tests、vite build 通过；contracts `generate --check` 同步。栈内：六镜像重建重启、PUT 设置 7200 生效且 worker 热重建 assembly、重跑拉格朗 18MB PE import 运行超旧 600s 上限后仍正常推进（对照：旧版恒死于 601s `worker.execution_error`） |
 | 2026-10-02 | T56 活动反馈与轮询优化（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**649 passed / 5 skipped**（新增：activity 端点集成测试 2——快照结构与事件游标、非法游标 422）；ruff 通过；pyright **0 errors**；svelte-check **0 errors**（顺带修复 main 上 evidenceTypeLabels 缺 poc_verification_result 的既有 error）；web tests **17 passed**（新增 activity 签名/心跳/格式化 4 例）；vite build 通过。线上实测：迁移 0022 应用后 `ix_tasks_project_created` 存在，activity 端点对真实历史任务返回正确（作业心跳/事件游标/状态） |
 | 2026-10-01 | T55 多语言源码审计（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**647 passed / 5 skipped**（新增：语言注册表不变量 4 用例、9 新语言函数/调用提取参数化用例、全注册语言 CapabilityProfile 用例、调度器语言交集用例）；ruff 通过；pyright **0 errors**；semgrep 1.130.0（analysis-worker 镜像 pin 版）`--validate` 16 条 0 错误，9 语言最小样本冒烟 16/16 逐条命中；13 语言 tree-sitter 节点类型经容器内探针逐一验证（坑：PHP 普通调用节点是 `function_call_expression` 而非 `call_expression`；Rust call 的 callee 字段是 `function` 而非 `expression`；kotlin/swift call 节点无 callee 字段需兜底） |
@@ -86,6 +102,11 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 | 2026-09-11 | T45/T45-A~F 全量门禁 | `pytest` 556 passed / 5 skipped；ruff、pyright 0 错误；部署栈 UPX 加壳样本端到端通过（历史基线，栈现已清空） |
 
 ## 下一步
+
+**优先处理：**
+
+- **先恢复结论可信度**：按 CR-01/02 修复执行输入、目标样本绑定和成功判据；按 CR-04 修复证据到复核事实的传递；在 Sandbox Runner 内用授权的无害正反例跑通“生成 → 执行 → 证据 → 复核 → policy”，并确认空操作绝不成为 `EXPLOITABLE`。修复前不要用自动 PoC/Exploit 结果评估挖掘能力。
+- **随后处理漏报与数据模型**：CR-03 独立登记脚本工件并回归原样本 current version；CR-05/06 补同函数双问题、同文件多函数搜索和报告必须有代码读取证据的回归；CR-07/08 先采集代表性大样本的 SQL、耗时、内存和截断指标，再决定查询下推与限额语义。具体代码入口见审查清单。
 
 1. **T57 收尾（接手入口）**：验证任务 `task:4fabd098…`（拉格朗 PE 重跑）的 import Job 在 7200s 预算下推进中——完成后确认 binary-facts 结果落库、任务进入审计；若这条大样本链路稳定，可考虑把 1800s 默认值回补进 `agent_loop_budgets` 之外的运维文档。**逆向耗时优化（用户已问询，未立项）**：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（实测沙箱容器单核 ~100% 饱和、478s/743s CPUmil，一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按 `max(1, 输入MB)` 分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②同任务/同项目复用 Ghidra program DB 作为派生工件回投沙箱（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
 2. **T56 真实长任务验证**：部署已完成（activity 端点线上实测通过、迁移 0022 已应用）。剩余：投递一个真实多语言项目任务，在 Web 任务页观察"后台心跳"条的档位变化（live→stale 边界）、审计轮次递增、调查日志尾部滚动，确认 3s activity 轮询期间无全量刷新风暴（Network 面板只有单个 activity 请求，结构变化时才有读模型请求）。

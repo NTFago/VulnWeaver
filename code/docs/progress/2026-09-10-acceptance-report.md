@@ -1,5 +1,7 @@
 # 2026-09-10 全链路验收报告（T20/T21/T22）
 
+> 历史验收记录，仅代表当时列出的样本、路径与断言。2026-10-03 代码审查发现当前自动 PoC/Exploit 执行、样本输入和结果判定有阻断缺陷，不能由本报告的“全链路”标题推断现版本自动漏洞验证可信；详见 [`../code-review-2026-10-03.md`](../code-review-2026-10-03.md)。原始结果与测试数字保留供追溯。
+
 范围：基于本地 compose 栈（PostgreSQL/Redis/API/Dispatcher/analysis-worker/Sandbox Runner/Web 全部为最新分支镜像）的端到端验收。分支 `feat/sprint-final-closeout`。
 
 ## 1. 链路与证据
