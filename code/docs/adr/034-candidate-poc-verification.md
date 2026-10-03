@@ -17,7 +17,7 @@
 ## 决策
 
 1. **候选阶段 PoC = 复现验证，不是 exploit**。新增 `PocVerificationScheduler`（`packages/proof/auto_poc.py`）：CANDIDATE Finding + 项目 `exploit_validation_enabled` 时投放一个 PROOF Job（幂等键 `poc_verification:<finding_id>`，每个 Finding 一生一次）。脚本生成复用 `ExploitScriptGenerator`（新 baseline `poc_verification`），提示词要求最小复现、无利用后动作，仍强制过 `validate_generated_script` 全部禁止模式。红线 10（exploit Job 只处理 confirmed）不放宽。
-2. **标记协议**：PoC 脚本最后打印一行 `POC_MARKERS: {json}`（`sink_reached` / `source` / `sink` / `protections_observed` / `behavior_difference`）。proof executor 从沙箱 stdout（经 CAS `run_log_ref`）解析并净化标记；运行 `COMPLETED` 且有标记行时落一条 `POC_VERIFICATION_RESULT` 证据（STRONG、SUPPORTS，`replay_recipe` 含 markers 与 run_log_ref），WorkerResult 携带 `evidence_ids`。
+2. **历史标记协议（已停用）**：旧版 PoC 脚本打印 `POC_MARKERS: {json}`，proof executor 曾把模型自报内容登记为 STRONG 证据。2026-10-03 按 ADR-036 暂停该证据提升；无目标绑定和独立验证器时，marker 只能视为不可信脚本输出，不会产生 `POC_VERIFICATION_RESULT` 或触发确认。
 3. **事实推导**：`derive_established_facts` 从 STRONG + reproducible 的 `POC_VERIFICATION_RESULT` 推导：通用 `minimal_reproduction`；注入类 `source_to_sink_path`（须 sink_reached + 具体 source/sink）与 `protection_analysis`；认证类 `behavior_difference` + `reachable_path`。
 4. **确认仍走独立复核**。证据落地后由既有 PROOF 结算 → 证据触发定向 re-review（revision id）路径自动重开复核；confirmed 仍只能由 `FindingReviewGate`/`evaluate_confirmation` 依据工具产生的事实裁决。"模型不能自我确认"红线不变。
 5. **契约与存储**：`EvidenceType` 枚举新增 `poc_verification_result`（TS/Python 同步再生成）；迁移 `0021` 放开 `evidence.type` CHECK 约束（原生 SQL，规避 alembic 命名约定二次包装）。
