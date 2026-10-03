@@ -1,6 +1,6 @@
 # DEVELOPMENT STATUS
 
-> 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；历史课设阶段的任务明细见 Git 历史、PR 与 `code/docs/progress/`。
+> 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；已完成任务（T45–T52 等）的实现明细与 2026-10-01 前的门禁记录已裁撤，见 Git 历史、PR 与 `code/docs/progress/`。
 
 更新时间：2026-10-03（Asia/Shanghai）
 
@@ -8,11 +8,9 @@
 
 2026-10-03 架构改进提案已形成：[`面向真实世界 benchmark 的架构改进`](code/docs/benchmark-oriented-architecture.md) 与 [`ADR-036（提议）`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)。保留控制面，优先建立真实目标构建、可证伪调查、独立验证和隔离评测；设计文档已完成，P0–P4 实现均未开始。新增能力缺口：当前源码 harness 路径编译独立生成程序，未在该路径构建/链接原项目，不能将其崩溃作为原项目漏洞证据。
 
-下一项可执行工作：固定一个授权开源解析器目标，设计版本化 TargetSnapshot/ExecutionBundle/VerificationObservation 契约；在 Linux 容器经真实 Runner 添加原目标正例及空脚本、假成功标记、错误目标、harness 自身崩溃负例，随后修复 CR-01 至 CR-04。当前未运行外部 benchmark，未测性能，也未实现上述新能力；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
-
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前首要焦点是修复 2026-10-03 主链路代码审查发现的结果可信度、确认断链和漏报问题；逐项代码证据、风险与验收入口见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
-历史记录显示部署栈曾重建运行，且导入、语义审计、报告及 fuzz 的指定样本链路曾通过；本轮未重新检查服务在线状态，也未验证真实 PoC/Exploit 全链。自动 PoC/Exploit 的 `COMPLETED`/`EXPLOITABLE` 目前不能视为样本漏洞已复现。
+历史记录显示部署栈曾重建运行，导入、语义审计、报告及 fuzz 的指定样本链路曾通过；本轮未重新检查服务在线状态，也未验证真实 PoC/Exploit 全链。自动 PoC/Exploit 的 `COMPLETED`/`EXPLOITABLE` 目前不能视为样本漏洞已复现。
 
 ## 当前阻碍与审查缺陷（2026-10-03）
 
@@ -22,44 +20,30 @@
 | CR-03 / P1 | 未开始 | PoC 被登记为原样本的新版本并推进 `current_version_id`。解除条件：独立派生工件、原样本当前版本不变的数据库回归。 |
 | CR-04 / P1 | 受阻 | PoC 证据写入 `markers`，复核事实白名单删除它；鉴权类 `constraint_analysis` 缺自动事实来源。解除条件：证据到政策门禁的真实数据库链路测试及事实映射修复。 |
 | CR-05、CR-06 / P1 | 未开始 | 同函数同 CWE 候选发生 ID 冲突而丢弃；源码搜索按函数计文件数，回退审计截到 256 函数；`finding-report` 没有强制读代码。解除条件：锚点粒度、搜索覆盖与报告门禁的正反例回归。 |
-| CR-07 / P1、CR-08 / P2 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图；二进制聚合达上限后静默截断。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准、按需查询与显式覆盖记录。 |
+| CR-07、CR-08 / P1 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图；二进制聚合达上限后静默截断。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准、按需查询与显式覆盖记录。 |
 
 本轮是文档与代码事实校正，不包含缺陷修复；历史任务的“完成”只代表当时写明的局部交付和测试，不能覆盖上表的未解决问题。
 
-## 进行中
+## 进行中 / 待验证
 
-本轮架构设计的验证范围：代码路径核对、官方 benchmark 任务/评测器资料核对、Markdown 本地链接检查与 `git diff --check`；纯文档变更，不运行 Python 工作区测试或样本。性能表中的瓶颈尚未量化，官方 benchmark 成绩与未来验收指标均未冒充现有结果。
+T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR-030、agent 引导投放 ADR-031、诊断证据化 ADR-032、动态验证链路 ADR-031 配套）均已完成并栈内验证。下表只保留仍待验证、受阻或待部署的事项，实现明细见 Git 提交。
 
-| 事项 | 负责人 / 分支 | 状态 |
+| 事项 | 状态 | 剩余动作 |
 |---|---|---|
-| T60 大文件/项目扫描审计优化（零函数修复） | ZCode / 已合并 main 并**已推送 origin**（fix/large-binary-import + 死锁/导出上限/attempt-ID/租约 4 个后续修复）；镜像全部重建、栈已重启 | **完成并栈内验证通过（2026-10-02 22:2x）**：拉格朗 18MB PE（.text 9.9MB）此前"1 小时零函数"，现全链 `import/semantic_audit/report` 全部 succeeded，分析文档 65.6MB：**函数 20,000 / 伪代码 20,000 / 指令 200,000 / 基本块 37,728 / xref 69,918**，status=complete。共修 7 层缺陷：①objdump 超预算丢弃全部输出→BoundedCommandRunner 保留部分字节（truncated 标记），`ToolOutputLimitExceeded` 全链移除；②**首个 bounded-reader 返回即终止进程**（初版修复引入的死锁：stdout 满管阻塞进程、等 stderr EOF 永不到来，objdump 0% CPU 挂死至超时）；③**Ghidra 导出读取上限 8MB→512MB**（`_load_json_file` 误用工具输出预算，200k 指令导出 ≈20MB，两次成功的 30 分钟 Ghidra 分析都被当作 invalid_export 丢弃——"啥也没逆出来"的真凶）；④angr 目标跟随跑重复全量反编译→`skip_disassembly` 快速路径（profiles schema+argv、entrypoint angr-only 模式、planning hook 与 worker symbolic runner 传入）；⑤entrypoint 8MB 字节硬切 facts JSON→512MB 响亮守卫（字节截断产生非法 JSON）；⑥**派生产物 ID 按 attempt 作用域化**（重试后内容合法差异导致确定性 ID 撞车 `derived_artifact_conflict`）；⑦**PAIR 图构建（20 万指令纯 Python 循环）挪入线程 + 结果序列化 to_thread + 租约默认 120s→600s**（事件循环饿死租约心跳，成功分析在结算阶段被杀——两次 attempt 均在收尾期死亡）。教训沉淀：**改沙箱 schema 必须同步重建三个镜像（worker 请求/runner 校验/binary-tools argv），缺一即 arguments_rejected；重建 binary-tools 后必须重启 sandbox-runner 重解析本地摘要，否则 runtime_failed**。反向规划智能体本轮多次 `binary_planning_degraded`（模型调用失败，优雅降级不影响链路）——失败原因待查（疑似模型端超时）。门禁：全量 `pytest -n 4` **678 passed / 5 skipped**、ruff、pyright 0 errors。 |
-| T59 导入结果复用（缓存）+ 审计基线上下文 | ZCode / 已合并 main `434266f`+`1a6f268`（feat/import-result-reuse，已推送 origin） | **完成（代码+测试，已部署，栈内 E2E 已验证）**：同一输入重跑任务不再重跑导入链——二进制导入（Ghidra 全量分析）与源码索引（解压+tree-sitter）的产物是不可变派生版本且 PAIR 行已挂在旧版本上，匹配的导入直接采纳旧 produced 版本集合，秒级到达审计。落地：①persistence 新增 `JobRepository.find_reusable_imports(object_ref, tool_name, project_id)`（succeeded import job 按 input_refs 包含匹配，join tasks 限同项目防跨项目泄漏，最新优先，LIMIT 8）；②binary executor 新增 `reuse_key` 指纹（工具身份/**沙箱镜像摘要**/沙箱与 angr/planning/钩子开关/目标地址/输出形状 limits 的 canonical JSON sha256）写入 analysis 版本 generation_config，指纹一致→采纳旧 produced ids 零工具调用，不一致或缺键（历史版本）→全量重跑；③source executor 同法（指纹=importer 身份+语言注册表清单+`_INDEX_SCHEMA_VERSION`），命中时采纳旧索引版本并**照常调度本任务的静态分析 Job**（静态线索是每任务证据），PAIR 挂共享输入版本自然延续；④agent 前置参与：审计上下文新增 `analysis_baseline`（工具运行清单/符号事实数/分析产出时间/索引来源，由 `AuditWorkspace.analysis_baseline()` 提供），instructions 明示"把基线当既定结论，把轮次花在调查上，symbolic-execute 只用于基线答不了的函数"；⑤复用查找任何故障（数据库故障/无数据库装配）降级为全量导入。断点复跑体验闭环：审计循环检查点（T47）+导入可重试（T57）+导入结果复用（本轮）=失败重跑只补未完成的部分。门禁：全量 `pytest -n 4` **668 passed / 5 skipped**（新增 9 用例）、ruff、pyright 0 errors。**栈内 E2E（拉格朗样本）**：首个带指纹任务全量导入 20.4 分钟；第二个任务同输入——import **0.5 秒** succeeded，`binary_import_reused_prior_result` 日志落，produced 版本与首任务完全一致（`afbae6d4…`），审计/报告链正常结算。注：该样本 0 PAIR 函数（T60 问题，本轮已修），agent 基线上下文的真实模型回归待用正常样本补一次。 |
-| T58 大项目前端内存/CPU 优化（函数工作台分页） | ZCode / 已合并 main `2753311`（perf/frontend-memory，待推送 origin） | **完成（代码+测试，已部署，载荷实测 27.9MB→178.6KB）**：线上诊断（用户截图：任务标签页 1,036,396K 内存 + 101% CPU）定位根因——snow shot 项目 35,559 个 pair 函数，任务页每次全量拉 `/pair`（27.9MB，含全部 attributes/pseudocode）并全量渲染 3.5 万个 DOM 按钮。落地：① persistence 新增 `list_functions_page`（窗口查询 + `count() over()` 总数 + `ilike` 名称过滤，转义 %/_/\）与 `functions_by_ids`；② API 新增 `GET /tasks/{id}/pair/light`（服务端分页 offset/limit≤1000/name_contains，白名单投影只保留 `critical_logic`，响应 `PairFunctionPage{total,offset,limit,functions}`）与 `GET /tasks/{id}/pair/function/{id}`（单函数全量记录，校验函数属于任务的 pair 版本，越权 404）；`/pair/function/{id}/neighborhood` 响应附带邻区函数轻投影（调用方/被调用方按钮不再依赖全量列表）；③ 前端函数工作台改服务端分页：首屏 300 条、防抖 350ms 服务端搜索、"加载更多"追加页（渲染封顶 900 条，`pair-view.ts`），伪代码/完整 attributes 选中时按需取，任务重跑后窗口越界自动回首页。**实测**（栈上 snow shot）：首屏 178.6KB=原来的 0.6%，搜索 "main" 161.6KB，detail/neighborhood 均正常。门禁（dev 容器）：全量 `pytest -n 4` **659 passed / 5 skipped**、ruff、pyright 0 errors、svelte-check 0 errors、web tests 18 passed、vite build 通过。**待用户验证**：浏览器打开 snow shot 任务页确认内存/CPU 恢复正常。**注**：本轮 dev 容器 Q-003 连环踩——T57 合并后 contracts/domain/proof/binary-analysis/worker/analysis-worker 全是旧装，症状是 main 上"settings 4 测试假红 + test_binary_sandbox_timeout 收集失败"，全部 `--reinstall-package` 后消失；**切分支/拉取后建议直接 `uv sync --all-packages --no-editable` 全量重装** |
-| T57 二进制分析超时可配置 + 沙箱失败可重试 | ZCode / 已合并 main `69571f4`（feat/binary-command-timeout，未推送 origin；镜像已重建、栈已重启） | **完成（代码+测试，已部署）**：修复"拉格朗"18MB PE import 失败的根因链——binary-facts 沙箱请求被 `min(600)` 硬顶、SandboxRunnerClient 校验上限 600s、默认 `command_timeout_seconds` 600s 三层同时到点，且超时以 `ToolExecutionError` 逃逸到 worker 兜底处理器记为 `worker.execution_error` internal 永不重试。落地：①ProductSettings 新增 `binary_command_timeout_seconds`（0=默认；resolver 按 设置 > `BINARY_COMMAND_TIMEOUT_SECONDS` env > 默认 解析），设置页高级区新增输入框；②`BinaryAnalysisLimits.command_timeout_seconds` 默认 600→1800，沙箱请求/预算的 600s 硬顶移除；③二进制沙箱客户端超时 = max(runner 超时, 命令超时+60s)（`_binary_client_timeout` 单测覆盖），`SandboxRunnerClient` 上限放宽到 86400s；④沙箱失败结构化分类：`sandbox.timeout`→可重试 TIMEOUT、`sandbox.transport_failed`→可重试 DEPENDENCY、`sandbox.cancelled`→ToolCancelled，executor 捕获 `ToolExecutionError` 映射为结构化失败并把 runner failure code 写入 details（此前无诊断信息）。门禁：全量 `pytest -n 4` **659 passed / 5 skipped**、ruff、pyright 0 errors、svelte-check 0 errors、web 17 tests、vite build、contracts `--check` 同步。栈内验证：PUT 设置 7200→worker 热重建 assembly→重跑拉格朗样本 import，运行远超旧 600s 上限仍在正常推进（旧版必死于 601s）。**事故记录**：验证 PUT 时用最小 body 整行覆盖了 product_settings，清掉 legacy 模型配置（base_url/model_name/上下文窗口）与 angr_enabled；API key 按密钥合并逻辑幸存，已从 `code/secrets/model_api_key.txt`（base_url=api.deepseek.com、model=deepseek-flash、context 64000）+ 状态台账 angr=true 还原并 GET 复核；`review_model_timeout_seconds` 等其余标量若曾被手工改过则回到默认值，无法从历史恢复——教训：**对 PUT /api/settings 的联调必须先 GET 全量再回写全量**。 |
-| T56 任务活动反馈与轮询性能优化 | ZCode / 已合并 main `b210d1d`（feat/task-activity-feedback，待推送 origin） | **完成（代码+测试，已合并已部署）**：新增 `GET /api/tasks/{id}/activity` 轻量活性快照（task 状态 + jobs 轻列含 lease 心跳时间 + agent run 摘要——SQL 侧 `jsonb_path_query_first` 只取最新决策、不传 decisions JSONB + 审计检查点（轮次/调查日志尾部/累计 usage）+ 增量事件（`after` 游标）+ 服务端计算 `latest_activity_at`），一次请求替代前端原每 4 秒 10+ 请求的全量刷新风暴。前端改**两层轮询**：activity 每 3s；仅当结构签名变化（作业状态/尝试次数、运行状态、任务状态）或有新事件时才全量刷新读模型；events 全量刷新与 WS 重连改增量游标（原先每次 from -1 重复拉前 100 条）。性能修复：audit-trail 逐 job `get_result` N+1 改批量 `get_results`（IN 一次查询）；`tasks(project_id, created_at DESC)` 索引补齐（迁移 0022，`list_for_project` 原为顺序扫描）；WS 服务端轮询 0.5s→1s。UI：TaskView 任务头部新增"后台心跳"条（`后台工作中 / 活动变慢 / 长时间无活动` 三档 + 最近活动 X 秒前 + 已用时 + 运行中作业数 + 审计调查第 N 轮 + 最新动作及其时间），AgentPanel 新增调查进度块（轮次 + 调查日志尾部 3 条 + 累计 token），每秒本地计时。顺带修复 main 既有缺口：web `evidenceTypeLabels` 缺 T53 新增的 `poc_verification_result`（svelte-check 1 error）。门禁（dev 容器）：全量 `pytest -n 4` **649 passed / 5 skipped**、ruff、pyright 0 errors、svelte-check 0 errors、web tests **17 passed**、vite build 通过。部署：api/web/analysis-worker/dispatcher/orchestrator 镜像已重建、迁移 0022 已应用、activity 端点线上实测（真实任务数据返回正确）。**待验证**：真实长任务期间观察 UI 心跳/轮次/日志反馈节奏 |
-| T55 多语言源码审计支持（4→13 种语言） | ZCode / 已合并 main `76fe571` 并推送 origin（`7a491c0`）；analysis-worker 镜像已重建、栈已重启（2026-10-02） | **完成（代码+测试，已合并已部署，待栈内多语言 E2E）**：语言配置从 indexer.py 三处硬编码（扩展名表/语法节点表/能力循环）+ static_executor.py 两处硬编码（执行门槛/调度筛选）收敛为单一注册表 `packages/source-analysis/src/vulnweaver_source_analysis/languages.py`（`LanguageSpec`：扩展名、语法模块、函数/调用/类节点类型、callee 字段、静态工具覆盖集）。支持语言新增 JavaScript/TypeScript/Go/Rust/C#/PHP/Ruby/Kotlin/Swift；tree-sitter 语法包经 tuna 镜像全部解析成功（kotlin 1.1.0、swift 0.7.3 为社区包，其余官方）。结构性适配：Kotlin/Swift 语法 call 节点无 callee 字段，索引器增加"首个非参数容器具名子节点"兜底；Rust call 字段实为 `function`、`impl` 块按实现类型限定方法作用域；PHP 普通调用节点名为 `function_call_expression`，`new` 计为调用；构建文件识别新增 go.mod/Cargo.toml/package.json/composer.json/Gemfile/`.csproj`/`.sln`。semgrep 规则 2→16 条（js/ts/go/rust/csharp/php/ruby/kotlin，CWE-95/78/89/502/703），经 pin 版 semgrep 1.130.0 `--validate` 通过并对 9 语言最小无害样本逐条命中验证；调度器/执行器按注册表语言交集选工具（go/rust 项目不再误派 cppcheck）。前端零改动（语言在契约中为自由字符串、UI 纯数据驱动，已核实）。dev 容器全量 `pytest -n 4` **647 passed / 5 skipped**、ruff、pyright 0 errors。部署后已在 worker 容器内验证 13 个语法包全部可构建 Parser、注册表语言清单正确。**待验证**：真实模型 E2E 用多语言样本仓库跑一次索引→静态线索→审计链路 |
-| T54 agent 上下文分层：调查日志与窗口兜底（ADR-035） | ZCode / 已合并 main `654b5bc`（origin/feat/agent-context-journal 未推送，本地分支已清理） | **完成（代码+测试，已合并，待栈内 E2E）**：调研主流 harness（Claude Code/Codex/Gemini CLI/Cline/Roo/SWE-agent/Aider）上下文管理后补齐审计循环的结构性缺口——此前每轮无状态提示只带上一轮反馈，两轮之前模型完全失忆。落地三层模型：钉住头部（指令/objective/工具目录/静态上下文含 ADR-030 记忆）+ **压缩中间**（`investigation_journal`：上一轮之前所有轮次的确定性单行摘要，步骤/计划拒绝各一条，默认 48 条上限、最老先出、`max_journal_entries=0` 可关）+ 原样尾部（`last_feedback` 不变）；与 feedback 按轮次号结构性去重。journal 进 `LoopProgress`/`LoopResume` 与审计检查点，断点续跑不丢调查史。网关 `_fit_context_window` 兜底加固：system 消息永不裁剪、无可裁时不发虚假 `context_window_trimmed` 决策。`static_leads` 补 200 条上限+`total_leads`（原为静态上下文唯一无界列表）。**待验证**：栈内真实模型 E2E（系统提示新增 journal 使用句，按提示词纪律需固定样本回归） |
-| T53 候选 Finding 自动 PoC 复现验证（ADR-034） | ZCode / `feat/candidate-poc-verification` | **受阻（2026-10-03 代码审查推翻自动验证闭环结论；原局部测试通过仍为历史事实）**：CANDIDATE Finding 在审计/复核结算后自动投放一次 PoC 复现 PROOF Job（`PocVerificationScheduler`，幂等键 `poc_verification:<finding_id>`；门禁=项目 `exploit_validation_enabled` + proof 镜像 pin + 脚本安全校验）；脚本生成 baseline `poc_verification`（提示词要求最小复现 + 末行 `POC_MARKERS:` 结构化标记）；executor 从沙箱 stdout 解析标记，COMPLETED 运行落 `POC_VERIFICATION_RESULT` STRONG 证据并携带 `evidence_ids`（激活既有 PROOF 证据→定向 re-review 路径）；`derive_established_facts` 新增注入类（`source_to_sink_path`/`protection_analysis`）与认证类（`behavior_difference`/`reachable_path`）推导——确认仍只走独立 re-review + `evaluate_confirmation`，"模型自我确认"红线不变。契约新增证据类型 + 迁移 0021 放开 `evidence.type` CHECK。dev 容器全量 `pytest -n 4` **616 passed / 5 skipped**、ruff、pyright 0 errors。**待验证**：栈内真实模型端到端（投放到沙箱真跑） |
-| **缺陷（已修复，待部署）**：项目删除 500——`DeletionRepository` 按单一 `created_at DESC` 删除自引用表，时间戳并列时顺序不定 | ZCode / 已合并 main `78842fd`（origin/fix/project-delete-fk-tie，本地分支与 worktree 已清理） | **根因（2026-09-30，线上复现）**：`repositories.py` `delete_project`/`_delete_task_rows` 删除 `artifact_versions`（自引用 FK `parent_version_id`）、`reviews`（`supersedes_review_id`）、`annotations`（`supersedes_annotation_id`）时按 `created_at DESC` 单遍删除，假设"子版本时间戳更晚"；但工件管道在同一事务内为父子版本传入同一 `now()`，线上已有 **31 对 `created_at` 相同的父子版本**（15/18 个 e2e 残留项目受影响）。并列时 Postgres 返回顺序不定，父行先删即触发 RESTRICT FK → `sqlalchemy.exc.IntegrityError` 未映射到任何 API 错误 → 落入 catch-all → 500 "an unexpected internal error occurred"，事务回滚，重试恒失败。**修复**（`fix/persistence` 叶子优先迭代删除，三处自引用链统一走 `_delete_chain_leaves`，环链抛结构化不变量错误）：新增回归测试 `tests/persistence/test_deletion_repository.py` 3 例（修复前红/修复后绿）；定向 77 passed、ruff、pyright 0 errors；**用修复代码对线上 18 个残留项目回滚式试删 18/18 全通过**（事务内 93 个版本清空后 ROLLBACK，现场未动）。**待办**：用户暂缓镜像重建——部署后界面删除即恢复；`IntegrityError`→结构化 409 的错误映射仍可改进。注意 `alembic/versions/0011_finding_candidates.py`、`0012_review_history.py` 的建表语句与线上库不符（库中无这三张表但版本号已到 0020，属迁移文件事后改写），后续迁移变更勿把这组表当作删除遗漏项 |
-| T52 模型接入重构：供应商注册表（ADR-033） | ZCode / `feat/model-provider-registry` | **完成（待合并）**：网关新增供应商注册表（`model_providers`+`agent_model_bindings`+`provider_api_keys`，每智能体绑定供应商模型并可配备用）、第三种线格式 OpenAI Responses、每模型上下文/最大输出元数据；任务级限制放开（审计 deadline 默认 8h、逆向规划 2h、上限 7 天；`resource_budget.max_model_tokens` 不再透传为输出上限，harness 8192 硬编码删除；单请求超时上限 600→3600s）；API 设置新增供应商校验/密钥合并/模型探测端点；Web 设置页重做为供应商卡片+绑定；旧 `model_tiers`/`review_model_*` 配置保留回退。已重建 api/orchestrator/analysis-worker/web 镜像并重启栈，worker 正常起循环 |
-| T46 分层脱壳工具链 | ZCode / `feat/unpacking-toolchain` | **全部完成**（同前）+ 真实壳回归：MPRESS 官方站死链/archive.org 网络不可达/wine mmap bug 三路皆阻，改用**真实 UPX 壳（指纹抹除，`upx -d` 拒识）经 unipacker 模拟脱壳**的栈内 E2E 全绿（`methods=['unipacker']`，`scripts/e2e_unipacker_chain.py`） |
-| T50 扫描器诊断证据化（ADR-032） | ZCode / 本分支 | **完成**：diagnostics 只落 TOOL_OUTPUT 证据（selector 补 severity/message），不再直接成为 CANDIDATE Finding；static-leads 改从证据层读线索；成为 Finding 的路径是 agent 调用 finding-report 后重新报告锚定；代码读取目前未由执行器强制校验（CR-06） |
-| T51 动态验证链路端到端打通 | ZCode / 本分支 | **完成**：afl-casr 镜像构建并注册；修复 4 个链路断点（harness-compile schema 条件必填 / entrypoint fuzz 参数必填与 bundle 白名单 / `AFL_NOOPT=0` 静默禁用插桩 / execs 竞态超预算）；`e2e_dynamic_verification.py` 全链全绿：审计→评审→fuzz 投放→harness 生成→AFL 真实执行→结果契约通过 |
-| T49 agent 引导的动态验证投放（ADR-031） | ZCode / 本分支 | **完成**：审计结算时 agent 显式 `verification_request=fuzz` 的候选立即投放 fuzz 战役（早于 review；opt-in 门禁 + 每审计上限 4 + 调度器幂等去重全保留）；提示词同步为"请求即发起有界战役" |
-| T48 项目级调查记忆（ADR-030） | ZCode / 已合并 `f6d354a` | **完成**：每次审计把自身结论（已锚定 Finding/锚定失败位置/覆盖状态）写为项目记忆工件，后续同项目审计装载进模型上下文；提示词新增记忆段；栈内 E2E 双任务验证每任务一版记忆 |
-| T47 审计检查点与断点续跑（ADR-029） | ZCode / 同分支 | **完成**：`AgentLoop.progress` 回调 + `orchestration_checkpoints` 按落盘检查点；重试 attempt 续跑调查（决策/步骤/已报 Finding 不丢不重执行）；completed 检查点永不重放；配套长线校准（审计 deadline 1800→7200s、命令超时 180→600s）与提示词重写（修复损坏句+续跑语境+证据标准） |
+| CR-01 至 CR-08 修复 | 未开始（首要） | 按「下一步」顺序执行，验收入口见审查清单 |
+| T60 大文件/项目扫描审计优化 | 完成并栈内验证（拉格朗 18MB PE 全链 `import/semantic_audit/report` succeeded：函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷） | 反向规划智能体偶发 `binary_planning_degraded`（模型调用失败，优雅降级不影响链路），原因待查（疑似模型端超时） |
+| T59 导入结果复用（缓存）+ 审计基线上下文 | 完成并栈内 E2E（同输入重导入 20.4 分钟→**0.5 秒**，produced 版本一致） | 用正常样本补一次 `analysis_baseline` 真实模型回归 |
+| T58 大项目前端分页（函数工作台） | 完成已部署（载荷 27.9MB→178.6KB） | 待用户浏览器确认 snow shot 任务页内存/CPU 恢复正常 |
+| T56 任务活动反馈与轮询优化 | 完成已部署（迁移 0022 已应用，activity 端点线上实测） | 真实长任务期间观察心跳条档位、审计轮次与轮询节奏 |
+| T55 多语言源码审计（4→13 种语言） | 完成已部署（13 语法包容器内验证通过） | 多语言样本栈内 E2E：索引→静态线索→审计 |
+| T54 agent 上下文分层（ADR-035） | 代码已合并 main（`654b5bc`） | 栈内真实模型回归一次提示词变更（系统提示新增 journal 使用句） |
+| T53 候选 Finding 自动 PoC 验证（ADR-034） | **受阻** | 局部测试曾通过，但自动验证闭环被 CR-01/02/04 推翻；修复前不得用其结果评估挖掘能力 |
+| T52 模型供应商注册表（ADR-033） | 完成已部署（DeepSeek 仍走 legacy `model_tiers` 回退） | Web 设置页重建供应商并绑定四个智能体，迁移后用固定样本跑一次审计 |
+| 项目删除 500 修复（自引用表 `created_at` 并列删序） | 已合并 main，**待部署**（用户暂缓镜像重建） | 部署后界面删除即恢复；`IntegrityError`→结构化 409 映射仍可改进 |
 
-口径校正：T60 记录的 **20,000 函数 / 200,000 指令**恰好等于当前聚合上限，不能据此推断该 PE 的事实已全部索引；需要 CR-08 的截断计数才能判定覆盖范围。T58 的前端分页改善不包含 CR-07 的审计/PAIR 后端全量查询。T53 原局部测试通过，但自动 PoC 闭环按 CR-01/02/04 重新列为受阻。
+口径校正：T60 的 20,000 函数 / 200,000 指令恰好等于当前聚合上限，不能据此推断该 PE 的事实已全部索引（需 CR-08 的截断计数才能判定覆盖范围）；T58 的前端分页不含 CR-07 的审计/PAIR 后端全量查询。
 
-T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
-
-- `packages/binary-analysis/src/vulnweaver_binary_analysis/unpacking.py`：`UnpackerChain` 多轮策略链（候选须通过严格解析验收，锚定原始摘要防回吐；多层壳逐层剥离，上限 4 轮）+ 四个解壳器 + `LiefRebuilder`（dump 后 PE 头再序列化修复）+ `BinaryUnpackSandboxAdapter`（worker 侧驱动容器内全链）。
-- `executor.py`：本地链（UPX + XOR 恢复）失败且样本仍加壳时，经沙箱 `binary-unpack` 兜底；派生工件按方法登记（`upx-unpacked-binary` 保持不变，新增 `dotnet-cleaned-assembly` / `emulated-unpacked-binary` / `xor-recovered-binary`）。
-- `profiles.py` + `apps/binary-tools/vulnweaver-binary-entrypoint` + sandbox-runner 服务：新增 `binary-unpack` ToolSpec/命令 profile（与 `binary-facts` 共用 binary-tools 镜像），入口脚本支持 `--mode unpack`。
-- `headers.py`：PE 解析 CLR 数据目录（index 14），`BinaryMetadata.dotnet` 分发 de4dot。
-- 镜像：binary-tools 增加 mono-complete + de4dotEx 3.10.0（net48，官方 release）+ `--extra unpack`（unipacker 1.0.8、lief 0.17.6）。
-
-剩余：真实镜像端到端（见「下一步」）。
+运维参考：门禁标准环境是 dev 容器（`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 exec 进容器跑 pytest/ruff/pyright 与栈内 E2E；PG/Redis opt-in 默认已指向栈内 `postgres:5432`/`redis:6379`，无需再传 `VULNWEAVER_TEST_*` 环境变量，其他环境用同名变量覆盖）。切分支/合并后建议 `uv sync --all-packages --no-editable` 全量重装，避免未改包旧装（Q-003，该风险覆盖所有 workspace 包）。
 
 ## 已确认决策（摘要）
 
@@ -69,58 +53,43 @@ T46 已完成边界（全部位于 `code/`，ADR-028 记录决策）：
 - ADR-021：先必跑审计基线，再 Finding 驱动复核与深审。
 - ADR-025：`resource_budget` 惰性簿记；沙箱不设计算配额。
 - ADR-027：审计循环不设规划轮次上限，墙钟 deadline 兜底。
-- **ADR-028（2026-09-28）**：分层静态脱壳工具链；unipacker 的 Unicorn 模拟与 angr 同属翻译式处理，原生执行边界不变；重工具只进 binary-tools 镜像。
-- **ADR-033（2026-09-30）**：模型接入重构为供应商注册表+每智能体绑定（参考 cc-switch/dsh 的供应商形态）；输出上限归模型配置，任务不再有 token 配额；审计 deadline 默认 8h、可配至 7 天。保持应用内网关库形态（不引入独立网关服务），`ChatTransport` 保留将来换 SDK 实现的口子。
-- **ADR-035（2026-09-30）**：agent 上下文三层分层（钉住头部/journal 压缩中间/原样尾部）；压缩用确定性单行摘要而非 LLM 摘要调用（提示本就 O(1)，热路径不加失败模式）；journal 是不可信数据、随检查点持久化；网关窗口兜底钉死 system 消息。
+- ADR-028（2026-09-28）：分层静态脱壳工具链；unipacker 的 Unicorn 模拟与 angr 同属翻译式处理，原生执行边界不变；重工具只进 binary-tools 镜像。
+- ADR-033（2026-09-30）：模型接入重构为供应商注册表+每智能体绑定；输出上限归模型配置，任务不再有 token 配额；审计 deadline 默认 8h、可配至 7 天。保持应用内网关库形态，`ChatTransport` 保留将来换 SDK 的口子。
+- ADR-035（2026-09-30）：agent 上下文三层分层（钉住头部/journal 压缩中间/原样尾部）；压缩用确定性单行摘要而非 LLM 摘要调用；journal 是不可信数据、随检查点持久化；网关窗口兜底钉死 system 消息。
 
 ## 经验教训（仍有效）
 
-- **改 persistence（尤其迁移）后必须重建 dispatcher 镜像**：`migrate` 服务跑在 `vulnweaver-dispatcher:dev` 镜像里（compose.yaml:93），只重建 api/worker 不重建 dispatcher 时，迁移容器仍带旧 alembic 版本表，**静默跳过新迁移、无任何报错**（T56 首次部署即踩：0022 未应用直到补建 dispatcher）。
-- Q-025（已修复，2026-09-29）：runner 热重载/镜像重建后 worker 缓存的旧 digest 导致 `image_identity_mismatch`。修复在 client 层：`SandboxRunnerClient.run` 遇该失败码时向 runner 重取权威 digest 重试一次（`tests/proof/test_runner_client.py` 带状态假 runner 覆盖）。另：`vulnweaver-afl-casr:fixed` 镜像已构建并注册（compose 新增 `fuzz-tool` 构建服务），fuzz 投放链路的结构性断点已消除；`angr_enabled` 已开启。
-- **提示词/字符串改写必须先过 ruff 再 build 镜像**：本轮一次转义损坏直接造成 worker 崩溃循环（SyntaxError），docker build 不做语法检查拦不住；修复后已恢复"改 packages 先 ruff/ast 后 build"纪律。
-- Q-025（新，待查）：`ReconfigurableRunner` 设置热重载后 registry 与 profiles 可分叉（`sandbox.image_identity_mismatch`，重启 runner 即愈）；根因待查，怀疑 refresh 时 docker CLI 解析瞬时失败。
+- **改 persistence（尤其迁移）后必须重建 dispatcher 镜像**：`migrate` 服务跑在 dispatcher 镜像里，只重建 api/worker 时迁移静默跳过新迁移、无任何报错（T56 首次部署踩坑）。
+- **改沙箱 schema 必须同步重建三个镜像**（worker 请求/runner 校验/binary-tools argv），缺一即 `arguments_rejected`；重建 binary-tools 后必须重启 sandbox-runner 重解析本地摘要，否则 `runtime_failed`（T60）。
+- **对 PUT /api/settings 联调必须先 GET 全量再回写全量**：T57 曾用最小 body 整行覆盖 product_settings，清掉 legacy 模型配置与 angr_enabled。
+- Q-025（已修复）：runner 热重载/镜像重建后 worker 缓存旧 digest 导致 `image_identity_mismatch`，client 层遇该失败码向 runner 重取权威 digest 重试一次。另有同失败码待查项：`ReconfigurableRunner` 热重载后 registry 与 profiles 可分叉，重启 runner 即愈，根因待查。
+- **提示词/字符串改写必须先过 ruff 再 build 镜像**：转义损坏曾直接造成 worker 崩溃循环，docker build 不做语法检查拦不住。
+- AFL：`AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）；容器宿主 core_pattern 检查用 `AFL_IGNORE_PROBLEMS=1` 跳过。
 - Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，否则**静默用旧代码**。
-- Q-023：Windows 上新建脚本注意 CRLF（容器 shebang 会断）；本轮已将入口脚本规范化为 LF。
+- Q-023：Windows 上新建脚本注意 CRLF（容器 shebang 会断）；入口脚本保持 LF。
 
 ## 最近验证
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
-| 2026-10-03 | 文档同步检查 | 盘点 71 个 Markdown 文档（含本轮新增索引与审查清单），按审查缺陷修改 19 个直接受影响文档；`git diff --check` 通过，19 个修改文档的相对 Markdown 链接均可解析。未修改无关样本说明、包 README 和历史 ADR 的原始决策记录；本轮没有代码变更，未重跑全量代码门禁。 |
-| 2026-10-03 | 主链路只读 code review（Linux dev 容器） | 定向测试 21 passed + 11 passed；无害 JSON 包装执行复现“内部脚本未运行但外层成功”；`_safe_replay_facts` 最小调用复现 markers 被过滤。未运行真实 PoC/Exploit 沙箱全链、大样本性能基准或全量测试；通过的模拟测试不覆盖 CR-01/02/04。详见 `code/docs/code-review-2026-10-03.md`。 |
-| 2026-10-02 | T57 二进制超时可配置（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**659 passed / 5 skipped**（新增：沙箱失败分类 3——timeout→TIMEOUT 可重试/transport→DEPENDENCY/cancelled→ToolCancelled + 请求超时跟随 limits 无 600 硬顶、executor 超时映射 1、deployment_config 新旋钮 1、worker 客户端超时派生 4、runner client 86400 边界 1、API 设置往返+越界拒绝并入既有用例）；ruff 通过；pyright **0 errors**；svelte-check 0 errors、web 17 tests、vite build 通过；contracts `generate --check` 同步。栈内：六镜像重建重启、PUT 设置 7200 生效且 worker 热重建 assembly、重跑拉格朗 18MB PE import 运行超旧 600s 上限后仍正常推进（对照：旧版恒死于 601s `worker.execution_error`） |
-| 2026-10-02 | T56 活动反馈与轮询优化（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**649 passed / 5 skipped**（新增：activity 端点集成测试 2——快照结构与事件游标、非法游标 422）；ruff 通过；pyright **0 errors**；svelte-check **0 errors**（顺带修复 main 上 evidenceTypeLabels 缺 poc_verification_result 的既有 error）；web tests **17 passed**（新增 activity 签名/心跳/格式化 4 例）；vite build 通过。线上实测：迁移 0022 应用后 `ix_tasks_project_created` 存在，activity 端点对真实历史任务返回正确（作业心跳/事件游标/状态） |
-| 2026-10-01 | T55 多语言源码审计（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**647 passed / 5 skipped**（新增：语言注册表不变量 4 用例、9 新语言函数/调用提取参数化用例、全注册语言 CapabilityProfile 用例、调度器语言交集用例）；ruff 通过；pyright **0 errors**；semgrep 1.130.0（analysis-worker 镜像 pin 版）`--validate` 16 条 0 错误，9 语言最小样本冒烟 16/16 逐条命中；13 语言 tree-sitter 节点类型经容器内探针逐一验证（坑：PHP 普通调用节点是 `function_call_expression` 而非 `call_expression`；Rust call 的 callee 字段是 `function` 而非 `expression`；kotlin/swift call 节点无 callee 字段需兜底） |
-| 2026-09-30 | T54 agent 上下文分层（dev 容器，栈内 PG） | `tests/orchestrator` + `tests/model_gateway` **147 passed**（新增 11 用例：journal 进提示且与 last_feedback 去重、上限最老先出、可关闭、计划拒绝入 journal、单行有界摘要、resume 种子、检查点回环到续跑首条消息、网关裁剪钉住 system/头尾锚点保留/无可裁不发决策/到达传输层并落 AgentRun 决策、budget 非法值拒绝）；ruff 通过；pyright **0 errors**。注：本轮 dev 容器 venv 里 contracts 是 T53 合并前的旧装（9 个既有用例假红），`uv sync --reinstall-package vulnweaver-contracts` 后全绿——切分支/合并后除改动包外也要警惕未改包的旧装 |
-| 2026-09-30 | T53 候选 PoC 自动验证（dev 容器，栈内 PG） | 全量 `pytest -n 4`：**616 passed / 5 skipped**（新增调度器幂等/门禁 2、executor 标记解析/证据化/策略拒绝 3、钩子投放 1、事实推导 5 用例）；ruff 通过；pyright **0 errors**；迁移 0021 在临时库验证建库通过（alembic `op.drop_constraint` 会按命名约定二次包装约束名，改用原生 SQL，见迁移内注释） |
-| 2026-09-30 | T52 模型接入重构（dev 容器，栈内 PG+Redis） | 全量 `pytest -n 4`：**605 passed / 5 skipped**（skip 仅 Docker 运行时 opt-in）；新增网关注册表 10 用例、Responses 线格式 3 用例、API 供应商设置/密钥合并/绑定校验用例、设置-网关边界用例；pyright **0 errors**；ruff 通过；svelte-check 0 errors、web 13 tests 过、vite build 过；api/orchestrator/analysis-worker/web 镜像重建并重启，worker 正常起循环并完成工具注册探测 |
-| 2026-09-29 | T51 动态验证链路 E2E | opt-in 项目投递教学样本 fuzz-overflow.c：semantic_audit/review/fuzz 全部 succeeded，AFL++ 沙箱真实执行（-E 10000/-V 60），结果通过 FuzzToolSummary/CrashManifest 契约；fuzz 失败诊断能力补齐（sandbox stdout/stderr 尾部进 failure.details，triage reason 进消息） |
-| 2026-09-29 | AFL 教训 | `AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）——compile_env 里 `AFL_NOOPT=0` 使所有 harness 编译静默失去插桩，afl-fuzz 报 No instrumentation detected；`AFL_IGNORE_PROBLEMS=1` 才能跳过容器宿主 core_pattern 管道中止（`AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES` 只是不警告） |
-| 2026-09-28 | T50 诊断证据化（dev 容器，栈内 PG） | orchestrator+binary_analysis+source_analysis **206 passed**；ruff 通过；pyright 0 errors；lineage 测试验证诊断零 Finding 行、线索从证据浮现 |
-| 2026-09-28 | T49 智能体引导投放（dev 容器，栈内 PG） | 新增 2 用例（仅显式请求且锚定成功者被投放/未开启 opt-in 零投放）；orchestrator+binary_analysis **154 passed**；ruff 通过；pyright 0 errors |
-| 2026-09-28 | T48 调查记忆（dev container 内执行，栈内 PG） | orchestrator+binary_analysis **152 passed**（新增 4 记忆用例）；ruff 通过；pyright 0 errors；栈内 E2E `e2e_investigation_memory.py`：同项目两任务全 succeeded，记忆工件 2 版 |
-| 2026-09-28 | T47 + 真实壳回归 | `tests/orchestrator`+`tests/binary_analysis` **90 passed**（新增 5 续跑用例，其中 2 个在栈内 PostgreSQL 实跑）；ruff 通过；**pyright 0 errors**；栈内 E2E 双绿：真实 UPX 壳经 unipacker（`emulated-unpacked-binary`、分析切到脱壳镜像）与 XOR 壳回归（新提示词/新 deadline 下 `semantic_audit` 真实模型审计 succeeded） || 2026-09-28 | T46 部署栈内全链 E2E（`code/scripts/e2e_unpack_chain.py`，连续三跑全绿） | 上传自制 XOR 壳 ELF → `import`/`semantic_audit`/`report` 三 Job 全部 succeeded；`xor-recovered-binary` 派生摘要与内层 ELF 逐字节一致；**analysis 的 parent 即脱壳镜像**；模型（deepseek-flash）驱动的语义审计与报告真实产出 |
-| 2026-09-28 | 部署栈重建 | 6 个服务镜像 + binary-tools 重建成功；期间修复**全新卷权限缺陷**：root 运行的一次性 migrate 服务初始化 CAS store 时把 `objects/sha256` 建成 root 所有，api(10001) 上传必 EACCES——artifact-init 现已预建该目录（compose.yaml），旧卷 chown 修复 |
-| 2026-09-28 | T46 定向测试（Linux 容器 python:3.12-slim + uv 0.10，`uv sync --all-packages --no-editable --group dev`） | `tests/binary_analysis` **54 passed / 3 skipped**（跳过项为 PostgreSQL opt-in，与基线一致）；`tests/sandbox_runner` + `tests/contracts` + `tests/tool_runtime` **44 passed / 1 skipped**（Docker runtime opt-in）；`ruff check .` 通过；`uv lock` 纳入 lief 0.17.6 / unipacker 1.0.8 / unicorn-unipacker 1.0.3b7 |
-| 2026-09-28 | pyright（node:24-slim 容器，pyright 1.1.413） | **0 errors**（lief 无存根问题以 `importlib.import_module` 隔离；跨模块私有名已提升为公开助手名） |
-| 2026-09-28 | T46 全量测试 | `pytest -n 4`：401 passed / 2 failed（reporting 的 weasyprint 用例，装上 pango 后复跑 **10 passed**，纯环境缺失）/ 173 skipped（PG/Docker opt-in，本机临时容器无对应服务；定向四套件 98 passed） |
-| 2026-09-28 | T46 镜像与容器内端到端 | `vulnweaver-binary-tools:fixed` 构建成功（mono-complete + de4dotEx 3.10.0 net48 + `--extra unpack`）；容器内 `--mode unpack` 对自制 XOR 壳 ELF 实测：UPX 探测→not_upx_packed 降级→**xor-recovery 命中**，`unpacked.bin` 与内层 ELF sha256 逐字节一致（`316f0550…`），报告含完整 methods/tool_runs/digests |
-| 2026-09-11 | T45/T45-A~F 全量门禁 | `pytest` 556 passed / 5 skipped；ruff、pyright 0 错误；部署栈 UPX 加壳样本端到端通过（历史基线，栈现已清空） |
+| 2026-10-03 | 主链路只读 code review（Linux dev 容器） | 定向测试 21 passed + 11 passed；无害 JSON 包装执行复现“内部脚本未运行但外层成功”；`_safe_replay_facts` 最小调用复现 markers 被过滤。未运行真实 PoC/Exploit 沙箱全链、大样本性能基准或全量测试。详见 `code/docs/code-review-2026-10-03.md`。 |
+| 2026-10-03 | 文档同步检查 | 盘点 71 个 Markdown 文档，按审查缺陷修改 19 个直接受影响文档；`git diff --check` 与相对链接检查通过。本轮无代码变更，未重跑全量代码门禁。 |
+| 2026-10-02 | T56–T60 栈内部署与门禁 | 拉格朗 18MB PE 全链 succeeded；同输入重导入 0.5 秒复用；分页载荷 178.6KB；超时可配置验证超旧 600s 上限仍正常推进。全量 `pytest -n 4` 随任务递增 649→**678 passed / 5 skipped**，ruff、pyright 0 errors、svelte-check、web tests、vite build、contracts `--check` 均通过。 |
+
+更早的门禁记录（T45–T55，2026-09-11 至 2026-10-01）与 T46–T52 各轮 E2E 细节见 Git 提交与 `code/docs/progress/`。
 
 ## 下一步
 
-**优先处理：**
+**优先：恢复结论可信度（CR 修复）**
 
-- **先恢复结论可信度**：按 CR-01/02 修复执行输入、目标样本绑定和成功判据；按 CR-04 修复证据到复核事实的传递；在 Sandbox Runner 内用授权的无害正反例跑通“生成 → 执行 → 证据 → 复核 → policy”，并确认空操作绝不成为 `EXPLOITABLE`。修复前不要用自动 PoC/Exploit 结果评估挖掘能力。
-- **随后处理漏报与数据模型**：CR-03 独立登记脚本工件并回归原样本 current version；CR-05/06 补同函数双问题、同文件多函数搜索和报告必须有代码读取证据的回归；CR-07/08 先采集代表性大样本的 SQL、耗时、内存和截断指标，再决定查询下推与限额语义。具体代码入口见审查清单。
+1. 按 CR-01/02 修复执行输入、目标样本绑定和成功判据；按 CR-04 修复证据到复核事实的传递；在 Sandbox Runner 内用授权的无害正反例跑通“生成 → 执行 → 证据 → 复核 → policy”，并确认空操作绝不成为 `EXPLOITABLE`。修复前不要用自动 PoC/Exploit 结果评估挖掘能力。
+2. 随后处理漏报与数据模型：CR-03 独立登记脚本工件并回归原样本 current version；CR-05/06 补同函数双问题、同文件多函数搜索和报告必须有代码读取证据的回归；CR-07/08 先采集代表性大样本的 SQL、耗时、内存和截断指标，再决定查询下推与限额语义。具体代码入口见审查清单。
+3. 架构提案落地（ADR-036 P0–P4）：固定一个授权开源解析器目标，设计版本化 TargetSnapshot/ExecutionBundle/VerificationObservation 契约；在 Linux 容器经真实 Runner 添加原目标正例及空脚本、假成功标记、错误目标、harness 自身崩溃负例。SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
 
-1. **T57 收尾（接手入口）**：验证任务 `task:4fabd098…`（拉格朗 PE 重跑）的 import Job 在 7200s 预算下推进中——完成后确认 binary-facts 结果落库、任务进入审计；若这条大样本链路稳定，可考虑把 1800s 默认值回补进 `agent_loop_budgets` 之外的运维文档。**逆向耗时优化（用户已问询，未立项）**：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（实测沙箱容器单核 ~100% 饱和、478s/743s CPUmil，一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按 `max(1, 输入MB)` 分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②同任务/同项目复用 Ghidra program DB 作为派生工件回投沙箱（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
-2. **T56 真实长任务验证**：部署已完成（activity 端点线上实测通过、迁移 0022 已应用）。剩余：投递一个真实多语言项目任务，在 Web 任务页观察"后台心跳"条的档位变化（live→stale 边界）、审计轮次递增、调查日志尾部滚动，确认 3s activity 轮询期间无全量刷新风暴（Network 面板只有单个 activity 请求，结构变化时才有读模型请求）。
-2. **T55 栈内 E2E**：部署已完成（analysis-worker 镜像重建、容器内语法包加载验证通过）。剩余：上传含 js/go/rust/cs/php/ruby/kt/swift 源码的样本 zip，确认索引 `capability_profile.languages` 含新语言、semgrep/cppcheck Job 按注册表交集投放，真实模型审计一次多语言项目验证 `static_leads` 携带新语言诊断。
-3. **T54 收尾**：栈内真实模型 E2E 回归一次提示词变更（系统提示新增 journal 使用句）——可复用 `scripts/e2e_investigation_memory.py`（同项目多任务最能体现 journal/记忆叠加）；观察一次多轮审计的 AgentRun 轨迹确认 `investigation_journal` 出现在每轮提示且轮次推进正常。代码已合并 main（`654b5bc`）。
-4. **T52 收尾**：当前部署的 DeepSeek 仍走 legacy `model_tiers` 回退（功能不变）；在 Web 设置页用"从预设创建→DeepSeek 官方"重建供应商（填 Key、绑定四个智能体）即完成迁移；迁移后用固定样本跑一次真实审计 E2E 验证注册表路径（`scripts/e2e_investigation_memory.py` 可复用）。OpenAI Responses 线格式只有单测覆盖，未对真实 Responses 端点联调。
-5. **真实壳扩展**：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-6. **dev container 已启用为门禁标准环境**：`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 `... exec dev bash -lc "cd /workspace/vulnweaver/code && ..."` 跑 pytest/ruff/pyright 与栈内 E2E（control-plane 直达 api/postgres）；注意 `.venv` 属主须为 dev 用户(1000)。测试的 PG/Redis opt-in 默认值已指向栈内服务名（`postgres:5432`/`redis:6379`，2026-09-30），容器内跑 pytest 无需再传 `VULNWEAVER_TEST_*` 环境变量；其他环境用同名变量覆盖，连不上时相关用例优雅 skip。**2026-10-01 补充**：T55 轮在切换 main 分支后 `vulnweaver_proof` 也是旧装（`PocVerificationScheduler` 缺失，test_auto_poc 收集失败），同法 `--reinstall-package vulnweaver-proof` 解决——Q-003 的"未改包旧装"风险覆盖所有 workspace 包。
-7. **性能后续候选项**（T56 未做，按性价比）：`/pair` 全量 pseudocode 传输拆轻端点/按需加载；`pair.neighborhood` 全图入 Python 改递归 CTE 下推；agent_runs `save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1。
-8. 分支清理已完成（2026-09-28）：`feat/unpacking-toolchain` 合并入 main 并推送；远程删除 13 个已合并/陈旧分支，保留未合并的 `demo/enrich-fixtures`、`feat/demo-final`（来历为演示用途，未动）。
-9. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+**收尾与观察（非阻塞）**
+
+4. 完成「进行中 / 待验证」表中 T52–T59 的各待验证项。
+5. 逆向耗时优化（用户已问询，未立项）：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按输入大小分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②Ghidra program DB 作为派生工件回投沙箱复用（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
+6. 真实壳扩展：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
+7. 性能后续候选项：`pair.neighborhood` 全图入 Python 改递归 CTE 下推；agent_runs `save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1。
+8. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
