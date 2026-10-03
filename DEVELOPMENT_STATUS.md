@@ -6,7 +6,7 @@
 
 ## 当前焦点
 
-2026-10-03 架构改进提案已形成：[`面向真实世界 benchmark 的架构改进`](code/docs/benchmark-oriented-architecture.md) 与 [`ADR-036（提议）`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)。保留控制面，优先建立真实目标构建、可证伪调查、独立验证和隔离评测；设计文档已完成，P0–P4 实现均未开始。新增能力缺口：当前源码 harness 路径编译独立生成程序，未在该路径构建/链接原项目，不能将其崩溃作为原项目漏洞证据。
+2026-10-03 用户已接受 [`ADR-036`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md) 的目标绑定、独立验证和隔离评测方向，实施方案见 [`面向真实世界 benchmark 的架构改进`](code/docs/benchmark-oriented-architecture.md)。首个安全检查点已完成旧 proof 结论降级、独立脚本工件和部分审计漏报修复；P0 的真实目标构建、ExecutionBundle、独立 Verifier、数据库事实链与真实 Runner 正反例仍未完成，P1–P4 未开始。当前源码 harness 路径仍编译独立生成程序，未构建/链接原项目，不能将其崩溃作为原项目漏洞证据。
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。当前首要焦点是修复 2026-10-03 主链路代码审查发现的结果可信度、确认断链和漏报问题；逐项代码证据、风险与验收入口见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
@@ -16,14 +16,14 @@
 
 | 编号 | 状态 | 影响与解除条件 |
 |---|---|---|
-| CR-01、CR-02 / P0 | 受阻 | 自动生成的 Python 脚本被存为 JSON，proof entrypoint 执行的是外层 JSON 表达式；沙箱请求又只提供脚本，没有目标样本。工具退出成功会被映射为 `EXPLOITABLE`。解除条件：修复脚本格式、目标输入协议与基于样本观测的成功判据，并完成真实 runner 正反例验收。当前暂停将自动验证状态解释为漏洞可利用结论。 |
-| CR-03 / P1 | 未开始 | PoC 被登记为原样本的新版本并推进 `current_version_id`。解除条件：独立派生工件、原样本当前版本不变的数据库回归。 |
-| CR-04 / P1 | 受阻 | PoC 证据写入 `markers`，复核事实白名单删除它；鉴权类 `constraint_analysis` 缺自动事实来源。解除条件：证据到政策门禁的真实数据库链路测试及事实映射修复。 |
-| CR-05、CR-06 / P1 | 未开始 | 同函数同 CWE 候选发生 ID 冲突而丢弃；源码搜索按函数计文件数，回退审计截到 256 函数；`finding-report` 没有强制读代码。解除条件：锚点粒度、搜索覆盖与报告门禁的正反例回归。 |
+| CR-01、CR-02 / P0 | 进行中 / 受阻 | CR-01 的生成脚本现以 Python 原文入库，工具成功只返回 `INCONCLUSIVE`；无目标绑定的自动验证仍不能证明漏洞。CR-02 的目标输入协议和独立成功判据未实现。解除条件：ExecutionBundle、原目标正例及空脚本/假 marker/错误目标/harness 自崩负例真实 Runner 验收。 |
+| CR-03 / P1 | 已完成 | 生成脚本现为独立 DERIVED 工件，父版本指向原样本。数据库回归确认原样本 `current_version_id` 不变，CAS 内容为 Python 原文。 |
+| CR-04 / P1 | 进行中 | 暂停把自报 marker 写为 STRONG 证据，阻止其触发复核；类型化验证事实、鉴权 `constraint_analysis` 来源及证据到政策门禁的数据库链路仍待实现。 |
+| CR-05、CR-06 / P1 | 进行中 | Finding 已保留源代码行/二进制地址锚点，同函数不同源码行回归通过；源码搜索按唯一文件计数并报告未扫描数；`finding-report` 要求相应代码已读。相同行同 CWE 的不同约束仍可能冲突；回退审计仍截到 256 函数，跨版本同路径读取证明仍需加强。 |
 | CR-07 / P1 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准及按需查询优化。 |
 | CR-08 / P2 | 未开始 | 二进制聚合达上限后静默截断。解除条件：显式记录输入数、保留数、截断原因和受影响范围，并验证覆盖信息进入报告。 |
 
-截至当前，上述审查与架构工作均为代码审查或文档提案，CR-01 至 CR-08 尚未修复。历史任务的“完成”只代表当时记录的局部产物和验证，不能覆盖上表未解决的问题。
+历史任务的“完成”只代表当时记录的局部产物和验证，不能覆盖上表未解决的问题。当前检查点未进行真实目标的动态验收，也未追认任何旧 `EXPLOITABLE` 记录。
 
 ## 进行中 / 待验证
 
@@ -31,20 +31,20 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 事项 | 状态 | 已确认结果与剩余动作 |
 |---|---|---|
-| CR-01 至 CR-08 修复 | 未开始 | 尚无代码修复；按「下一步」的 P0、P1、P2 顺序执行，验收入口见审查清单 |
+| CR-01 至 CR-08 修复 | 进行中 | CR-03 已完成；CR-01/04/05/06 部分完成；CR-02/07/08 待实施。按「下一步」完成 P0 真实目标闭环后再处理其余缺口。 |
 | T60 大文件/项目扫描审计优化 | 待验证 | 拉格朗 18MB PE 的 `import/semantic_audit/report` 栈内成功（函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷）。反向规划偶发 `binary_planning_degraded`，需查明原因；聚合上限可能截断，见 CR-08。 |
 | T59 导入结果复用（缓存）+ 审计基线上下文 | 待验证 | 同输入重导入 20.4 分钟→**0.5 秒**，produced 版本一致；用正常样本补 `analysis_baseline` 真实模型回归。 |
 | T58 大项目前端分页（函数工作台） | 待验证 | 已部署，载荷 27.9MB→178.6KB；待浏览器确认 snow shot 任务页内存/CPU 恢复。 |
 | T56 任务活动反馈与轮询优化 | 待验证 | 已部署，迁移 0022 已应用、activity 端点线上实测；待真实长任务观察心跳档位、审计轮次与轮询节奏。 |
 | T55 多语言源码审计（4→13 种语言） | 待验证 | 已部署，13 个语法包容器内验证通过；待多语言样本栈内 E2E：索引→静态线索→审计。 |
 | T54 agent 上下文分层（ADR-035） | 待验证 | 代码已合并 main（`654b5bc`）；待栈内真实模型回归提示词变更（系统提示新增 journal 使用句）。 |
-| T53 候选 Finding 自动 PoC 验证（ADR-034） | 受阻 | 局部测试曾通过，但自动验证闭环被 CR-01/02/04 推翻；修复前不得用其结果评估挖掘能力。 |
+| T53 候选 Finding 自动 PoC 验证（ADR-034） | 受阻 | 旧自报 marker 不再产生 STRONG 证据；运行成功现返回 `INCONCLUSIVE`，但 CR-02 的目标绑定和独立验证仍缺失，不得用其结果评估挖掘能力。 |
 | T52 模型供应商注册表（ADR-033） | 待验证 | 已部署，DeepSeek 仍走 legacy `model_tiers` 回退；待 Web 设置页重建供应商并绑定四个智能体，再用固定样本审计。 |
 | 项目删除 500 修复（自引用表 `created_at` 并列删序） | 待验证 | 已合并 main，用户暂缓镜像重建；待部署并验证界面删除，`IntegrityError`→结构化 409 映射仍可改进。 |
 
 口径校正：T60 的 20,000 函数 / 200,000 指令恰好等于当前聚合上限，不能据此推断该 PE 的事实已全部索引（需 CR-08 的截断计数才能判定覆盖范围）；T58 的前端分页不含 CR-07 的审计/PAIR 后端全量查询。
 
-运维参考：门禁标准环境是 dev 容器（`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 exec 进容器跑 pytest/ruff/pyright 与栈内 E2E；PG/Redis opt-in 默认已指向栈内 `postgres:5432`/`redis:6379`，无需再传 `VULNWEAVER_TEST_*` 环境变量，其他环境用同名变量覆盖）。切分支/合并后建议 `uv sync --all-packages --no-editable` 全量重装，避免未改包旧装（Q-003，该风险覆盖所有 workspace 包）。
+运维参考：门禁标准环境是 dev 容器（`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 exec 进容器跑 pytest/ruff/pyright 与栈内 E2E；PG/Redis opt-in 默认已指向栈内 `postgres:5432`/`redis:6379`，无需再传 `VULNWEAVER_TEST_*` 环境变量，其他环境用同名变量覆盖）。切分支/合并后使用 `uv sync --all-packages --no-editable --reinstall` 重建 workspace 包；省略 `--reinstall` 会复用旧 wheel，即使显示卸载/安装也可能静默运行旧代码（Q-003）。
 
 ## 已确认决策（摘要）
 
@@ -57,6 +57,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 - ADR-028（2026-09-28）：分层静态脱壳工具链；unipacker 的 Unicorn 模拟与 angr 同属翻译式处理，原生执行边界不变；重工具只进 binary-tools 镜像。
 - ADR-033（2026-09-30）：模型接入重构为供应商注册表+每智能体绑定；输出上限归模型配置，任务不再有 token 配额；审计 deadline 默认 8h、可配至 7 天。保持应用内网关库形态，`ChatTransport` 保留将来换 SDK 的口子。
 - ADR-035（2026-09-30）：agent 上下文三层分层（钉住头部/journal 压缩中间/原样尾部）；压缩用确定性单行摘要而非 LLM 摘要调用；journal 是不可信数据、随检查点持久化；网关窗口兜底钉死 system 消息。
+- ADR-036（2026-10-03，已接受）：保留控制面，逐阶段引入原目标绑定、独立验证和隔离评测。首个安全检查点仅降级旧 proof 结论并阻止自报 marker 晋升；目标协议与验证器仍待实现。
 
 ## 经验教训（仍有效）
 
@@ -66,13 +67,15 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 - Q-025（已修复）：runner 热重载/镜像重建后 worker 缓存旧 digest 导致 `image_identity_mismatch`，client 层遇该失败码向 runner 重取权威 digest 重试一次。另有同失败码待查项：`ReconfigurableRunner` 热重载后 registry 与 profiles 可分叉，重启 runner 即愈，根因待查。
 - **提示词/字符串改写必须先过 ruff 再 build 镜像**：转义损坏曾直接造成 worker 崩溃循环，docker build 不做语法检查拦不住。
 - AFL：`AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）；容器宿主 core_pattern 检查用 `AFL_IGNORE_PROBLEMS=1` 跳过。
-- Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，否则**静默用旧代码**。
+- Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，合并前全量门禁使用 `uv sync --all-packages --no-editable --reinstall`。2026-10-03 不带 `--reinstall` 的全量同步复用了旧 wheel，造成 29 项伪回归；强制重建后 682 passed。
 - Q-023：Windows 上新建脚本注意 CRLF（容器 shebang 会断）；入口脚本保持 LF。
 
 ## 最近验证
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-03 | 合并前完整门禁（Linux dev 容器） | 强制重建所有 workspace 包后，`pnpm run check`：pytest **682 passed / 5 skipped**、覆盖率 **81.59%**，ruff/pyright 通过，前端 18 tests、svelte-check 0 errors；contracts `--check` 与 Web `vite build` 通过。5 项跳过含 4 项缺真实 Runner 配置的 HTTP proof 回放和 1 项 Docker runtime opt-in；真实目标验证、镜像 E2E 和 benchmark 仍未覆盖。 |
+| 2026-10-03 | proof/审计安全检查点（Linux dev 容器） | `uv run --no-sync pytest -q tests/proof tests/orchestrator/test_semantic_audit.py tests/orchestrator/test_code_audit.py tests/orchestrator/test_agent_fuzz_steering.py`：52 passed / 4 skipped（HTTP Runner 环境变量未提供）；随后补派生工件重复登记回归：定向 6 passed。受影响文件 ruff 通过，`pnpm run check:pyright`：0 errors。尚未运行真实 Runner、全量 pytest、镜像验证和 benchmark。 |
 | 2026-10-03 | 主链路只读 code review（Linux dev 容器） | 定向测试 21 passed + 11 passed；无害 JSON 包装执行复现“内部脚本未运行但外层成功”；`_safe_replay_facts` 最小调用复现 markers 被过滤。未运行真实 PoC/Exploit 沙箱全链、大样本性能基准或全量测试。详见 `code/docs/code-review-2026-10-03.md`。 |
 | 2026-10-03 | 文档同步检查 | 盘点 71 个 Markdown 文档，按审查缺陷修改 19 个直接受影响文档；`git diff --check` 与相对链接检查通过。本轮无代码变更，未重跑全量代码门禁。 |
 | 2026-10-03 | 状态台账与架构提案检查 | 修正缺陷优先级、标准化事项状态并合并重复的 P0 下一步；状态、架构方案、ADR-036 与索引的本地链接检查及 `git diff --check` 通过。仅文档变更，未运行代码测试或外部 benchmark。 |
@@ -84,8 +87,8 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 **优先：恢复结论可信度（CR 修复）**
 
-1. **P0（CR-01–04，未开始）**：ADR-036 仍为提议，尚未形成已接受的架构决策。推进前先明确是否接受其目标绑定和独立验证边界；首个开发任务是固定一个获授权解析器，定稿版本化 TargetSnapshot/ExecutionBundle/VerificationObservation 契约，并在 Linux 容器的真实 Runner 上建立原目标正例及空脚本、伪造成功标记、错误目标、harness 自身崩溃负例。随后修复 CR-01/02/03/04，跑通证据到 policy 的数据库链路。修复前不得用自动 PoC/Exploit 结果评估挖掘能力。
-2. **P1（CR-05–07）**：修复 Finding 精确锚点、源码搜索/审计覆盖，再测量大样本 SQL、字节量、延迟和内存，优化重复加载与全图邻域查询。
+1. **P0（CR-01/02/04，进行中）**：ADR-036 已接受，先固定一个获授权解析器，定稿版本化 TargetSnapshot/ExecutionBundle/VerificationObservation 契约；在 Linux 容器真实 Runner 上建立原目标正例及空脚本、伪造成功标记、错误目标、harness 自身崩溃负例。接着接入独立 Verifier 和类型化事实，完成证据 → policy 数据库回归；回归旧 `EXPLOITABLE` 记录的兼容读取。CR-03 已修复。完成前不得用自动 PoC/Exploit 结果评估挖掘能力。
+2. **P1（CR-05–07，部分进行中）**：补相同行同 CWE 不同约束的稳定指纹、二进制双地址和跨版本同路径读取回归；消除单次回退审计 256 函数截断。再测量大样本 SQL、字节量、延迟和内存，优化重复加载与全图邻域查询。
 3. **P2（CR-08）**：为二进制分析记录输入量、保留量、截断原因与影响范围，并验证覆盖信息进入报告。更广的 benchmark 扩展按 ADR-036 提案阶段推进；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
 
 **收尾与观察（非阻塞）**

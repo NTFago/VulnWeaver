@@ -255,7 +255,7 @@ def test_proof_request_with_cas_script_succeeds_over_http_runner(
         async with database.transaction() as repositories:
             poc = await repositories.pocs.get(request["id"])
             assert poc["status"] == "completed"
-            assert poc["result"] == "exploitable"
+            assert poc["result"] == "inconclusive"
             assert poc["run_log_ref"]
 
     asyncio.run(verify())

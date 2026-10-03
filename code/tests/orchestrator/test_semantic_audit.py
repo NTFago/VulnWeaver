@@ -470,3 +470,37 @@ def test_executor_drops_a_candidate_whose_derived_id_collides(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_two_same_cwe_findings_at_distinct_lines_in_one_function_survive(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(database)
+        task_id = f"task:{suffix}"
+        path = "src/app.py"
+        async with database.transaction() as repositories:
+            await repositories.pair.import_graph(
+                [pair_function(f"pair-fn:{suffix}", version_id, path)],
+                [], [], None, created_at=NOW,
+            )
+        first = model_finding(path, 1)
+        second = {**model_finding(path, 2), "title": "second eval on request data"}
+        auditor = SemanticAuditor(
+            database, FakeAuditModel(report([first, second])),
+            store=LocalContentAddressedStore(tmp_path), fact_loader=StubFactLoader(),
+        )
+        try:
+            result = await SemanticAuditJobExecutor(database, auditor).execute(
+                semantic_job(f"job:audit:{suffix}", task_id), asyncio.Event()
+            )
+            assert result["status"] is JobStatus.SUCCEEDED
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+            assert len(findings) == 2
+            assert {item["location"]["start_line"] for item in findings} == {1, 2}
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

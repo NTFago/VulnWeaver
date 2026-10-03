@@ -64,6 +64,7 @@ from vulnweaver_orchestrator.audit_tools import (
 )
 from vulnweaver_orchestrator.checkpoints import CheckpointStore
 from vulnweaver_orchestrator.investigation_memory import memory_context_entry
+from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader
 
 LOGGER = logging.getLogger("vulnweaver.code_audit")
 
@@ -205,6 +206,7 @@ class CodeAuditAgent:
         sink: AgentRunSink | None = None,
         budget: AgentLoopBudget | None = None,
         limits: AuditWorkspaceLimits | None = None,
+        fact_loader: SourceReviewFactLoader | None = None,
         symbolic_runner: SymbolicRunner | None = None,
         dynamic_verification_enabled: bool = False,
         checkpoint_store: CheckpointStore | None = None,
@@ -234,6 +236,7 @@ class CodeAuditAgent:
             deadline_seconds=28_800.0,
         )
         self._limits = limits or AuditWorkspaceLimits()
+        self._fact_loader = fact_loader
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._monotonic = monotonic
 
@@ -248,7 +251,10 @@ class CodeAuditAgent:
         prior_investigations: Sequence[Mapping[str, object]] = (),
     ) -> CodeAuditOutcome:
         budget = self._budget
-        workspace = AuditWorkspace(self._database, self._store, task_id, limits=self._limits)
+        workspace = AuditWorkspace(
+            self._database, self._store, task_id,
+            limits=self._limits, fact_loader=self._fact_loader,
+        )
         await workspace.load()
         executor = AuditStepExecutor(
             workspace,

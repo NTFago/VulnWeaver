@@ -821,8 +821,14 @@ async def _resolve_location(
         location = anchor["binary_location"]
         if location is None:
             return None
+        precise = dict(location)
+        start = location["virtual_address"]
+        precise["virtual_address"] = address
+        if location["file_offset"] is not None:
+            precise["file_offset"] = location["file_offset"] + address - start
+        precise.pop("instruction_end", None)
         return _Anchor(
-            location=cast(JsonObject, dict(location)),
+            location=cast(JsonObject, precise),
             function=anchor,
             artifact_version_id=binary_version_id,
         )
@@ -838,8 +844,19 @@ async def _resolve_location(
     source = anchor["source_location"]
     if source is None:
         return None
+    line = start_line if isinstance(start_line, int) else int(str(start_line))
+    end_line = finding.get("end_line", line)
+    if not isinstance(end_line, int) or not line <= end_line <= source["end_line"]:
+        return None
+    precise_source = dict(source)
+    precise_source.update(
+        start_line=line,
+        end_line=end_line,
+        start_column=1,
+        end_column=1,
+    )
     return _Anchor(
-        location=cast(JsonObject, dict(source)),
+        location=cast(JsonObject, precise_source),
         function=anchor,
         artifact_version_id=source_version_id,
     )

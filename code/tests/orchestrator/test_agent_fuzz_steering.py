@@ -89,6 +89,10 @@ def test_agent_fuzz_request_dispatches_at_audit_settlement(
             [
                 proposal(
                     [
+                        step(
+                            "code-function-read", {"function_id": functions[0]["id"]},
+                            step_id="read", refs=refs,
+                        ),
                         _report_step(refs, fuzz=True, index=1),
                         _report_step(refs, fuzz=False, index=2),
                     ],
@@ -97,7 +101,10 @@ def test_agent_fuzz_request_dispatches_at_audit_settlement(
             ]
         )
         dispatcher = RecordingFuzzDispatcher(opted_in=True)
-        agent = CodeAuditAgent(database, planner, LocalContentAddressedStore(tmp_path))
+        agent = CodeAuditAgent(
+            database, planner, LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+        )
         auditor = SemanticAuditor(
             database,
             planner,
@@ -130,13 +137,22 @@ def test_fuzz_request_without_opt_in_dispatches_nothing(
         planner = ScriptedPlanner(
             [
                 proposal(
-                    [_report_step(refs, fuzz=True, index=1)],
+                    [
+                        step(
+                            "code-function-read", {"function_id": functions[0]["id"]},
+                            step_id="read", refs=refs,
+                        ),
+                        _report_step(refs, fuzz=True, index=1),
+                    ],
                     "needs dynamic proof but the project never opted in",
                 ),
             ]
         )
         dispatcher = RecordingFuzzDispatcher(opted_in=False)
-        agent = CodeAuditAgent(database, planner, LocalContentAddressedStore(tmp_path))
+        agent = CodeAuditAgent(
+            database, planner, LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+        )
         auditor = SemanticAuditor(
             database,
             planner,
