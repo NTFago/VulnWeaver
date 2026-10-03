@@ -30,7 +30,7 @@ from vulnweaver_contracts import (
 )
 
 BUNDLE_MANIFEST_NAME = "vulnweaver-execution-bundle.json"
-BUNDLE_DRIVER_NAME = "driver.py"
+BUNDLE_DRIVER_NAME = "driver.json"
 BUNDLE_TARGET_NAME = "target"
 BUNDLE_INPUT_PREFIX = "inputs/"
 BUNDLE_CONTROL_PREFIX = "controls/"
@@ -114,6 +114,7 @@ def build_execution_bundle(
     store: ArtifactStore,
     *,
     bundle_id: str,
+    finding_id: str,
     driver_ref: str,
     target_binding: TargetBinding,
     target_ref: str,
@@ -140,6 +141,8 @@ def build_execution_bundle(
 
     driver = _load_member(store, driver_ref, limit=256 * 1024)
     target = _load_member(store, target_ref, limit=max_bytes)
+    if _digest_of(target.content) != target_binding["digest"]:
+        raise ExecutionBundleError("target binding digest does not match target member")
     inputs = [_load_member(store, ref, limit=64 * 1024) for ref in input_refs]
     controls = [_load_member(store, ref, limit=64 * 1024) for ref in control_refs]
 
@@ -148,6 +151,7 @@ def build_execution_bundle(
         {
             "schema_version": SchemaVersion.VALUE_1_0_0,
             "bundle_id": bundle_id,
+            "finding_id": finding_id,
             "kind": ExecutionBundleKind.PROOF,
             "driver": _member(BUNDLE_DRIVER_NAME, driver.content),
             "target": _member(BUNDLE_TARGET_NAME, target.content),

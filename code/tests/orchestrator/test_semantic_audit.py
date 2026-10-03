@@ -91,6 +91,7 @@ def model_finding(path: str, start_line: int) -> dict[str, object]:
         "path": path,
         "start_line": start_line,
         "rationale": "request-controlled expression evaluation",
+        "constraint": "untrusted request data must not reach eval",
     }
 
 
@@ -389,6 +390,7 @@ def test_binary_pseudocode_finding_is_anchored_by_address(
                         "severity": "high",
                         "address": address,
                         "rationale": "gets into stack buffer",
+                        "constraint": "copy length must be bounded by destination capacity",
                     },
                     {
                         "cwe_id": "CWE-476",
@@ -396,6 +398,7 @@ def test_binary_pseudocode_finding_is_anchored_by_address(
                         "severity": "medium",
                         "address": 0x999999,
                         "rationale": "hallucinated",
+                        "constraint": "dereferenced pointer must be valid",
                     },
                 ],
             }
@@ -447,7 +450,10 @@ def test_executor_drops_a_candidate_whose_derived_id_collides(
                 created_at=NOW,
             )
         first = model_finding(real_path, 2)
-        second = {**model_finding(real_path, 2), "title": "a different claim at the same line"}
+        second = {
+            **model_finding(real_path, 2),
+            "title": "a different title for the same constraint",
+        }
         model = FakeAuditModel(report([first, second]))
         auditor = SemanticAuditor(
             database,

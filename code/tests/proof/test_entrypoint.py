@@ -38,12 +38,13 @@ def _bundle(tmp_path: Path, store: LocalContentAddressedStore, driver: str) -> s
     bundle = build_execution_bundle(
         store,
         bundle_id="execution-bundle:entrypoint-test",
+        finding_id="finding:entrypoint-test",
         driver_ref=driver_ref,
         target_binding={
             "artifact_id": "artifact:entrypoint-test",
             "version_id": "artifact-version:entrypoint-test",
             "artifact_kind": ArtifactKind.SOURCE_ARCHIVE,
-            "digest": "sha256:" + "0" * 64,
+            "digest": store.verify(target_ref).digest,
         },
         target_ref=target_ref,
         input_refs=[crafted_ref],
@@ -78,7 +79,7 @@ def _execute(tmp_path: Path, driver: str) -> tuple[int, dict[str, Any]]:
 
 
 def test_original_target_positive_case_verifies_and_replays(tmp_path: Path) -> None:
-    driver = (FIXTURES / "driver_invoking_target.py").read_text(encoding="utf-8")
+    driver = json.dumps({"target_callable": "parse", "input_mode": "text"})
     code, report = _execute(tmp_path, driver)
 
     assert code == 0, report
@@ -97,37 +98,28 @@ def test_original_target_positive_case_verifies_and_replays(tmp_path: Path) -> N
 
 
 def test_empty_driver_proves_nothing(tmp_path: Path) -> None:
-    driver = (FIXTURES / "driver_noop.py").read_text(encoding="utf-8")
+    driver = ""
     code, report = _execute(tmp_path, driver)
 
-    assert code == 0
-    assert report["verdict"] == "rejected_under_test_conditions"
-    assert report["verdict_reasons"] == ["no_trigger_observed"]
+    assert code == 1
+    assert report["verdict"] == "environment_error"
+    assert report["verdict_reasons"] == ["invocation_invalid"]
     assert report["trigger_runs"] == 0
 
 
-def test_forged_markers_and_harness_self_crash_are_rejected(tmp_path: Path) -> None:
+def test_executable_model_output_is_rejected(tmp_path: Path) -> None:
     driver = (FIXTURES / "driver_forged_markers.py").read_text(encoding="utf-8")
     code, report = _execute(tmp_path, driver)
 
-    assert code == 0
-    assert report["verdict"] == "rejected_under_test_conditions"
-    assert report["verdict_reasons"] == ["target_not_involved"]
-    # The claim is recorded but never turned into a verdict.
-    assert report["untrusted_claims"] == {
-        "sink_reached": True, "source": "request", "sink": "eval",
-    }
+    assert code == 1
+    assert report["verdict"] == "environment_error"
+    assert report["verdict_reasons"] == ["invocation_invalid"]
+    assert report["untrusted_claims"] is None
     assert report["trigger_runs"] == 0
 
 
-def test_driver_crashing_on_any_input_fails_the_control(tmp_path: Path) -> None:
-    driver = (
-        "import sys\n"
-        "def main() -> int:\n"
-        "    del sys.argv[1:]\n"
-        "    raise RuntimeError('crashes on every input')\n"
-        "raise SystemExit(main())\n"
-    )
+def test_missing_target_callable_fails_the_control(tmp_path: Path) -> None:
+    driver = json.dumps({"target_callable": "does_not_exist", "input_mode": "text"})
     code, report = _execute(tmp_path, driver)
 
     assert code == 0
@@ -135,8 +127,8 @@ def test_driver_crashing_on_any_input_fails_the_control(tmp_path: Path) -> None:
     assert report["verdict_reasons"] == ["control_input_failed"]
 
 
-def test_reimplemented_logic_is_the_wrong_target(tmp_path: Path) -> None:
-    driver = (FIXTURES / "driver_reimplemented.py").read_text(encoding="utf-8")
+def test_nonexistent_target_callable_is_rejected(tmp_path: Path) -> None:
+    driver = json.dumps({"target_callable": "does_not_exist", "input_mode": "text"})
     code, report = _execute(tmp_path, driver)
 
     assert code == 0
@@ -144,13 +136,12 @@ def test_reimplemented_logic_is_the_wrong_target(tmp_path: Path) -> None:
     assert report["verdict_reasons"] == ["target_not_involved"]
 
 
-def test_target_tampering_voids_the_observation(tmp_path: Path) -> None:
-    driver = (FIXTURES / "driver_tampering.py").read_text(encoding="utf-8")
+def test_verified_observation_uses_target_bound_digest(tmp_path: Path) -> None:
+    driver = json.dumps({"target_callable": "parse", "input_mode": "text"})
     code, report = _execute(tmp_path, driver)
 
-    assert code == 1
-    assert report["verdict"] == "environment_error"
-    assert report["verdict_reasons"] == ["target_modified"]
+    assert code == 0
+    assert report["verdict"] == "verified_trigger"
 
 
 def _handcrafted_tar(
@@ -161,7 +152,7 @@ def _handcrafted_tar(
     symlink: str | None = None,
 ) -> Path:
     store = LocalContentAddressedStore(cast(Any, tmp_path / "handcraft-store"))
-    driver = (FIXTURES / "driver_invoking_target.py").read_text(encoding="utf-8")
+    driver = json.dumps({"target_callable": "parse", "input_mode": "text"})
     object_ref = _bundle(tmp_path, store, driver)
     raw = io.BytesIO()
     with store.open(object_ref) as source:

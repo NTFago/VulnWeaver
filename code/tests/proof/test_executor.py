@@ -291,6 +291,9 @@ def test_verified_observation_maps_to_exploitable(tmp_path: object) -> None:
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
+            expected_target_binding=cast(
+                Any, _observation("verified_trigger")["target_binding"]
+            ),
         )
     )
 
@@ -320,6 +323,9 @@ def test_rejected_observation_maps_to_not_exploitable(tmp_path: object) -> None:
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
+            expected_target_binding=cast(
+                Any, _observation("rejected_under_test_conditions")["target_binding"]
+            ),
         )
     )
 
@@ -347,6 +353,9 @@ def test_report_bound_to_another_finding_is_ignored(tmp_path: object) -> None:
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
+            expected_target_binding=cast(
+                Any, _observation("verified_trigger")["target_binding"]
+            ),
         )
     )
 

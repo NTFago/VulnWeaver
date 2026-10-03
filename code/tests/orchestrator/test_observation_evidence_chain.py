@@ -45,7 +45,12 @@ from tests.persistence.factories import (
 TIMESTAMP = "2026-10-03T08:00:00Z"
 
 
-def _observation_payload(verdict: str, *, reproducible_runs: bool = True) -> dict[str, object]:
+def _observation_payload(
+    verdict: str,
+    *,
+    reproducible_runs: bool = True,
+    target_binding: dict[str, str] | None = None,
+) -> dict[str, object]:
     return {
         "schema_version": "1.0.0",
         "id": "observation:" + "a" * 32,
@@ -55,7 +60,7 @@ def _observation_payload(verdict: str, *, reproducible_runs: bool = True) -> dic
         "verdict_reasons": ["target_crash_attributed", "control_input_clean",
                             "replay_stable"],
         "driver_digest": "sha256:" + "c" * 64,
-        "target_binding": {
+        "target_binding": target_binding or {
             "artifact_id": "artifact:sample",
             "version_id": "artifact-version:sample",
             "artifact_kind": "source_archive",
@@ -96,9 +101,16 @@ def _observation_payload(verdict: str, *, reproducible_runs: bool = True) -> dic
 
 
 def _observation_evidence(
-    evidence_id: str, finding_id: str, verdict: str, *, reproducible: bool = True
+    evidence_id: str,
+    finding_id: str,
+    verdict: str,
+    *,
+    reproducible: bool = True,
+    target_binding: dict[str, str] | None = None,
 ) -> Evidence:
-    observation = _observation_payload(verdict, reproducible_runs=reproducible)
+    observation = _observation_payload(
+        verdict, reproducible_runs=reproducible, target_binding=target_binding
+    )
     observation["finding_id"] = finding_id
     return cast(
         Evidence,
@@ -129,7 +141,7 @@ def _observation_evidence(
 
 async def _seed_finding(
     database: Database, category: FindingCategory
-) -> str:
+) -> tuple[str, dict[str, str]]:
     suffix = uuid4().hex
     finding_id = f"finding:{suffix}"
     version_id = f"artifact-version:{suffix}"
@@ -184,7 +196,12 @@ async def _seed_finding(
                 },
             )
         )
-    return finding_id
+    return finding_id, {
+        "artifact_id": f"artifact:{suffix}",
+        "version_id": version_id,
+        "artifact_kind": "source_archive",
+        "digest": "sha256:" + "a" * 64,
+    }
 
 
 async def _attach(database: Database, finding_id: str, evidence: Evidence) -> None:
@@ -223,11 +240,16 @@ def test_verified_trigger_observation_confirms_memory_corruption(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.MEMORY_CORRUPTION)
+            finding_id, target_binding = await _seed_finding(
+                database, FindingCategory.MEMORY_CORRUPTION
+            )
             await _attach(
                 database,
                 finding_id,
-                _observation_evidence("evidence:obs-verified", finding_id, "verified_trigger"),
+                _observation_evidence(
+                    "evidence:obs-verified", finding_id, "verified_trigger",
+                    target_binding=target_binding,
+                ),
             )
             result = await gate.submit(_review(finding_id))
             assert result.decision is not None
@@ -249,12 +271,17 @@ def test_rejected_observation_does_not_confirm(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.MEMORY_CORRUPTION)
+            finding_id, target_binding = await _seed_finding(
+                database, FindingCategory.MEMORY_CORRUPTION
+            )
             await _attach(
                 database,
                 finding_id,
                 _observation_evidence(
-                    "evidence:obs-rejected", finding_id, "rejected_under_test_conditions"
+                    "evidence:obs-rejected",
+                    finding_id,
+                    "rejected_under_test_conditions",
+                    target_binding=target_binding,
                 ),
             )
             result = await gate.submit(_review(finding_id))
@@ -274,7 +301,9 @@ def test_non_reproducible_trigger_is_not_strong_reproducible_evidence(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.MEMORY_CORRUPTION)
+            finding_id, target_binding = await _seed_finding(
+                database, FindingCategory.MEMORY_CORRUPTION
+            )
             await _attach(
                 database,
                 finding_id,
@@ -283,6 +312,7 @@ def test_non_reproducible_trigger_is_not_strong_reproducible_evidence(
                     finding_id,
                     "verified_trigger",
                     reproducible=False,
+                    target_binding=target_binding,
                 ),
             )
             result = await gate.submit(_review(finding_id))
@@ -302,9 +332,12 @@ def test_contract_invalid_observation_carries_no_facts(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.MEMORY_CORRUPTION)
+            finding_id, target_binding = await _seed_finding(
+                database, FindingCategory.MEMORY_CORRUPTION
+            )
             evidence = _observation_evidence(
-                "evidence:obs-invalid", finding_id, "verified_trigger"
+                "evidence:obs-invalid", finding_id, "verified_trigger",
+                target_binding=target_binding,
             )
             # Simulate a malformed report reaching storage anyway.
             evidence["replay_recipe"]["observation"]["verdict"] = "definitely_hacked"
@@ -328,11 +361,16 @@ def test_crash_observation_does_not_confirm_injection(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.INJECTION)
+            finding_id, target_binding = await _seed_finding(
+                database, FindingCategory.INJECTION
+            )
             await _attach(
                 database,
                 finding_id,
-                _observation_evidence("evidence:obs-injection", finding_id, "verified_trigger"),
+                _observation_evidence(
+                    "evidence:obs-injection", finding_id, "verified_trigger",
+                    target_binding=target_binding,
+                ),
             )
             result = await gate.submit(_review(finding_id))
             assert result.persisted is False
@@ -353,7 +391,9 @@ def test_old_exploitable_poc_records_stay_readable_but_prove_nothing(
         database = Database(DatabaseSettings(persistence_database_url))
         gate = FindingReviewGate(database)
         try:
-            finding_id = await _seed_finding(database, FindingCategory.MEMORY_CORRUPTION)
+            finding_id, _target_binding = await _seed_finding(
+                database, FindingCategory.MEMORY_CORRUPTION
+            )
             legacy_poc = cast(
                 Poc,
                 {

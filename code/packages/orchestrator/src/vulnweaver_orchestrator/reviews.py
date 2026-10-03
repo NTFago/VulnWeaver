@@ -14,6 +14,7 @@ from vulnweaver_contracts import (
     FindingStatus,
     JsonObject,
     Review,
+    TargetBinding,
     ToolIdentity,
     validate_contract,
 )
@@ -84,8 +85,8 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
     branch, so the "model cannot self-confirm" rule is preserved.
 
     ``VERIFICATION_OBSERVATION`` is the target-bound successor (ADR-036): the
-    trusted entrypoint observed the original target crash through the generated
-    driver with target-attributed stack frames, a clean control input and stable
+    trusted entrypoint observed an exception from compiled original target code
+    with a clean control input and stable
     replays. That carries the digest-bound crafted input and the binding to the
     exact sample version, so a memory-corruption finding gets the full crash
     fact set; other categories only get the minimal reproduction because a crash
@@ -234,12 +235,40 @@ async def build_review_fact_context(
     repositories: Repositories, finding: Finding
 ) -> ReviewFactContext:
     finding_id = finding["id"]
+    target_version = await repositories.artifacts.get_version(
+        finding["location"]["artifact_version_id"]
+    )
+    target_artifact = await repositories.artifacts.get(target_version["artifact_id"])
+    expected_binding = cast(
+        TargetBinding,
+        {
+            "artifact_id": target_artifact["id"],
+            "version_id": target_version["id"],
+            "artifact_kind": target_artifact["kind"],
+            "digest": target_version["digest"],
+        },
+    )
     relations = await repositories.findings.list_evidence_relations(finding_id)
     facts: list[ReviewEvidenceFact] = []
     for relation in relations:
         evidence = await repositories.evidence.get(relation["evidence_id"])
         if evidence["type"] in {EvidenceType.MODEL_EXPLANATION, EvidenceType.REVIEW_CONCLUSION}:
             continue
+        if evidence["type"] is EvidenceType.VERIFICATION_OBSERVATION:
+            recipe = evidence["replay_recipe"]
+            observation = recipe.get("observation")
+            if not isinstance(observation, dict):
+                continue
+            try:
+                validate_contract("VerificationObservation", observation)
+            except (TypeError, ValueError):
+                continue
+            observed_binding = observation.get("target_binding")
+            if not isinstance(observed_binding, dict) or any(
+                observed_binding.get(key) != expected_binding.get(key)
+                for key in ("artifact_id", "version_id", "artifact_kind", "digest")
+            ):
+                continue
         replay_facts = _safe_replay_facts(evidence["type"], evidence["replay_recipe"])
         facts.append(
             ReviewEvidenceFact(

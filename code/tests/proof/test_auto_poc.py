@@ -47,7 +47,7 @@ class FakePocModel:
     def __init__(self, output: dict[str, object] | None = None) -> None:
         self._output = output or {
             "schema_version": "1.0.0",
-            "script": (FIXTURES / "driver_invoking_target.py").read_text(encoding="utf-8"),
+            "driver": {"target_callable": "parse", "input_mode": "text"},
             "crafted_input": CRAFTED_INPUT,
             "control_input": CONTROL_INPUT,
             "rationale": "drive the original parser into unbounded recursion",
@@ -521,7 +521,7 @@ def test_poc_job_requires_crafted_and_control_inputs(
         )
         model = FakePocModel({
             "schema_version": "1.0.0",
-            "script": "print('hi')\n",
+            "driver": {"target_callable": "parse", "input_mode": "text"},
             "rationale": "missing inputs",
         })
         executor = ProofJobExecutor(

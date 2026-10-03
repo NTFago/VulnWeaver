@@ -5,6 +5,8 @@
 
 > **实现勘误（2026-10-03）**：下文“决策”“信任边界”和“后果”记载原设计意图与当时的局部测试结论，不代表真实闭环已成立。代码证据与验收入口见 [`../code-review-2026-10-03.md`](../code-review-2026-10-03.md) 的 CR-01/02/03/04。当前自动生成脚本被装入 JSON，proof entrypoint 执行外层 JSON 表达式而不执行脚本；沙箱只拿到脚本，没有待验证样本；退出成功直接成为 `EXPLOITABLE`。PoC markers 虽写入证据，复核事实白名单却将其删除。认证类策略还要求没有自动推导来源的 `constraint_analysis`。因此不能依据本 ADR 将该能力标为已实现或已验证。
 
+> **ADR-036 修复回访（2026-10-03）**：自动生成内容现为版本化 `ProofInvocation` 数据（目标函数路径和输入编码），模型不再提供可执行 Python；bundle 携带 finding ID、摘要绑定的原目标和输入，worker/复核核对目标绑定。该修复在本地分支 `fix/target-bound-verification`，静态检查通过，pytest 与真实 Runner 验收待运行；确认前仍按未验收处理。
+
 ## 背景
 
 在此之前的动态验证闭环存在两个断点：
@@ -16,7 +18,7 @@
 
 ## 决策
 
-1. **候选阶段 PoC = 复现验证，不是 exploit**。新增 `PocVerificationScheduler`（`packages/proof/auto_poc.py`）：CANDIDATE Finding + 项目 `exploit_validation_enabled` 时投放一个 PROOF Job（幂等键 `poc_verification:<finding_id>`，每个 Finding 一生一次）。脚本生成复用 `ExploitScriptGenerator`（新 baseline `poc_verification`），提示词要求最小复现、无利用后动作，仍强制过 `validate_generated_script` 全部禁止模式。红线 10（exploit Job 只处理 confirmed）不放宽。
+1. **候选阶段 PoC = 复现验证，不是 exploit**。新增 `PocVerificationScheduler`（`packages/proof/auto_poc.py`）：CANDIDATE Finding + 项目 `exploit_validation_enabled` 时投放一个 PROOF Job（幂等键 `poc_verification:<finding_id>`，每个 Finding 一生一次）。`ExploitScriptGenerator` 只生成契约约束的 `ProofInvocation`，不生成或执行任意模型代码。红线 10（exploit Job 只处理 confirmed）不放宽。
 2. **历史标记协议（已停用）**：旧版 PoC 脚本打印 `POC_MARKERS: {json}`，proof executor 曾把模型自报内容登记为 STRONG 证据。2026-10-03 按 ADR-036 暂停该证据提升；无目标绑定和独立验证器时，marker 只能视为不可信脚本输出，不会产生 `POC_VERIFICATION_RESULT` 或触发确认。
 3. **事实推导**：`derive_established_facts` 从 STRONG + reproducible 的 `POC_VERIFICATION_RESULT` 推导：通用 `minimal_reproduction`；注入类 `source_to_sink_path`（须 sink_reached + 具体 source/sink）与 `protection_analysis`；认证类 `behavior_difference` + `reachable_path`。
 4. **确认仍走独立复核**。证据落地后由既有 PROOF 结算 → 证据触发定向 re-review（revision id）路径自动重开复核；confirmed 仍只能由 `FindingReviewGate`/`evaluate_confirmation` 依据工具产生的事实裁决。"模型不能自我确认"红线不变。

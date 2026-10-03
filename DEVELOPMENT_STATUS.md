@@ -6,24 +6,27 @@
 
 ## 当前焦点
 
-2026-10-03 用户已接受 [`ADR-036`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)，本轮完成其 **P0 目标绑定验证闭环并已合并部署**（main `6f81486`）：版本化 `ExecutionBundleManifest`/`VerificationObservation` 契约、ExecutionBundle（驱动/只读原目标/对照与攻击输入，摘要逐成员校验）、重写的 proof 入口（驱动子进程执行、目标帧归因、对照输入先行、重放、篡改检测）、worker 侧独立判定（`verified_trigger` 才产生 STRONG 证据与 `EXPLOITABLE`）与证据→policy 数据库链路。**真实 Runner 正反例验收已通过且部署后复跑通过**（原目标正例可重放；空脚本、伪造 marker、驱动自崩、错误目标、篡改目标均不确认；原样本版本不变；旧 `EXPLOITABLE` 记录兼容读取且回归确认不能确认任何 Finding）。P1（真实 C/C++ 项目构建、InvestigationCase、CR-05–07）与 P2+ 未开始。
+2026-10-03 用户已接受 [`ADR-036`](code/docs/adr/036-target-bound-verification-and-benchmark-evaluation.md)，首轮 **P0 目标绑定验证实现已合并部署**（main `6f81486`）。本地分支 `fix/target-bound-verification` 已实现 CR-09–11 修复：模型只提交受限的 Python 函数调用描述，不再执行任意驱动代码；目标摘要在打包时与绑定摘要相等，入口从 bundle 内存加载原目标字节；bundle 绑定 Finding ID，worker 和复核再核对 artifact/version/digest。CR-05 的 `constraint` 已设为模型输出必填，并参与归一化身份指纹。**当前改动尚未运行 pytest 或真实 Runner 验收，未合并、未部署；这些条目待验证。**静态检查通过：Ruff、Pyright、契约生成检查；proof 入口 AST 解析通过。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。逐项审查缺陷代码证据见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
-当前目标绑定验证的**能力边界**：可验证目标类为 Python 源码样本（驱动经 SourceFileLoader/exec 调用原文件、崩溃帧归因到原目标文件路径）；C/C++ 原项目的构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1；鉴权类 `constraint_analysis` 与注入类 `source_to_sink_path` 仍无独立判据来源，这两类 Finding 依旧不能被自动证据确认（保持候选或人工复核）。
+当前目标绑定验证的**能力边界**：本地分支将目标范围收窄为可从 UTF-8 Python 源文件导入并调用的函数；C/C++ 原项目构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1；鉴权类 `constraint_analysis` 与注入类 `source_to_sink_path` 仍无独立判据来源，这两类 Finding 依旧不能被自动证据确认（保持候选或人工复核）。
 
 ## 当前阻碍与审查缺陷（2026-10-03）
 
 | 编号 | 状态 | 影响与解除条件 |
 |---|---|---|
 | CR-01、CR-02 / P0 | 已完成（P0 范围） | 执行输入与元数据分离为 bundle 成员并逐成员摘要校验；原目标以只读成员绑定（TargetBinding：artifact/version/digest）；`SandboxStatus` 成功不再产生任何漏洞结论，结论仅由可信入口的 `VerificationObservation` 决定。真实 Runner 正反例验收通过（`tests/proof/test_target_bound_runner.py`，opt-in）。C/C++ 目标构建绑定转 P1。 |
-| CR-03 / P1 | 已完成 | 生成脚本与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
+| CR-03 / P1 | 已完成 | 生成的受限调用描述与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
 | CR-04 / P1 | 进行中 | 类型化 `verification_observation` 证据 + 白名单放行（契约校验后才可用）+ 内存类事实集推导 + 真实 DB「证据→事实→policy→confirmed」回归已通过；旧 `EXPLOITABLE` PoC 兼容读取且证明力为零已回归。**剩余**：鉴权 `constraint_analysis` 与注入类独立判据来源（无 fixtures/受控观测），完成前这两类不可自动确认。 |
-| CR-05、CR-06 / P1 | 进行中 | Finding 已保留源代码行/二进制地址锚点，同函数不同源码行回归通过；源码搜索按唯一文件计数并报告未扫描数；`finding-report` 要求相应代码已读。相同行同 CWE 的不同约束仍可能冲突；回退审计仍截到 256 函数，跨版本同路径读取证明仍需加强。 |
+| CR-05、CR-06 / P1 | 进行中 | Finding 已保留源代码行/二进制地址锚点，同函数不同源码行回归通过；源码搜索按唯一文件计数并报告未扫描数；`finding-report` 要求相应代码已读。CR-05 必填约束身份指纹已实现待验证；CR-06 回退审计仍截到 256 函数，跨版本同路径读取证明仍需加强。 |
 | CR-07 / P1 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准及按需查询优化。 |
 | CR-08 / P2 | 未开始 | 二进制聚合达上限后静默截断。解除条件：显式记录输入数、保留数、截断原因和受影响范围，并验证覆盖信息进入报告。 |
+| CR-09–11 / P0 | 待验证（修复已实现） | 移除模型可执行驱动、原目标在内存中按摘要编译、bundle/observation 绑定 Finding 与目标版本；复核入口也核对绑定。解除条件：受影响 pytest、真实 Runner 伪造输出/错误 Finding/错误摘要负例全通过，已有正例继续通过。 |
 
-本轮附带修复：`pocs.result` 列 varchar(32) 装不下契约值 `not_exploitable_under_environment`（33 字符，旧代码从不产生该值故未触发），迁移 `0024` 加宽至 64 并同步 models。
+近期附带修复：`pocs.result` 列 varchar(32) 装不下契约值 `not_exploitable_under_environment`（33 字符），迁移 `0024` 加宽至 64 并同步 models。
+
+本地修复另调整 semantic-audit Finding 身份：约束文本经 NFKC、空白折叠和大小写归一后参与 ID，避免同一源码位置、同一 CWE 下不同安全约束互相冲突。
 
 历史任务的“完成”只代表当时记录的局部产物和验证，不能覆盖上表未解决的问题。旧 `EXPLOITABLE` 记录未追认为新协议结论。
 
@@ -33,8 +36,8 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 事项 | 状态 | 已确认结果与剩余动作 |
 |---|---|---|
-| ADR-036 P0 目标绑定验证 | 已完成（已部署） | 代码、测试、真实 Runner 验收与**部署**均完成：main `6f81486` 合并后重建 analysis-worker/api/orchestrator/web（dispatcher/sandbox-runner/proof-tool 同日先建），栈重启 migrate exit 0，API ready、web 200、worker 装载新 proof 代码，opt-in 验收复跑 2 passed。剩余观察：真实模型驱动的全链（candidate → verified_trigger → **模型 re-review** → confirmed）需网关配置后在栈内观察一次。 |
-| CR-05/06 剩余、CR-07、CR-08 | 未开始 | 同行同 CWE 指纹、256 函数截断、全图邻域、聚合截断计数。 |
+| ADR-036 P0 目标绑定验证 | 待验证（本地修复未部署） | CR-09–11 修复已在 `fix/target-bound-verification`；Ruff、Pyright、contracts `--check` 通过，未运行 pytest/真实 Runner。验证通过后再更新镜像并部署；模型驱动的 candidate → verified_trigger → **模型 re-review** → confirmed 全链需网关配置观察。 |
+| CR-05/06 剩余、CR-07、CR-08 | 进行中 | CR-05 必填约束身份指纹已实现待验证；CR-06 的 256 函数截断、跨版本同路径读取证明仍待处理；其后是全图邻域和聚合截断计数。 |
 | T60 大文件/项目扫描审计优化 | 待验证 | 拉格朗 18MB PE 的 `import/semantic_audit/report` 栈内成功（函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷）。反向规划偶发 `binary_planning_degraded`，需查明原因；聚合上限可能截断，见 CR-08。 |
 | T59 导入结果复用（缓存）+ 审计基线上下文 | 待验证 | 同输入重导入 20.4 分钟→**0.5 秒**，produced 版本一致；用正常样本补 `analysis_baseline` 真实模型回归。 |
 | T58 大项目前端分页（函数工作台） | 待验证 | 已部署，载荷 27.9MB→178.6KB；待浏览器确认 snow shot 任务页内存/CPU 恢复。 |
@@ -79,6 +82,9 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-03 | 本轮修复静态检查（Linux dev 容器） | 修改后的相关 Python 文件 Ruff 通过；Proof/Orchestrator Pyright 0 errors；contracts 生成及 `--check` 通过；`git diff --check` 通过。未运行 pytest、真实 Runner、镜像构建或部署。 |
+| 2026-10-03 | 本地修复静态检查（Linux dev 容器） | 受影响 Python 文件 Ruff 通过，Proof/Orchestrator Pyright 0 errors，contracts `--check` 通过，proof 入口 AST 解析通过。未运行 pytest、真实 Runner、镜像构建或部署。 |
+| 2026-10-03 | ADR-036 P0 合并后静态复审（main `04d1281`） | 沿 bundle→entrypoint→worker→review 与手动 proof API 追踪，发现 CR-09–11。未运行新负例的真实 Runner 验收；既有 2 passed 不能排除这些构造。 |
 | 2026-10-03 | ADR-036 P0 合并与部署（main `6f81486`） | 重建 analysis-worker/api/orchestrator/web 镜像并 `up -d` 重启栈：migrate 服务 exit 0（栈库 0024），API `/health/ready` ready、web 宿主 `127.0.0.1:8080` 200、analysis-worker 正常启动且已装载 bundle/verifier 新代码，sandbox-runner 注册 proof-tool 新摘要。重启后 opt-in 真实 Runner 验收复跑 **2 passed**。未做：真实模型驱动的 re-review 全链观察（需网关配置）。 |
 | 2026-10-03 | ADR-036 P0 目标绑定验证（Linux dev 容器 + 真实 Runner） | 全量门禁：`pnpm run check:python` pytest **703 passed / 7 skipped**、覆盖率 **82%**，ruff/pyright 0 errors；contracts `--check`、web svelte-check/18 tests/`vite build` 通过。**真实 Runner 验收**（`tests/proof/test_target_bound_runner.py`，重建 proof-tool/sandbox-runner/dispatcher 镜像、栈库迁至 0024 后）：正例 verified_trigger + 3/3 重放 + STRONG 证据入库 + 原样本版本不变；空脚本/伪造 marker+自崩/错误目标负例全部 `not_exploitable_under_environment` 且零证据，2 passed。入口级正反例（含篡改/摘要不符/未声明成员/符号链接）9 passed；证据→policy 真实 DB 回归 6 passed（含旧 `EXPLOITABLE` 兼容读取）。 |
 | 2026-10-03 | 合并前完整门禁（Linux dev 容器） | 强制重建所有 workspace 包后，`pnpm run check`：pytest **682 passed / 5 skipped**、覆盖率 **81.59%**，ruff/pyright 通过，前端 18 tests、svelte-check 0 errors；contracts `--check` 与 Web `vite build` 通过。5 项跳过含 4 项缺真实 Runner 配置的 HTTP proof 回放和 1 项 Docker runtime opt-in；真实目标验证、镜像 E2E 和 benchmark 仍未覆盖。 |
@@ -90,11 +96,12 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**优先：P1 启动（ADR-036）**
+**优先：完成本地 P0 验证，再继续 P1（ADR-036）**
 
-1. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。同时补 CR-04 剩余：鉴权 `constraint_analysis` 与注入类独立判据来源（身份/权限夹具、受控 sink 观测），无判据类别保持候选。
-2. **P1（CR-05–07）**：补相同行同 CWE 不同约束的稳定指纹、二进制双地址和跨版本同路径读取回归；消除单次回退审计 256 函数截断。再测量大样本 SQL、字节量、延迟和内存，优化重复加载与全图邻域查询。
-3. **P2（CR-08）**：为二进制分析记录输入量、保留量、截断原因与影响范围，并验证覆盖信息进入报告。更广的 benchmark 扩展按 ADR-036 提案阶段推进；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
+1. **P0（CR-09–11）**：对改动执行 proof/orchestrator 定向测试与真实 Runner 负例验收；通过后重建 proof-tool、sandbox-runner、dispatcher、analysis-worker 镜像并部署，复核 API 与 POC 结果。
+2. **P1（CR-05/06）**：验证必填约束身份指纹；补二进制双地址和跨版本同路径读取回归；设计可分页、可续跑的单次回退审计，消除 256 函数截断并保持调用预算可控。再测量大样本 SQL、字节量、延迟和内存，优化重复加载与全图邻域查询。
+3. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。同时补 CR-04 剩余：鉴权 `constraint_analysis` 与注入类独立判据来源（身份/权限夹具、受控 sink 观测），无判据类别保持候选。
+4. **P2（CR-08）**：为二进制分析记录输入量、保留量、截断原因与影响范围，并验证覆盖信息进入报告。更广的 benchmark 扩展按 ADR-036 提案阶段推进；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
 
 **收尾与观察（非阻塞）**
 

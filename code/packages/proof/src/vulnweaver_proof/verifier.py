@@ -26,7 +26,7 @@ from vulnweaver_contracts import (
 
 REPORT_FILE_NAME = "execution-report.json"
 MIN_REPLAY_RUNS = 2
-_TIMEOUT_REASONS = frozenset({"driver_timeout", "replay_timeout"})
+_TIMEOUT_REASONS = frozenset({"driver_timeout", "replay_timeout", "target_timeout"})
 
 
 class ObservationError(ValueError):

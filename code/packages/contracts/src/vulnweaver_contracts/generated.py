@@ -759,9 +759,15 @@ class Poc(TypedDict):
     resource_budget: ResourceBudget
     created_at: str
 
+class ProofInvocation(TypedDict):
+    target_callable: str
+    input_mode: Literal['text', 'bytes', 'json']
+
 class ExploitScript(TypedDict):
     schema_version: SchemaVersion
-    script: str
+    driver: ProofInvocation
+    crafted_input: str
+    control_input: str
     rationale: str
 
 class CriticalLogicAssessment(TypedDict):
@@ -793,6 +799,7 @@ class TargetBinding(TypedDict):
 class ExecutionBundleManifest(TypedDict):
     schema_version: SchemaVersion
     bundle_id: Identifier
+    finding_id: Identifier
     kind: ExecutionBundleKind
     driver: BundleFileMember
     target: BundleFileMember
@@ -887,6 +894,7 @@ class SemanticAuditFinding(TypedDict):
     title: str
     severity: Severity
     rationale: str
+    constraint: str
     path: NotRequired[str]
     start_line: NotRequired[int]
     end_line: NotRequired[int]
