@@ -6,31 +6,34 @@
 
 ## 当前焦点
 
-2026-10-04 已完成 `main @ f5bc37e` 部署。针对 `2757f35` 的复核发现 bundle 精确成员检查漏掉 manifest，以及目标代码和报告器共进程可伪造 observation；现已修复为入口严格要求 manifest、目标每轮在一次性子进程运行并设 30 秒超时、worker 依据 CAS bundle manifest 交叉核对 observation。同期修复 callable 来源校验、报告自洽与 bundle 全字段核对、PoC/evidence 原子幂等写入、TIMEOUT/ENVIRONMENT 重试，以及 agentic Finding 报告必填 constraint。全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；真实 Runner 正反例 3 passed。目标异常现映射为 `INCONCLUSIVE`，只保留 `SUPPORTING` observation；复核不再将 Python 异常推导成崩溃事实。受影响镜像已重建、服务已重启；数据库迁移版本 0024，PostgreSQL/Redis healthy，API ready，Web 返回 200。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。
+2026-10-04 已完成 `main @ f5bc37e` 部署。针对 `2757f35` 的复核发现 bundle 精确成员检查漏掉 manifest，以及目标代码和报告器共进程可伪造 observation；现已修复为入口严格要求 manifest、目标每轮在一次性子进程运行并设 30 秒超时、worker 依据 CAS bundle manifest 交叉核对 observation。同期修复 callable 来源校验、报告自洽与 bundle 全字段核对、PoC/evidence 原子幂等写入、TIMEOUT/ENVIRONMENT 重试，以及 agentic Finding 报告必填 constraint。
+
+2026-10-04 第二轮（分支 `feat/realworld-acceptance-samples`，提交 `a7baad8`/`1fb5b40`/`92bb0d7`）：审查清单剩余缺陷 CR-04 剩余、CR-05、CR-06、CR-07、CR-08 已实现并部署。要点：①CR-08 聚合逐集合截断账目（`BinaryCoverage` 契约）进入 result 文档、规划 facts 与 agent `artifact_facts`/`analysis_baseline`，imports 独立 `max_imports` 上限；②CR-06 回退审计按页（64 函数/页）调用并逐页投影+checkpoint 续跑（deadline 8h 兜底），消除 256 函数截断；读取证明键改为 `(version_id, path, line)`，跨版本同路径不再互相授权；③CR-07 `PairRepository.neighborhood` 下推递归 CTE（2000 函数图 402ms→54ms、6000 函数 110ms，基准脚本入库），审计入口 `has_functions` 廉价探针消除双重全量装载；④CR-04 剩余：entrypoint 逐轮捕获有界输出并摘要，新增 `verified_behavior` 判定（crafted≠control 且重放一致），worker 依据自校验 observation 派生 STRONG `POC_VERIFICATION_RESULT`（注入 sink_reached；鉴权 behavior_difference+constraint_digest 绑定审核期约束 SHA-256），gate 恢复 markers 白名单并把约束绑定映射为 `constraint_analysis`——鉴权类自此具备独立判据链，注入类 `protection_analysis` 仍无独立来源、保持候选。全量 Python 门禁 735 passed / 4 skipped、覆盖率 81.79%；真实 Runner 正反例 3 passed；受影响 9 个镜像已重建、栈已重启、migrate exit 0（0024）、API ready、Web 200。详见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md) 顶部第二轮修复说明。
 
 系统定位为**面向真实世界样本的长线漏洞挖掘智能体系统**。逐项审查缺陷代码证据见 [`code/docs/code-review-2026-10-03.md`](code/docs/code-review-2026-10-03.md)。agent 主导挖掘和长线调查仍是产品方向，但不能用 Job 成功或历史测试通过替代漏洞验证。
 
-当前目标绑定验证的**能力边界**：本地分支将目标范围收窄为可从 UTF-8 Python 源文件导入并调用的函数；C/C++ 原项目构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1；鉴权类 `constraint_analysis` 与注入类 `source_to_sink_path` 仍无独立判据来源，这两类 Finding 依旧不能被自动证据确认（保持候选或人工复核）。
+当前目标绑定验证的**能力边界**：本地分支将目标范围收窄为可从 UTF-8 Python 源文件导入并调用的函数；C/C++ 原项目构建/链接绑定（BuildProfile、完整 TargetSnapshot）属 P1；注入类 `protection_analysis` 仍无独立判据来源（该类 Finding 依旧不能被自动证据确认，保持候选或人工复核）；能证明安全影响的独立崩溃/利用 oracle 仍未立项。
 
-## 当前阻碍与审查缺陷（2026-10-03）
+## 当前阻碍与审查缺陷（2026-10-03 清单，2026-10-04 状态）
 
 | 编号 | 状态 | 影响与解除条件 |
 |---|---|---|
 | CR-01、CR-02 / P0 | 已完成（P0 范围） | 执行输入与元数据分离为 bundle 成员并逐成员摘要校验；原目标以只读成员绑定（TargetBinding：artifact/version/digest）；`SandboxStatus` 成功不再产生任何漏洞结论，结论仅由可信入口的 `VerificationObservation` 决定。真实 Runner 正反例验收通过（`tests/proof/test_target_bound_runner.py`，opt-in）。C/C++ 目标构建绑定转 P1。 |
 | CR-03 / P1 | 已完成 | 生成的受限调用描述与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
-| CR-04 / P1 | 进行中 | 类型化 `verification_observation` 经契约校验后可进入事实上下文；当前目标异常 observation 仅为 `SUPPORTING`，且不推导 `repeatable_crash`，不能单独确认内存破坏 Finding。旧 `EXPLOITABLE` PoC 兼容读取但证明力为零。**剩余**：鉴权 `constraint_analysis`、注入类独立判据，以及能证明安全影响的独立崩溃/利用 oracle。 |
-| CR-05、CR-06 / P1 | 进行中 | Finding 已保留源代码行/二进制地址锚点，同函数不同源码行回归通过；源码搜索按唯一文件计数并报告未扫描数；`finding-report` 要求相应代码已读。CR-05 必填约束身份指纹已实现待验证；CR-06 回退审计仍截到 256 函数，跨版本同路径读取证明仍需加强。 |
-| CR-07 / P1 | 未开始 | 审计重复全量读取函数，邻域查询每次装载整图。性能损失尚未量化。解除条件：大样本 SQL/内存/耗时基准及按需查询优化。 |
-| CR-08 / P2 | 未开始 | 二进制聚合达上限后静默截断。解除条件：显式记录输入数、保留数、截断原因和受影响范围，并验证覆盖信息进入报告。 |
+| CR-04 / P1 | 基本完成 | 鉴权类独立判据已闭环：proof 入口逐轮捕获有界输出并摘要，`verified_behavior`（crafted≠control、重放一致）经 worker 自校验后派生 STRONG `POC_VERIFICATION_RESULT`，`constraint_digest` 绑定审核期登记约束，gate 映射出 `constraint_analysis`/`behavior_difference`/`reachable_path`，鉴权 Finding 可被证据确认（模型复核仍为提案方）。注入类 `source_to_sink_path` 已可派生，但 `protection_analysis` 仍无独立来源——注入 Finding 继续保持候选。独立崩溃/利用 oracle（安全影响的独立证明）仍未立项。 |
+| CR-05 / P1 | 已完成 | 必填 constraint + `_issue_identity` 归一指纹（NFKC/空白/大小写）进入 evidence 身份；同任务 CWE+精确位置稳定去重；同函数不同源码行回归通过；新增同函数双地址（二进制）回归通过。 |
+| CR-06 / P1 | 已完成 | 回退审计分页化（64 函数/页）+ 逐页投影与 checkpoint 续跑，8h deadline 兜底（TIMEOUT 可重试），消除 256 函数截断；报告聚合记录 audited/total 覆盖。源码搜索按唯一文件计数（此前已修）；finding-report 读取证明键为 `(version_id, path, line)`，跨版本同路径读取不再互相授权（回归 `tests/orchestrator/test_code_audit.py`）。 |
+| CR-07 / P1 | 已完成（本轮量化+优化） | 基准：2000 函数图 neighborhood depth1 402ms→**54ms**，6000 函数 **110ms**（`code/scripts/benchmark_pair_neighborhood.py`）。邻域下推递归 CTE，只取到达子图；审计入口以 `has_functions` 探针替代全量装载，agent 成功路径零重复装载、回退路径单次装载。`pair.neighborhood` 全图入 Python 的旧实现已移除；`agent_runs.save_progress` 写放大与 ProjectView N+1 仍是候选项（见下一步 8）。 |
+| CR-08 / P2 | 已完成 | 聚合 merge 逐集合记录 offered/retained/limit/截断原因（去重不计截断），strings 提取报告 offered；覆盖信息进入 `BinaryAnalysisResult.coverage`、规划 facts `coverage_incomplete`、agent `artifact_facts` summary 与 `analysis_baseline.truncated_collections`；imports 独立 `max_imports`（默认不变）。超限样本回归见 `tests/binary_analysis/test_coverage.py`。 |
 | CR-09–11 / P0 | 已修复、Runner 验收并部署 | 目标调用移入每轮隔离子进程，supervisor 独立写报告；bundle/observation 绑定 Finding 与目标版本，入口和 worker 交叉核对摘要。Runner 正反例 3 passed，镜像重建且应用容器已重启。 |
 | 复核 P0-1/2、P1-1/2/3/4/5 | 已修复并通过全量门禁/定向 Runner | manifest 严格成员检查包含 manifest 本身；导入模块 callable 拒绝；观察计数、运行角色、bundle 成员和 verdict 自洽；目标调用单轮超时；PoC 与 evidence 同事务、生成物按 job 幂等复用，TIMEOUT/ENVIRONMENT 按策略重试；agentic finding-report 要求 constraint，Finding 身份以 CWE+精确位置稳定去重。 |
-| 复核 P1-6 | 已修复 | 可重复目标异常结果为 `INCONCLUSIVE`，观测只作为 `SUPPORTING` evidence；`FindingReviewGate` 不从此 observation 推导崩溃、可控输入或匹配环境事实。独立影响判据仍是自动确认所需条件。 |
+| 复核 P1-6 | 已修复 | 可重复目标异常结果为 `INCONCLUSIVE`，观测只作为 `SUPPORTING` evidence；`FindingReviewGate` 不从此 observation 推导崩溃、可控输入或匹配环境事实。独立影响判据仍是自动确认所需条件（鉴权类现已由差分 oracle 满足，见 CR-04）。 |
 
 近期附带修复：`pocs.result` 列 varchar(32) 装不下契约值 `not_exploitable_under_environment`（33 字符），迁移 `0024` 加宽至 64 并同步 models。
 
 本地修复另调整 semantic-audit Finding 身份：约束文本经 NFKC、空白折叠和大小写归一后参与 ID，避免同一源码位置、同一 CWE 下不同安全约束互相冲突。
 
-历史任务的“完成”只代表当时记录的局部产物和验证，不能覆盖上表未解决的问题。旧 `EXPLOITABLE` 记录未追认为新协议结论。
+历史任务的”完成”只代表当时记录的局部产物和验证，不能覆盖上表未解决的问题。旧 `EXPLOITABLE` 记录未追认为新协议结论。
 
 ## 进行中 / 待验证
 
@@ -39,19 +42,18 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 | 事项 | 状态 | 已确认结果与剩余动作 |
 |---|---|---|
 | RealWorld 验收样本登记（FFmpeg CVE-2026-64830 / 7-Zip CVE-2026-48095） | 已登记 | `code/tests/fixtures/realworld/` 登记两个 2026 年披露样本：10 个官方工件 SHA-256 锁定（不入库，`download.sh` 幂等复现）、真值锚点经漏洞版↔修复版源码 diff 核对（FFmpeg 缺陷在 `libavformat/mpeg.c` vobsub 队列索引，8.1.3 修复；7-Zip 在 `NtfsHandler.cpp` ClusterSizeLog 校验，26.01 收紧 `>30`→`>21`）、R1/R2/R3 分轨验收标准。R1 源码审计轨、R2 二进制导入轨待栈内执行验证；R3 目标绑定动态轨依赖 P1 C/C++ BuildProfile。 |
-| ADR-036 P0 目标绑定验证 | 已合并部署 | `main @ f5bc37e` 全量 Python 门禁通过；重建 proof-tool/sandbox-runner/dispatcher/analysis-worker 等镜像并重启应用栈，API ready、Web 200、数据库迁移为 0024。模型驱动的 candidate → target exception observation → **模型 re-review** → confirmed 全链仍需网关配置观察。 |
-| CR-05/06 剩余、CR-07、CR-08 | 进行中 | CR-05 必填约束身份指纹已实现待验证；CR-06 的 256 函数截断、跨版本同路径读取证明仍待处理；其后是全图邻域和聚合截断计数。 |
-| T60 大文件/项目扫描审计优化 | 待验证 | 拉格朗 18MB PE 的 `import/semantic_audit/report` 栈内成功（函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷）。反向规划偶发 `binary_planning_degraded`，需查明原因；聚合上限可能截断，见 CR-08。 |
+| ADR-036 P0 目标绑定验证 | 已合并部署 | `main @ f5bc37e` 全量 Python 门禁通过；本轮在分支上追加 CR-04~08 修复后重建 9 个镜像并重启，API ready、Web 200、数据库迁移 0024、真实 Runner 正反例 3 passed。模型驱动的 candidate → target exception/behavior observation → **模型 re-review** → confirmed 全链仍需网关配置观察。 |
+| T60 大文件/项目扫描审计优化 | 待验证 | 拉格朗 18MB PE 的 `import/semantic_audit/report` 栈内成功（函数 20,000/伪代码 20,000/指令 200,000；共修 7 层缺陷）。反向规划偶发 `binary_planning_degraded`，需查明原因；本轮已落地 CR-08 截断计数与 CR-07 邻域下推，待复跑同样本核对耗时与覆盖计数。 |
 | T59 导入结果复用（缓存）+ 审计基线上下文 | 待验证 | 同输入重导入 20.4 分钟→**0.5 秒**，produced 版本一致；用正常样本补 `analysis_baseline` 真实模型回归。 |
 | T58 大项目前端分页（函数工作台） | 待验证 | 已部署，载荷 27.9MB→178.6KB；待浏览器确认 snow shot 任务页内存/CPU 恢复。 |
 | T56 任务活动反馈与轮询优化 | 待验证 | 已部署，迁移 0022 已应用、activity 端点线上实测；待真实长任务观察心跳档位、审计轮次与轮询节奏。 |
 | T55 多语言源码审计（4→13 种语言） | 待验证 | 已部署，13 个语法包容器内验证通过；待多语言样本栈内 E2E：索引→静态线索→审计。 |
 | T54 agent 上下文分层（ADR-035） | 待验证 | 代码已合并 main（`654b5bc`）；待栈内真实模型回归提示词变更（系统提示新增 journal 使用句）。 |
-| T53 候选 Finding 自动 PoC 验证（ADR-034） | 目标异常语义已收窄 | 模型输出受限 `{driver: {target_callable, input_mode}, crafted_input, control_input, rationale}`；bundle 化执行。可重复目标异常记录为 `verified_trigger` observation，但 POC 结果为 `INCONCLUSIVE`、证据为 `SUPPORTING`，不能单独证明漏洞影响或触发确认。 |
+| T53 候选 Finding 自动 PoC 验证（ADR-034） | 目标异常语义已收窄 | 模型输出受限 `{driver: {target_callable, input_mode}, crafted_input, control_input, rationale}`；bundle 化执行。可重复目标异常记录为 `verified_trigger` observation，但 POC 结果为 `INCONCLUSIVE`、证据为 `SUPPORTING`，不能单独证明漏洞影响或触发确认。本轮新增 `verified_behavior` 差分判定：为鉴权类提供可确认证据链（见 CR-04 行），注入类仍差 `protection_analysis`。 |
 | T52 模型供应商注册表（ADR-033） | 待验证 | 已部署，DeepSeek 仍走 legacy `model_tiers` 回退；待 Web 设置页重建供应商并绑定四个智能体，再用固定样本审计。 |
 | 项目删除 500 修复（自引用表 `created_at` 并列删序） | 待验证 | 已合并 main，用户暂缓镜像重建；待部署并验证界面删除，`IntegrityError`→结构化 409 映射仍可改进。 |
 
-口径校正：T60 的 20,000 函数 / 200,000 指令恰好等于当前聚合上限，不能据此推断该 PE 的事实已全部索引（需 CR-08 的截断计数才能判定覆盖范围）；T58 的前端分页不含 CR-07 的审计/PAIR 后端全量查询。
+口径校正：T60 的 20,000 函数 / 200,000 指令恰好等于当前聚合上限，此前不能据此推断该 PE 的事实已全部索引；本轮 CR-08 落地后，重跑同样本可直接从 result `coverage` 与 baseline `truncated_collections` 读出截断判定（待复跑核对）。T58 的前端分页不含审计/PAIR 后端查询——后者本轮已做入口探针与邻域下推优化（CR-07），工作区仍为单次全量装载。
 
 运维参考：门禁标准环境是 dev 容器（`docker compose -f compose.yaml -f compose.dev.yaml up -d dev`，之后 exec 进容器跑 pytest/ruff/pyright 与栈内 E2E；PG/Redis opt-in 默认已指向栈内 `postgres:5432`/`redis:6379`，无需再传 `VULNWEAVER_TEST_*` 环境变量，其他环境用同名变量覆盖）。切分支/合并后使用 `uv sync --all-packages --no-editable --reinstall` 重建 workspace 包；省略 `--reinstall` 会复用旧 wheel，即使显示卸载/安装也可能静默运行旧代码（Q-003）。
 
@@ -79,12 +81,16 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 - AFL：`AFL_NOOPT` 变量**存在即禁用插桩**（与值无关）；容器宿主 core_pattern 检查用 `AFL_IGNORE_PROBLEMS=1` 跳过。
 - Q-003：Windows 中文路径不用 editable 安装；改动 `packages/` 后容器内需 `uv sync --reinstall-package <pkg>`，合并前全量门禁使用 `uv sync --all-packages --no-editable --reinstall`。2026-10-03 不带 `--reinstall` 的全量同步复用了旧 wheel，造成 29 项伪回归；强制重建后 682 passed。
 - Q-023：Windows 上新建脚本注意 CRLF（容器 shebang 会断）；入口脚本保持 LF。
+- **应用栈重建时 web 容器可能不被替换**：web 镜像分层缓存命中产生相同 image ID 时 `docker compose up -d` 不会重建容器，而 nginx 在启动时解析 `api` 主机名并缓存——API 容器换 IP 后经代理访问一律 502。用 `docker compose up -d --force-recreate web` 刷新。
+- **真实 Runner opt-in 测试的令牌**：栈 `.env` 配置了 `SANDBOX_RUNNER_TOKEN` 后，runner 对工具 spec 查询返回 401；测试需 `-e SANDBOX_RUNNER_URL=http://sandbox-runner:8080 -e SANDBOX_RUNNER_TOKEN=<.env 同值>`，共享 CAS 卷的 `chmod a+rwX` 一次性放开在卷上持久有效。
+- pyright strict 下 dataclass `field(default_factory=list)` 会被推断成 `list[Unknown]`（本仓库 pyright 版本行为）；用 `default_factory=lambda: []` 携带类型。
 - 2026-10-03：TypedDict/StrEnum 从 JSON 反序列化后是裸字符串，枚举成员 `is` 比较恒 False——跨信任边界的数据一律用 `==`/`str()` 归一后比较（本次曾使 verified_trigger 被误判 inconclusive）。
 
 ## 最近验证
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支 `feat/realworld-acceptance-samples`（`92bb0d7`）CR-04~08 修复门禁与栈内部署 | `pnpm run check:python`：**735 passed / 4 skipped**，覆盖率 **81.79%**；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests、`vite build` 通过。4 项跳过为 3 个需 Runner 配置的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**（`SANDBOX_RUNNER_URL`/`SANDBOX_RUNNER_TOKEN` 取自栈 `.env`）。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate exit 0（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` ready、Web 200（web 容器需 `--force-recreate` 刷新 nginx 上游缓存，见经验教训）。 |
 | 2026-10-04 | main `f5bc37e` 修复门禁与本地部署 | `pnpm run check:python`：**711 passed / 4 skipped**，覆盖率 **81.69%**；Ruff、Pyright、contracts `--check` 通过。跳过项为 3 个需 Runner 环境的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate 成功（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` 返回 ready、Web 返回 200、analysis-worker/dispatcher/orchestrator 正常启动。 |
 | 2026-10-03 | main `62315c5` 本地部署 | 重建 api/web/analysis-worker/dispatcher/orchestrator/binary-tools/sandbox-runner 镜像并 `docker compose up -d`；PostgreSQL 与 Redis healthy，迁移和 artifact-init 正常退出，API `/health/ready` 返回 `{"status":"ready"}`，Web `127.0.0.1:8080` 返回 200。未运行 pytest/真实 Runner。 |
 | 2026-10-03 | ADR-036 P0 合并后静态复审（main `04d1281`） | 沿 bundle→entrypoint→worker→review 与手动 proof API 追踪，发现 CR-09–11。未运行新负例的真实 Runner 验收；既有 2 passed 不能排除这些构造。 |
@@ -99,17 +105,17 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：推进仍未关闭的审计覆盖与真实项目验证工作**
+**下一步：CR-04 收尾与真实项目闭环**
 
-1. **CR-05/06/07**：检查约束身份在 semantic 与 agentic 路径一致；补二进制双地址和跨版本同路径读取回归；设计可分页、可续跑的单次回退审计，消除 256 函数截断并保持调用预算可控。测量大样本 SQL、字节量、延迟和内存，再优化重复加载与全图邻域查询。
-2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。同时补 CR-04 剩余：鉴权 `constraint_analysis` 与注入类独立判据来源（身份/权限夹具、受控 sink 观测），无判据类别保持候选。
-3. **P2（CR-08）**：为二进制分析记录输入量、保留量、截断原因与影响范围，并验证覆盖信息进入报告。更广的 benchmark 扩展按 ADR-036 提案阶段推进；SEC-bench Pro 内核轨与现有沙箱红线不兼容，暂不支持。
+1. **CR-04 残余**：注入类 `protection_analysis` 独立来源（候选方向：独立静态工具对 source→sink 路径的保护缺失分析，按 ADR-036 阶段提案）；能证明安全影响的独立崩溃/利用 oracle 立项评估。
+2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。完成后 R3 目标绑定动态轨可执行。
+3. **审查清单回归观察**：用真实模型在栈内走一次 candidate → 差分/异常 observation → 模型 re-review → confirmed（鉴权教学样本），确认 `POC_VERIFICATION_RESULT` 标记与复核提示词兼容；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
 
 **收尾与观察（非阻塞）**
 
-4. 完成上表中 T52–T60 的剩余验证与观察项。
-5. 真实模型驱动的目标绑定全链观察（P0 部署后）：固定教学样本在栈内走 candidate → poc_verification → verified_trigger → 模型 re-review → confirmed 一次，确认 settlement hook 派发与复核提示词与新证据形态兼容。
+4. 完成上表中 T52–T60 的剩余验证与观察项；合并本分支入 main 后按惯例重建镜像。
+5. RealWorld 验收样本 R1/R2 轨在栈内执行验证。
 6. 逆向耗时优化（用户已问询，未立项）：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按输入大小分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②Ghidra program DB 作为派生工件回投沙箱复用（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
 7. 真实壳扩展：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-8. 性能后续候选项：`pair.neighborhood` 全图入 Python 改递归 CTE 下推；agent_runs `save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1。
+8. 性能后续候选项：`agent_runs.save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1；`AuditWorkspace.load` 在超大索引下的内存驻留（现已被入口探针隔离为单次装载）。
 9. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
