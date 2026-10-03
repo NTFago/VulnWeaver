@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import cast
+import io
+import json
+from typing import Any, cast
 
+from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     FindingStatus,
     Job,
@@ -122,7 +125,7 @@ def test_exploit_is_policy_denied_before_sandbox_for_unconfirmed_finding() -> No
     sandbox = _FakeSandbox(_result(SandboxStatus.SUCCEEDED))
     service = ProofExecutionService(sandbox, tool_name="proof", tool_version="1.0.0")
 
-    poc = asyncio.run(
+    run = asyncio.run(
         service.run(
             _request(),
             finding_status=FindingStatus.CANDIDATE,
@@ -132,8 +135,9 @@ def test_exploit_is_policy_denied_before_sandbox_for_unconfirmed_finding() -> No
         )
     )
 
-    assert poc["result"] == "policy_denied"
-    assert poc["status"] == "failed"
+    assert run.observation is None
+    assert run.poc["result"] == "policy_denied"
+    assert run.poc["status"] == "failed"
     assert sandbox.requests == []
 
 
@@ -141,7 +145,7 @@ def test_proof_binds_script_and_pinned_policy_to_sandbox() -> None:
     sandbox = _FakeSandbox(_result(SandboxStatus.SUCCEEDED))
     service = ProofExecutionService(sandbox, tool_name="proof", tool_version="1.0.0")
 
-    poc = asyncio.run(
+    run = asyncio.run(
         service.run(
             _request(),
             finding_status=FindingStatus.CONFIRMED,
@@ -154,9 +158,11 @@ def test_proof_binds_script_and_pinned_policy_to_sandbox() -> None:
     assert request["input_ref"] == _request()["script_ref"]
     assert request["image_digest"] == IMAGE_DIGEST
     assert request["tool_name"] == "proof"
-    assert poc["result"] == "inconclusive"
-    assert poc["status"] == "completed"
-    assert poc["run_log_ref"] == "cas://stdout"
+    # Tool success without a trusted observation still proves nothing.
+    assert run.observation is None
+    assert run.poc["result"] == "inconclusive"
+    assert run.poc["status"] == "completed"
+    assert run.poc["run_log_ref"] == "cas://stdout"
 
 
 def test_sandbox_request_forwards_the_budget_without_clamping() -> None:
@@ -201,7 +207,7 @@ def test_sandbox_timeout_and_cancel_are_not_reported_as_exploitable() -> None:
     ):
         sandbox = _FakeSandbox(_result(status))
         service = ProofExecutionService(sandbox, tool_name="proof", tool_version="1.0.0")
-        poc = asyncio.run(
+        run = asyncio.run(
             service.run(
                 _request(),
                 finding_status=FindingStatus.CONFIRMED,
@@ -209,5 +215,140 @@ def test_sandbox_timeout_and_cancel_are_not_reported_as_exploitable() -> None:
                 cancellation=asyncio.Event(),
             )
         )
-        assert poc["result"] == expected
-        assert poc["status"] in {"failed", "cancelled"}
+        assert run.poc["result"] == expected
+        assert run.poc["status"] in {"failed", "cancelled"}
+
+
+def _observation(verdict: str, finding_id: str = "finding:proof-test") -> dict[str, object]:
+    return {
+        "schema_version": "1.0.0",
+        "id": "observation:proof-test",
+        "kind": "proof_of_concept",
+        "finding_id": finding_id,
+        "verdict": verdict,
+        "verdict_reasons": ["target_crash_attributed"],
+        "driver_digest": "sha256:" + "c" * 64,
+        "target_binding": {
+            "artifact_id": "artifact:proof-test",
+            "version_id": "artifact-version:proof-test",
+            "artifact_kind": "source_archive",
+            "digest": "sha256:" + "d" * 64,
+        },
+        "inputs": [{"name": "inputs/0000", "digest": "sha256:" + "e" * 64, "size_bytes": 4}],
+        "controls": [{"name": "controls/0000", "digest": "sha256:" + "f" * 64, "size_bytes": 4}],
+        "runs": [],
+        "trigger_runs": 3,
+        "replay_runs": 2,
+        "untrusted_claims": None,
+        "verifier": {"name": "proof-entrypoint", "version": "2.0.0", "image_digest": None},
+        "created_at": "2026-10-03T08:00:00Z",
+    }
+
+
+class _ReportSandbox:
+    def __init__(self, outputs: list[dict[str, object]]) -> None:
+        self.outputs = outputs
+
+    async def run(self, request: object, cancellation: asyncio.Event) -> SandboxResult:
+        return cast(
+            SandboxResult,
+            {
+                "schema_version": "1.0.0",
+                "request_id": "sandbox-request:poc:proof-test",
+                "status": SandboxStatus.SUCCEEDED,
+                "exit_code": 0,
+                "stdout_ref": "cas://stdout",
+                "stderr_ref": None,
+                "outputs": self.outputs,
+                "resource_usage": {
+                    "duration_millis": 10,
+                    "cpu_millis": 5,
+                    "memory_bytes": 1024,
+                    "output_bytes": 0,
+                },
+                "failure": None,
+            },
+        )
+
+
+def test_verified_observation_maps_to_exploitable(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    payload = json.dumps(_observation("verified_trigger")).encode("utf-8")
+    report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json",
+                         "object_ref": report.object_ref,
+                         "digest": report.digest,
+                         "size_bytes": report.size_bytes}]),
+        tool_name="proof",
+        tool_version="1.0.0",
+        store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            _request(),
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+        )
+    )
+
+    assert run.poc["result"] == "exploitable"
+    assert run.poc["status"] == "completed"
+    assert isinstance(run.observation, dict)
+    assert run.observation["verdict"] == "verified_trigger"
+
+
+def test_rejected_observation_maps_to_not_exploitable(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    payload = json.dumps(_observation("rejected_under_test_conditions")).encode("utf-8")
+    report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json",
+                         "object_ref": report.object_ref,
+                         "digest": report.digest,
+                         "size_bytes": report.size_bytes}]),
+        tool_name="proof",
+        tool_version="1.0.0",
+        store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            _request(),
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+        )
+    )
+
+    assert run.poc["result"] == "not_exploitable_under_environment"
+    assert run.poc["status"] == "completed"
+
+
+def test_report_bound_to_another_finding_is_ignored(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    payload = json.dumps(_observation("verified_trigger", finding_id="finding:other")).encode()
+    report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json",
+                         "object_ref": report.object_ref,
+                         "digest": report.digest,
+                         "size_bytes": report.size_bytes}]),
+        tool_name="proof",
+        tool_version="1.0.0",
+        store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            _request(),
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+        )
+    )
+
+    assert run.observation is None
+    assert run.poc["result"] == "inconclusive"

@@ -15,6 +15,7 @@ from vulnweaver_contracts import (
     JsonObject,
     Review,
     ToolIdentity,
+    validate_contract,
 )
 from vulnweaver_domain import (
     ConfirmationContext,
@@ -81,6 +82,14 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
     happened against the live sample, and a recorded behavior difference proves a
     reachable path with divergent outcomes. Model explanations never enter this
     branch, so the "model cannot self-confirm" rule is preserved.
+
+    ``VERIFICATION_OBSERVATION`` is the target-bound successor (ADR-036): the
+    trusted entrypoint observed the original target crash through the generated
+    driver with target-attributed stack frames, a clean control input and stable
+    replays. That carries the digest-bound crafted input and the binding to the
+    exact sample version, so a memory-corruption finding gets the full crash
+    fact set; other categories only get the minimal reproduction because a crash
+    alone still proves no source-to-sink path or authorization constraint.
     """
 
     derived: set[str] = set()
@@ -102,7 +111,24 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
             derived.add("minimal_reproduction")
         elif fact.evidence_type is EvidenceType.POC_VERIFICATION_RESULT and reproducible:
             derived.update(_derived_poc_facts(fact, fact_context.category))
+        elif fact.evidence_type is EvidenceType.VERIFICATION_OBSERVATION and reproducible:
+            derived.update(_derived_observation_facts(fact, fact_context.category))
     return frozenset(derived)
+
+
+def _derived_observation_facts(
+    fact: ReviewEvidenceFact, category: FindingCategory
+) -> set[str]:
+    derived = {"minimal_reproduction"}
+    observation = fact.replay_facts.get("observation")
+    if not isinstance(observation, dict) or observation.get("verdict") != "verified_trigger":
+        return derived
+    if category is FindingCategory.MEMORY_CORRUPTION:
+        # verified_trigger already encodes an attributed target crash on every
+        # replay with a clean control input; the inputs array carries the
+        # digest-bound attacker input that drove it.
+        derived.update({"repeatable_crash", "matching_environment", "controllable_input"})
+    return derived
 
 
 def _derived_poc_facts(
@@ -243,6 +269,25 @@ async def build_review_fact_context(
 def _safe_replay_facts(evidence_type: EvidenceType, recipe: JsonObject) -> JsonObject:
     if evidence_type is EvidenceType.MODEL_EXPLANATION:
         return {}
+    if evidence_type is EvidenceType.VERIFICATION_OBSERVATION:
+        # The typed observation is contract-validated before it may carry any
+        # weight; anything malformed degrades to an unusable empty recipe.
+        observation = recipe.get("observation")
+        if isinstance(observation, dict):
+            try:
+                validate_contract("VerificationObservation", observation)
+            except (TypeError, ValueError):
+                observation = None
+        else:
+            observation = None
+        allowed = {
+            key: recipe[key]
+            for key in ("kind", "reproducible")
+            if key in recipe
+        }
+        if observation is not None:
+            allowed["observation"] = observation
+        return allowed
     allowed = {
         key: recipe[key]
         for key in (

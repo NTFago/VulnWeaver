@@ -10,7 +10,7 @@
 
 `IndependentModelReviewer(database, gateway, store).review(finding_id, attempt_key=...)` 是复核应用服务；`ReviewJobExecutor` 已在 `apps/analysis-worker` 装配，Review Job 可通过 Worker 执行。调用方注入复核模型网关和服务自有工件库。
 
-**当前确认链路阻碍（2026-10-03）**：PoC 证据中的 `markers` 在 `reviews._safe_replay_facts` 被过滤，注入类相关事实无法由真实 PoC 证据传至 `FindingPolicy`；鉴权类 `constraint_analysis` 没有自动推导来源。审计侧同函数同 CWE 候选会撞 ID，`finding-report` 也未强制代码读取。详见 [`../../docs/code-review-2026-10-03.md`](../../docs/code-review-2026-10-03.md) 的 CR-04/05/06。
+**确认链路状态（2026-10-03）**：目标绑定 PoC 现产生类型化 `verification_observation` 证据，`reviews._safe_replay_facts` 对其白名单放行（先经 `VerificationObservation` 契约校验），`verified_trigger` 观测为内存类 Finding 推导 `repeatable_crash`/`matching_environment`/`controllable_input`，真实 DB「证据→事实→policy→confirmed」回归通过；旧自报 `markers` 仍被过滤、旧 `EXPLOITABLE` 记录兼容读取但无证明力。**剩余阻碍**：鉴权类 `constraint_analysis` 与注入类 `source_to_sink_path` 没有独立判据来源；审计侧同函数同 CWE 候选会撞 ID、`finding-report` 读取校验仍需加强。详见 [`../../docs/code-review-2026-10-03.md`](../../docs/code-review-2026-10-03.md) 的 CR-04/05/06。
 
 - 复用 v1 `Review` Schema，只接受模型的 outcome/rationale；Finding/Review 身份、模型来源、时间与历史关联由服务确定。
 - 输入来自 `ReviewFactContext`，排除静态审计自由推理、模型解释及历史复核结论。`SourceReviewFactLoader` 只读取任务输入列表中且属于同一项目的源码归档，校验摘要后按位置裁剪源码，经过网关脱敏送入模型。缺失或截断的源码不能支持确认或判误报，服务将此类提议降为不可验证。

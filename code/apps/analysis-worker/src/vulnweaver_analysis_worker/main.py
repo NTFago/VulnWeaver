@@ -679,13 +679,14 @@ def _proof_executor(
         client,
         tool_name=os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
         tool_version=os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+        store=store,
     )
     generator = (
         ExploitScriptGenerator(database, model_gateway, store)
         if model_gateway is not None
         else None
     )
-    return ProofJobExecutor(database, service, script_generator=generator)
+    return ProofJobExecutor(database, service, store=store, script_generator=generator)
 
 
 def _poc_scheduler(

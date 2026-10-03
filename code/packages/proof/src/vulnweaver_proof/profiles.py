@@ -82,7 +82,7 @@ def proof_command_profile(
             raise ValueError("proof kind is unsupported")
         return (
             executable,
-            "--script",
+            "--bundle",
             str(input_path),
             "--finding-id",
             finding_id,

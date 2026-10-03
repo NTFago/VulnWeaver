@@ -95,6 +95,7 @@ class EvidenceType(StrEnum):
     CRASH_RECORD = 'crash_record'
     REPRODUCTION_RESULT = 'reproduction_result'
     POC_VERIFICATION_RESULT = 'poc_verification_result'
+    VERIFICATION_OBSERVATION = 'verification_observation'
     EXPLOIT_RECORD = 'exploit_record'
     REVIEW_CONCLUSION = 'review_conclusion'
     HUMAN_CONFIRMATION = 'human_confirmation'
@@ -216,6 +217,20 @@ class PairEdgeType(StrEnum):
     DATA_FLOW = 'data_flow'
     TAINT = 'taint'
     XREF = 'xref'
+
+class ExecutionBundleKind(StrEnum):
+    PROOF = 'proof'
+
+class VerificationOutcome(StrEnum):
+    VERIFIED_TRIGGER = 'verified_trigger'
+    REJECTED_UNDER_TEST_CONDITIONS = 'rejected_under_test_conditions'
+    INCONCLUSIVE = 'inconclusive'
+    ENVIRONMENT_ERROR = 'environment_error'
+
+class VerificationRunRole(StrEnum):
+    CONTROL = 'control'
+    TRIGGER = 'trigger'
+    REPLAY = 'replay'
 
 class CrashRecord(TypedDict):
     schema_version: SchemaVersion
@@ -763,6 +778,55 @@ class ProofRequest(TypedDict):
     permission_mode: PermissionMode
     resource_budget: ResourceBudget
     timeout_seconds: int
+
+class BundleFileMember(TypedDict):
+    name: str
+    digest: Sha256Digest
+    size_bytes: int
+
+class TargetBinding(TypedDict):
+    artifact_id: Identifier
+    version_id: Identifier
+    artifact_kind: ArtifactKind
+    digest: Sha256Digest
+
+class ExecutionBundleManifest(TypedDict):
+    schema_version: SchemaVersion
+    bundle_id: Identifier
+    kind: ExecutionBundleKind
+    driver: BundleFileMember
+    target: BundleFileMember
+    target_binding: TargetBinding
+    inputs: NotRequired[list[BundleFileMember]]
+    controls: NotRequired[list[BundleFileMember]]
+    created_at: str
+
+class VerificationRun(TypedDict):
+    role: VerificationRunRole
+    input_name: str
+    exit_code: int | None
+    signal: int | None
+    duration_millis: int
+    target_frames: bool
+    timed_out: bool
+
+class VerificationObservation(TypedDict):
+    schema_version: SchemaVersion
+    id: Identifier
+    kind: PocKind
+    finding_id: Identifier
+    verdict: VerificationOutcome
+    verdict_reasons: list[str]
+    driver_digest: Sha256Digest
+    target_binding: TargetBinding
+    inputs: list[BundleFileMember]
+    controls: list[BundleFileMember]
+    runs: list[VerificationRun]
+    trigger_runs: int
+    replay_runs: int
+    untrusted_claims: NotRequired[JsonObject | None]
+    verifier: ToolIdentity
+    created_at: str
 
 class Review(TypedDict):
     schema_version: SchemaVersion

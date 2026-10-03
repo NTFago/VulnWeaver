@@ -1,12 +1,12 @@
 # 面向真实世界 benchmark 的架构改进方案
 
-日期：2026-10-03。状态：架构方向已接受，阶段性安全修复实施中；目标绑定和 benchmark 尚未实现、未运行。代码基线为 `efdeb83`；已确认缺陷见 [代码审查](code-review-2026-10-03.md)，重大接口变更决策见 [ADR-036](adr/036-target-bound-verification-and-benchmark-evaluation.md)。下文的验收条件是未来工作要求，不是已有性能结果。
+日期：2026-10-03。状态：架构方向已接受；**P0 目标绑定验证已实现并通过真实 Runner 正反例验收**（见 [ADR-036](adr/036-target-bound-verification-and-benchmark-evaluation.md) 与根目录 `DEVELOPMENT_STATUS.md`；当前能力边界为 Python 源码样本目标）；真实 C/C++ 项目构建、InvestigationCase 与 benchmark 尚未实现、未运行。代码基线为 `efdeb83`；已确认缺陷见 [代码审查](code-review-2026-10-03.md)。下文的验收条件除已注明 P0 完成的外，是未来工作要求，不是已有性能结果。
 
 ## 1. 结论与能力边界
 
 保留 PostgreSQL、CAS、Outbox、租约 Worker、Tool Registry、Policy Engine 和 Sandbox Runner。重建三个核心环节：**真实目标构建、围绕可证伪假设的调查、独立判定的验证**；增加与调查隔离的评测面。继续增加模型轮次、语言数量或反编译工具，不能解决目前结果缺乏目标绑定的问题。
 
-前次 CR-01 至 CR-08 均未修复。修完它们只能恢复基本可信度，不能自动获得真实项目挖掘能力。本轮补充检查发现：`analysis-worker/main.py::_fuzz_target` 给模型的是源码摘录，并要求生成独立 harness；`fuzzing/job_executor.py::execute` 将执行输入替换为编译后的 harness；`fuzz-tool/vulnweaver-fuzz-entrypoint` 的 harness 编译只编译 `harness.c`，未在该路径构建、链接原项目。这能测试生成程序，却不足以证明原项目存在相同漏洞。这个能力缺口也必须进入第一阶段。
+2026-10-03 更新：CR-01/02/03 已在 P0 修复（proof 链路目标绑定与独立判定），CR-04 部分修复（鉴权/注入独立判据仍缺），CR-05–08 仍开放。修完全部只能恢复基本可信度，不能自动获得真实项目挖掘能力。本轮补充检查发现（仍开放的 fuzz 侧缺口）：`analysis-worker/main.py::_fuzz_target` 给模型的是源码摘录，并要求生成独立 harness；`fuzzing/job_executor.py::execute` 将执行输入替换为编译后的 harness；`fuzz-tool/vulnweaver-fuzz-entrypoint` 的 harness 编译只编译 `harness.c`，未在该路径构建、链接原项目。这能测试生成程序，却不足以证明原项目存在相同漏洞。这个能力缺口在 P1 进入第一阶段。
 
 首个目标范围应是 **Linux 用户态 C/C++ 项目、可固定构建、存在输入接口的解析器或库**。优先复用 benchmark 提供的原项目 fuzz target；随后扩展浏览器用户态和 Web 逻辑缺陷。语言能索引不等于漏洞能验证。PE 静态分析能力不等于 Windows 原生动态验证能力；Linux 内核 benchmark 当前不符合既定沙箱边界，应明确记为不支持。
 
