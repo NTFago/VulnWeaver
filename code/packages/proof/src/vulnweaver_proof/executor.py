@@ -15,7 +15,9 @@ from vulnweaver_contracts import (
     Artifact,
     ArtifactKind,
     ArtifactVersion,
+    Evidence,
     EvidenceRelation,
+    ExecutionBundleManifest,
     FailureKind,
     Finding,
     FindingEvidence,
@@ -36,12 +38,11 @@ from vulnweaver_contracts import (
     TargetBinding,
     ToolIdentity,
     VerificationObservation,
-    VerificationOutcome,
     WorkerResult,
     validate_contract,
 )
 from vulnweaver_domain import evaluate_exploit_eligibility
-from vulnweaver_persistence import Database, EntityNotFound, Repositories
+from vulnweaver_persistence import Database, EntityConflict, EntityNotFound, Repositories
 
 from .auto_exploit import (
     POC_VERIFICATION_BASELINE,
@@ -50,12 +51,18 @@ from .auto_exploit import (
     GeneratedExploit,
     stable_id,
 )
-from .bundle import ExecutionBundleError, build_execution_bundle
+from .bundle import (
+    ExecutionBundleError,
+    build_execution_bundle,
+    load_execution_bundle_manifest,
+)
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 from .verifier import (
     REPORT_FILE_NAME,
     ObservationError,
     evidence_from_observation,
+    observation_is_consistent,
+    observation_is_reproducible,
     parse_observation,
     poc_result_from_observation,
 )
@@ -151,12 +158,25 @@ class ProofJobExecutor:
                 kind=kind,
                 expected_target_binding=expected_target_binding,
             )
-            poc = run.poc
+            poc = cast(Poc, {**run.poc, "created_at": job["created_at"]})
+            evidence = self._observation_evidence(job, request, run)
+            evidence_ids: list[str] = []
             async with self._database.transaction() as repositories:
                 await repositories.pocs.create(poc)
-            evidence_ids = await self._persist_observation_evidence(
-                job, finding, request, run
-            )
+                if evidence is not None:
+                    await repositories.evidence.create(evidence)
+                    await repositories.findings.link_evidence(
+                        FindingEvidence(
+                            schema_version=SchemaVersion.VALUE_1_0_0,
+                            finding_id=finding["id"],
+                            evidence_id=evidence["id"],
+                            relation=EvidenceRelation.SUPPORTS,
+                            weight=1.0,
+                            created_by="vulnweaver-proof-verifier",
+                            created_at=evidence["created_at"],
+                        )
+                    )
+                    evidence_ids.append(evidence["id"])
         except ScriptRefOwnershipError as error:
             return _worker_failure(
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
@@ -167,6 +187,22 @@ class ProofJobExecutor:
             return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
         except (TypeError, ValueError) as error:
             return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
+        except ArtifactStoreError as error:
+            return _worker_failure(
+                job,
+                f"proof.{error.code}",
+                FailureKind.ENVIRONMENT,
+                error.message,
+                retryable=error.retryable,
+            )
+        except EntityConflict as error:
+            return _worker_failure(
+                job, "proof.persistence_conflict", FailureKind.INTERNAL, str(error)
+            )
+        except TimeoutError as error:
+            return _worker_failure(
+                job, "proof.execution_timeout", FailureKind.TIMEOUT, str(error), retryable=True
+            )
         status = JobStatus.CANCELLED if poc["status"] is PocStatus.CANCELLED else (
             JobStatus.SUCCEEDED if poc["status"] is PocStatus.COMPLETED else JobStatus.FAILED
         )
@@ -176,57 +212,31 @@ class ProofJobExecutor:
             status=status,
             produced_artifact_version_ids=produced_version_ids,
             evidence_ids=evidence_ids,
-            failure=None if status is not JobStatus.FAILED else StructuredFailure(
-                code=f"proof.{poc['result'] or 'failed'}",
-                kind=(
-                    FailureKind.POLICY
-                    if poc["result"] is PocResult.POLICY_DENIED
-                    else FailureKind.TOOL
-                ),
-                message="proof execution did not complete successfully",
-                retryable=False,
-                details={},
-            ),
+            failure=None if status is not JobStatus.FAILED else _poc_failure(poc),
         )
 
-    async def _persist_observation_evidence(
+    def _observation_evidence(
         self,
         job: Job,
-        finding: Finding,
         request: ProofRequest,
         run: ProofRun,
-    ) -> list[str]:
-        """Record STRONG evidence only for independently verified triggers."""
+    ) -> Evidence | None:
+        """Build diagnostic evidence for a reproducible target observation."""
 
         observation = run.observation
         if observation is None:
-            return []
-        if str(observation["verdict"]) != VerificationOutcome.VERIFIED_TRIGGER:
-            return []
+            return None
+        if not observation_is_reproducible(observation):
+            return None
         assert self._store is not None  # guarded by _prepare bundle construction
         evidence = evidence_from_observation(
             observation,
             evidence_id=stable_id("evidence", "verification-observation", job["id"]),
             bundle_ref=request["script_ref"],
             bundle_digest=self._store.verify(request["script_ref"]).digest,
-            stdout_ref=run.sandbox_result["stdout_ref"],
-            stderr_ref=run.sandbox_result["stderr_ref"],
-            created_at=datetime.now(UTC).isoformat(),
+            created_at=job["created_at"],
         )
-        async with self._database.transaction() as repositories:
-            await repositories.evidence.create(evidence)
-            await repositories.findings.link_evidence(
-                FindingEvidence(
-                    schema_version=SchemaVersion.VALUE_1_0_0,
-                    finding_id=finding["id"],
-                    evidence_id=evidence["id"],
-                    relation=EvidenceRelation.SUPPORTS,
-                    weight=1.0,
-                    created_by="vulnweaver-proof-verifier",
-                    created_at=evidence["created_at"],
-                )
-            )
-        return [evidence["id"]]
+        return evidence
 
     async def _target_binding(
         self, repositories: Repositories, finding: Finding
@@ -270,7 +280,7 @@ class ProofJobExecutor:
             target_ref=target_ref,
             input_refs=[generated.crafted_input_ref],
             control_refs=[generated.control_input_ref],
-            created_at=datetime.now(UTC).isoformat(),
+            created_at=job["created_at"],
         )
         artifact_id = stable_id("artifact", "execution-bundle", job["id"])
         version_id = stable_id(
@@ -287,7 +297,7 @@ class ProofJobExecutor:
                         project_id=artifact["project_id"],
                         kind=ArtifactKind.DERIVED,
                         current_version_id=version_id,
-                        created_at=job["updated_at"],
+                        created_at=job["created_at"],
                     )
                 )
             else:
@@ -320,7 +330,7 @@ class ProofJobExecutor:
                             for member in bundle.manifest.get("controls") or ()
                         ],
                     },
-                    "created_at": job["updated_at"],
+                    "created_at": job["created_at"],
                 },
             )
             await repositories.artifacts.add_version(version)
@@ -435,7 +445,12 @@ def _producer_identity() -> ToolIdentity:
 
 
 def _worker_failure(
-    job: Job, code: str, kind: FailureKind, message: str = "proof job rejected"
+    job: Job,
+    code: str,
+    kind: FailureKind,
+    message: str = "proof job rejected",
+    *,
+    retryable: bool = False,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
@@ -444,8 +459,27 @@ def _worker_failure(
         produced_artifact_version_ids=[],
         evidence_ids=[],
         failure=StructuredFailure(
-            code=code, kind=kind, message=message, retryable=False, details={}
+            code=code, kind=kind, message=message, retryable=retryable, details={}
         ),
+    )
+
+
+def _poc_failure(poc: Poc) -> StructuredFailure:
+    result = poc["result"]
+    if result is PocResult.TIMEOUT:
+        kind, retryable = FailureKind.TIMEOUT, True
+    elif result is PocResult.ENVIRONMENT_ERROR:
+        kind, retryable = FailureKind.ENVIRONMENT, True
+    elif result is PocResult.POLICY_DENIED:
+        kind, retryable = FailureKind.POLICY, False
+    else:
+        kind, retryable = FailureKind.TOOL, False
+    return StructuredFailure(
+        code=f"proof.{result or 'failed'}",
+        kind=kind,
+        message="proof execution did not complete successfully",
+        retryable=retryable,
+        details={},
     )
 
 
@@ -561,8 +595,19 @@ class ProofExecutionService:
             observation = parse_observation(json.loads(buffer.getvalue().decode("utf-8")))
         except (ArtifactStoreError, OSError, UnicodeDecodeError, ValueError, ObservationError):
             return None
+        try:
+            manifest, _ = load_execution_bundle_manifest(self._store, request["script_ref"])
+        except (ArtifactStoreError, OSError, ValueError, ExecutionBundleError):
+            return None
         # A report for a different request or finding is never trusted.
         if expected_target_binding is None:
+            return None
+        if manifest["finding_id"] != request["finding_id"]:
+            return None
+        if any(
+            manifest["target_binding"].get(key) != expected_target_binding.get(key)
+            for key in ("artifact_id", "version_id", "artifact_kind", "digest")
+        ):
             return None
         if observation["finding_id"] != request["finding_id"]:
             return None
@@ -573,6 +618,16 @@ class ProofExecutionService:
             observed_binding.get(key) != expected_target_binding.get(key)
             for key in ("artifact_id", "version_id", "artifact_kind", "digest")
         ):
+            return None
+        if observation["driver_digest"] != manifest["driver"]["digest"]:
+            return None
+        if observation["inputs"] != manifest.get("inputs", []):
+            return None
+        if observation["controls"] != manifest.get("controls", []):
+            return None
+        if not _observation_runs_match_bundle(observation, manifest):
+            return None
+        if not observation_is_consistent(observation):
             return None
         return observation
 
@@ -644,6 +699,40 @@ def _denied_result(request: ProofRequest) -> SandboxResult:
     )
 
 
+def _observation_runs_match_bundle(
+    observation: VerificationObservation, manifest: ExecutionBundleManifest
+) -> bool:
+    expected = [
+        ("control", member["name"].rsplit("/", 1)[-1])
+        for member in manifest.get("controls", [])
+    ] + [
+        ("trigger", member["name"].rsplit("/", 1)[-1])
+        for member in manifest.get("inputs", [])
+    ]
+    runs = observation["runs"]
+    actual = [(str(run["role"]), run["input_name"]) for run in runs]
+    if actual[:len(expected)] != expected:
+        return False
+    replay = actual[len(expected):]
+    if len(replay) not in {0, 2} or any(role != "replay" for role, _ in replay):
+        return False
+    if replay:
+        triggering = next(
+            (
+                run
+                for run in runs
+                if run["role"] == "trigger"
+                and run["exit_code"] not in (0, None)
+                and run["target_frames"]
+                and not run["timed_out"]
+            ),
+            None,
+        )
+        if triggering is None or any(name != triggering["input_name"] for _, name in replay):
+            return False
+    return True
+
+
 def _poc_status(status: SandboxStatus) -> PocStatus:
     if status == SandboxStatus.SUCCEEDED:
         return PocStatus.COMPLETED
@@ -663,4 +752,10 @@ def _poc_result(result: SandboxResult) -> PocResult:
         return PocResult.POLICY_DENIED
     if status == SandboxStatus.CANCELLED:
         return PocResult.ENVIRONMENT_ERROR
+    failure = result["failure"]
+    if failure is not None:
+        if failure["kind"] == FailureKind.TIMEOUT:
+            return PocResult.TIMEOUT
+        if failure["kind"] in {FailureKind.ENVIRONMENT, FailureKind.DEPENDENCY}:
+            return PocResult.ENVIRONMENT_ERROR
     return PocResult.TOOL_ERROR

@@ -174,6 +174,7 @@ def test_source_search_counts_unique_files_before_applying_file_budget() -> None
             arguments={
                 "cwe_id": "CWE-95", "title": "second file issue", "severity": "high",
                 "path": "b.py", "start_line": 1, "rationale": "needle in code",
+                "constraint": "untrusted input must not reach eval",
             },
         )
         reporter = AuditStepExecutor(workspace)
@@ -328,6 +329,7 @@ def test_audit_tools_register_and_enforce_read_only_boundaries() -> None:
                 "title": "path traversal",
                 "severity": "high",
                 "rationale": "input reaches the sink through ../ segments",
+                "constraint": "path components must remain under the project root",
                 "path": "src/main.c",
                 "start_line": 4,
             },
@@ -336,6 +338,17 @@ def test_audit_tools_register_and_enforce_read_only_boundaries() -> None:
         == ()
     )
     assert "invalid_tool_arguments" in evaluate({"limit": 5000}, tool="code-function-list")
+    assert "invalid_tool_arguments" in evaluate(
+        {
+            "cwe_id": "CWE-95",
+            "title": "eval on request data",
+            "severity": "high",
+            "rationale": "request data reaches eval",
+            "path": "src/app.py",
+            "start_line": 4,
+        },
+        tool="finding-report",
+    )
 
 
 def test_workspace_reads_list_shaped_pseudocode(
@@ -424,6 +437,7 @@ def test_agent_investigates_then_reports_and_projection_anchors(
                                 "path": real_path,
                                 "start_line": 2,
                                 "rationale": "request data reaches eval",
+                                "constraint": "untrusted request data must not reach eval",
                                 "verification_request": "fuzz",
                             },
                             step_id="s3",
@@ -438,6 +452,7 @@ def test_agent_investigates_then_reports_and_projection_anchors(
                                 "path": "elsewhere/ghost.py",
                                 "start_line": 7,
                                 "rationale": "hallucinated",
+                                "constraint": "reported source location must exist in the index",
                             },
                             step_id="s4",
                             refs=[function_version],
@@ -540,6 +555,7 @@ def test_agent_degrades_and_the_auditor_falls_back_to_single_shot(
                             "path": real_path,
                             "start_line": 2,
                             "rationale": "fixed-prompt finding",
+                            "constraint": "untrusted request data must not reach eval",
                         }
                     ],
                 }
@@ -977,6 +993,7 @@ def _interrupted_checkpoint_state(job_id: str, run_id: str, function_version: st
                     "title": "eval on request data",
                     "severity": "high",
                     "rationale": "request data reaches eval",
+                    "constraint": "untrusted request data must not reach eval",
                     "path": "src/app.py",
                     "start_line": 2,
                     "end_line": None,

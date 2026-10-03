@@ -12,6 +12,7 @@ from uuid import uuid4
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     ArtifactKind,
+    FailureKind,
     Finding,
     FindingCategory,
     FindingStatus,
@@ -31,6 +32,7 @@ from vulnweaver_proof import (
     PocVerificationScheduler,
     ProofExecutionService,
     ProofJobExecutor,
+    load_execution_bundle_manifest,
 )
 
 from tests.persistence.factories import artifact, artifact_version, job, project, task
@@ -45,6 +47,7 @@ CONTROL_INPUT = "[a]b=c\n"
 
 class FakePocModel:
     def __init__(self, output: dict[str, object] | None = None) -> None:
+        self.calls = 0
         self._output = output or {
             "schema_version": "1.0.0",
             "driver": {"target_callable": "parse", "input_mode": "text"},
@@ -54,6 +57,7 @@ class FakePocModel:
         }
 
     async def complete_structured(self, **kwargs: object) -> ModelCallResult:
+        self.calls += 1
         run = {
             "schema_version": "1.0.0",
             "id": "agent-run:stub",
@@ -99,13 +103,95 @@ class MarkerSandbox:
         )
 
 
+class TimeoutSandbox:
+    async def run(self, request: object, cancellation: object) -> SandboxResult:
+        return cast(
+            SandboxResult,
+            {
+                "schema_version": "1.0.0",
+                "request_id": "sandbox-request:timeout",
+                "status": SandboxStatus.TIMED_OUT,
+                "exit_code": None,
+                "stdout_ref": None,
+                "stderr_ref": None,
+                "outputs": [],
+                "resource_usage": {
+                    "duration_millis": 1000,
+                    "cpu_millis": 0,
+                    "memory_bytes": 0,
+                    "output_bytes": 0,
+                },
+                "failure": None,
+            },
+        )
+
+
 class ObservationSandbox:
     """Completes the tool run with a trusted observation report in CAS."""
 
     def __init__(self, store: LocalContentAddressedStore, observation: dict[str, object]) -> None:
-        payload = json.dumps(observation).encode("utf-8")
-        stored = store.put_stream(io.BytesIO(payload), max_bytes=1024 * 1024)
-        self._outputs = [
+        self._store = store
+        self._observation = observation
+        self.calls = 0
+
+    async def run(self, request: object, cancellation: object) -> SandboxResult:
+        self.calls += 1
+        sandbox_request = cast(dict[str, object], request)
+        manifest, _ = load_execution_bundle_manifest(
+            self._store, str(sandbox_request["input_ref"])
+        )
+        observation = dict(self._observation)
+        observation["driver_digest"] = manifest["driver"]["digest"]
+        observation["target_binding"] = dict(manifest["target_binding"])
+        observation["inputs"] = [dict(member) for member in manifest.get("inputs") or []]
+        observation["controls"] = [dict(member) for member in manifest.get("controls") or []]
+        verified = observation["verdict"] == "verified_trigger"
+        runs: list[dict[str, object]] = [
+            {
+                "role": "control",
+                "input_name": member["name"].rsplit("/", 1)[-1],
+                "exit_code": 0,
+                "signal": None,
+                "duration_millis": 3 + self.calls,
+                "target_frames": False,
+                "timed_out": False,
+            }
+            for member in manifest.get("controls") or []
+        ]
+        input_members = list(manifest.get("inputs") or [])
+        first_input_name = input_members[0]["name"].rsplit("/", 1)[-1]
+        runs.extend(
+            {
+                "role": "trigger",
+                "input_name": member["name"].rsplit("/", 1)[-1],
+                "exit_code": 10 if verified and index == 0 else 0,
+                "signal": None,
+                "duration_millis": 8 + self.calls,
+                "target_frames": verified and index == 0,
+                "timed_out": False,
+            }
+            for index, member in enumerate(input_members)
+        )
+        if verified:
+            runs.extend(
+                {
+                    "role": "replay",
+                    "input_name": first_input_name,
+                    "exit_code": 10,
+                    "signal": None,
+                    "duration_millis": 7 + self.calls,
+                    "target_frames": True,
+                    "timed_out": False,
+                }
+                for _ in range(2)
+            )
+        observation["runs"] = runs
+        observation["trigger_runs"] = 3 if verified else 0
+        observation["replay_runs"] = 2 if verified else 0
+        stored = self._store.put_stream(
+            io.BytesIO(json.dumps(observation).encode("utf-8")), max_bytes=1024 * 1024
+        )
+        outputs = [
             {
                 "path": "execution-report.json",
                 "object_ref": stored.object_ref,
@@ -113,8 +199,6 @@ class ObservationSandbox:
                 "size_bytes": stored.size_bytes,
             }
         ]
-
-    async def run(self, request: object, cancellation: object) -> SandboxResult:
         return cast(
             SandboxResult,
             {
@@ -124,7 +208,7 @@ class ObservationSandbox:
                 "exit_code": 0,
                 "stdout_ref": None,
                 "stderr_ref": None,
-                "outputs": self._outputs,
+                "outputs": outputs,
                 "resource_usage": {
                     "duration_millis": 10,
                     "cpu_millis": 5,
@@ -276,7 +360,7 @@ def _poc_job(task_id: str, finding_id: str, suffix: str) -> Job:
 TARGET_SOURCE = FIXTURES / "nested_config_parser.py"
 
 
-def test_poc_job_with_verified_trigger_creates_strong_target_bound_evidence(
+def test_poc_job_records_target_exception_as_weak_diagnostic_evidence(
     persistence_database_url: str, tmp_path: object
 ) -> None:
     async def scenario() -> None:
@@ -294,7 +378,7 @@ def test_poc_job_with_verified_trigger_creates_strong_target_bound_evidence(
             "finding_id": finding_id,
             "verdict": "verified_trigger",
             "verdict_reasons": [
-                "target_crash_attributed", "control_input_clean", "replay_stable",
+                "target_exception_attributed", "control_input_clean", "replay_stable",
             ],
             "driver_digest": "sha256:" + "c" * 64,
             "target_binding": {
@@ -330,22 +414,30 @@ def test_poc_job_with_verified_trigger_creates_strong_target_bound_evidence(
             },
             "created_at": TIMESTAMP,
         }
+        model = FakePocModel()
+        sandbox = ObservationSandbox(store, observation)
         executor = ProofJobExecutor(
             database,
             ProofExecutionService(
-                ObservationSandbox(store, observation),
+                sandbox,
                 tool_name="proof-tool",
                 tool_version="1.0.0",
                 store=store,
             ),
             store=store,
-            script_generator=ExploitScriptGenerator(database, FakePocModel(), store),
+            script_generator=ExploitScriptGenerator(database, model, store),
         )
         try:
             proof_job = _poc_job(task_id, finding_id, suffix)
             result = await executor.execute(proof_job, asyncio.Event())
             assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
             assert len(result["evidence_ids"]) == 1
+            retry_job = cast(Job, {**proof_job, "attempt": 1, "updated_at": "2026-10-04T08:00:00Z"})
+            retried = await executor.execute(retry_job, asyncio.Event())
+            assert retried["status"] is JobStatus.SUCCEEDED, retried["failure"]
+            assert retried["evidence_ids"] == result["evidence_ids"]
+            assert model.calls == 1
+            assert sandbox.calls == 2
             async with database.transaction() as repositories:
                 pocs = await repositories.pocs.list_for_finding(finding_id)
                 relations = await repositories.findings.list_evidence_relations(finding_id)
@@ -356,16 +448,21 @@ def test_poc_job_with_verified_trigger_creates_strong_target_bound_evidence(
                 )
                 assert bundle_version is not None
                 bundle_artifact = await repositories.artifacts.get(bundle_version["artifact_id"])
-            assert pocs[0]["result"] == "exploitable"
+                bundle_versions = await repositories.artifacts.list_versions(
+                    bundle_version["artifact_id"]
+                )
+            assert pocs[0]["result"] == "inconclusive"
             assert pocs[0]["status"] == "completed"
             assert [item["evidence_id"] for item in relations] == result["evidence_ids"]
             assert evidence["type"] == "verification_observation"
-            assert evidence["strength"] == "strong"
+            assert evidence["strength"] == "supporting"
             assert evidence["replay_recipe"]["kind"] == "verification_observation"
             assert evidence["replay_recipe"]["reproducible"] is True
             # CR-03 invariant: the analyzed sample keeps its current version.
             assert sample["current_version_id"] == f"artifact-version:{suffix}"
             assert bundle_artifact["kind"] is ArtifactKind.DERIVED
+            assert len(pocs) == 1
+            assert len(bundle_versions) == 1
         finally:
             await database.dispose()
 
@@ -401,6 +498,41 @@ def test_poc_job_without_observation_stays_inconclusive_and_evidence_free(
                 relations = await repositories.findings.list_evidence_relations(finding_id)
             assert pocs[0]["result"] == "inconclusive"
             assert relations == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_runner_timeout_is_structured_and_retryable(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix = uuid4().hex
+        store = LocalContentAddressedStore(cast(Any, tmp_path))
+        task_id, finding_id = await _seed_finding(
+            database, suffix, store=store,
+            target_text=TARGET_SOURCE.read_text(encoding="utf-8"),
+        )
+        executor = ProofJobExecutor(
+            database,
+            ProofExecutionService(
+                TimeoutSandbox(), tool_name="proof-tool", tool_version="1.0.0", store=store
+            ),
+            store=store,
+            script_generator=ExploitScriptGenerator(database, FakePocModel(), store),
+        )
+        try:
+            proof_job = _poc_job(task_id, finding_id, suffix)
+            proof_job["retry_policy"]["retryable_failure_kinds"] = [
+                FailureKind.TIMEOUT,
+                FailureKind.ENVIRONMENT,
+            ]
+            result = await executor.execute(proof_job, asyncio.Event())
+            assert result["status"] is JobStatus.FAILED
+            assert result["failure"]["kind"] is FailureKind.TIMEOUT
+            assert result["failure"]["retryable"] is True
         finally:
             await database.dispose()
 

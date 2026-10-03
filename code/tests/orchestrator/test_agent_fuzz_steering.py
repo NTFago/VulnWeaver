@@ -47,6 +47,7 @@ def _report_step(refs: list[str], *, fuzz: bool, index: int):
         "path": "src/app.py",
         "start_line": 2,
         "rationale": "attacker data reaches the sink",
+        "constraint": "untrusted input must not reach the sensitive sink",
     }
     if fuzz:
         arguments["verification_request"] = "fuzz"

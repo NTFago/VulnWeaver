@@ -1,0 +1,112 @@
+#!/usr/local/bin/python3
+"""Execute one selected function in a disposable child process."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import types
+from pathlib import Path
+
+TARGET_EXCEPTION_EXIT_CODE = 10
+WORKER_ERROR_EXIT_CODE = 11
+CALLABLE_NOT_FOUND_EXIT_CODE = 12
+
+
+def _nested_code_objects(code: types.CodeType) -> set[types.CodeType]:
+    result = {code}
+    for value in code.co_consts:
+        if isinstance(value, types.CodeType):
+            result.update(_nested_code_objects(value))
+    return result
+
+
+def _resolve_target_callable(
+    namespace: dict[str, object], path: str
+) -> tuple[types.FunctionType, tuple[object, ...]] | None:
+    parts = path.split(".")
+    current: object = namespace
+    call_prefix: tuple[object, ...] = ()
+    for index, part in enumerate(parts):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, type):
+            owner = current
+            current = vars(owner).get(part)
+            if isinstance(current, staticmethod):
+                current = current.__func__
+            elif isinstance(current, classmethod):
+                call_prefix = (owner,)
+                current = current.__func__
+        else:
+            return None
+        if current is None:
+            return None
+        if index < len(parts) - 1 and not isinstance(current, type):
+            return None
+    if not isinstance(current, types.FunctionType):
+        return None
+    return current, call_prefix
+
+
+def _run(target_path: Path, input_path: Path, invocation_path: Path, digest: str) -> int:
+    try:
+        invocation = json.loads(invocation_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(invocation, dict)
+            or set(invocation) != {"target_callable", "input_mode"}
+            or not isinstance(invocation.get("target_callable"), str)
+        ):
+            return WORKER_ERROR_EXIT_CODE
+        input_bytes = input_path.read_bytes()
+        mode = invocation["input_mode"]
+        if mode == "text":
+            value: object = input_bytes.decode("utf-8")
+        elif mode == "json":
+            value = json.loads(input_bytes)
+        elif mode == "bytes":
+            value = input_bytes
+        else:
+            return WORKER_ERROR_EXIT_CODE
+        source = target_path.read_bytes().decode("utf-8")
+        filename = f"vulnweaver-target://{digest.removeprefix('sha256:')}"
+        module_code = compile(source, filename, "exec")
+        namespace: dict[str, object] = {
+            "__name__": "__vulnweaver_target__",
+            "__file__": filename,
+        }
+        exec(module_code, namespace, namespace)
+        resolved = _resolve_target_callable(namespace, invocation["target_callable"])
+        if resolved is None:
+            return CALLABLE_NOT_FOUND_EXIT_CODE
+        target_callable, call_prefix = resolved
+        module_functions = _nested_code_objects(module_code) - {module_code}
+        if target_callable.__code__ not in module_functions:
+            return CALLABLE_NOT_FOUND_EXIT_CODE
+        target_codes = _nested_code_objects(target_callable.__code__)
+        try:
+            target_callable(*call_prefix, value)
+        except BaseException as error:
+            traceback = error.__traceback__
+            while traceback is not None:
+                if traceback.tb_frame.f_code in target_codes:
+                    return TARGET_EXCEPTION_EXIT_CODE
+                traceback = traceback.tb_next
+            return WORKER_ERROR_EXIT_CODE
+        return 0
+    except BaseException:
+        return WORKER_ERROR_EXIT_CODE
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target", type=Path, required=True)
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--invocation", type=Path, required=True)
+    parser.add_argument("--target-digest", required=True)
+    args = parser.parse_args()
+    return _run(args.target, args.input, args.invocation, args.target_digest)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

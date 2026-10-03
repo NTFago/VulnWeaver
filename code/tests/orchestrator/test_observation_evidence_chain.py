@@ -57,7 +57,7 @@ def _observation_payload(
         "kind": "proof_of_concept",
         "finding_id": "finding:placeholder",
         "verdict": verdict,
-        "verdict_reasons": ["target_crash_attributed", "control_input_clean",
+        "verdict_reasons": ["target_exception_attributed", "control_input_clean",
                             "replay_stable"],
         "driver_digest": "sha256:" + "c" * 64,
         "target_binding": target_binding or {
@@ -233,7 +233,7 @@ def _review(finding_id: str) -> Review:
     )
 
 
-def test_verified_trigger_observation_confirms_memory_corruption(
+def test_verified_target_exception_does_not_confirm_memory_corruption(
     persistence_database_url: str,
 ) -> None:
     async def scenario() -> None:
@@ -253,11 +253,14 @@ def test_verified_trigger_observation_confirms_memory_corruption(
             )
             result = await gate.submit(_review(finding_id))
             assert result.decision is not None
-            assert result.decision.allowed is True, result.decision.reason_codes
-            assert result.persisted is True
+            assert result.decision.allowed is False, result.decision.reason_codes
+            assert "missing_fact:repeatable_crash" in result.decision.reason_codes
+            assert "missing_fact:matching_environment" in result.decision.reason_codes
+            assert "missing_fact:controllable_input" in result.decision.reason_codes
+            assert result.persisted is False
             async with database.transaction() as repositories:
                 stored = await repositories.findings.get(finding_id)
-            assert stored["status"] is FindingStatus.CONFIRMED
+            assert stored["status"] is FindingStatus.CANDIDATE
         finally:
             await database.dispose()
 

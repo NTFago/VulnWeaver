@@ -1612,7 +1612,6 @@ class FindingRepository:
             "task_id",
             "category",
             "cwe_id",
-            "title",
             "location",
             "dataflow",
             "fix_suggestion",
@@ -1834,7 +1833,15 @@ class PocRepository:
         )
         if not inserted.rowcount:
             existing = await self.get(canonical["id"])
-            if existing != canonical:
+            existing_identity = {
+                key: value for key, value in existing.items()
+                if key not in {"created_at", "run_log_ref"}
+            }
+            canonical_identity = {
+                key: value for key, value in canonical.items()
+                if key not in {"created_at", "run_log_ref"}
+            }
+            if existing_identity != canonical_identity:
                 raise EntityConflict(
                     "poc identifier conflicts with an existing result",
                     details={"poc_id": canonical["id"]},

@@ -84,13 +84,10 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
     reachable path with divergent outcomes. Model explanations never enter this
     branch, so the "model cannot self-confirm" rule is preserved.
 
-    ``VERIFICATION_OBSERVATION`` is the target-bound successor (ADR-036): the
-    trusted entrypoint observed an exception from compiled original target code
-    with a clean control input and stable
-    replays. That carries the digest-bound crafted input and the binding to the
-    exact sample version, so a memory-corruption finding gets the full crash
-    fact set; other categories only get the minimal reproduction because a crash
-    alone still proves no source-to-sink path or authorization constraint.
+    ``VERIFICATION_OBSERVATION`` records a repeatable exception from the exact
+    target version. That is diagnostic behavior, not proof of security impact;
+    it must not supply crash, controllability, or environment facts used to
+    confirm a memory-corruption finding.
     """
 
     derived: set[str] = set()
@@ -113,23 +110,12 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
         elif fact.evidence_type is EvidenceType.POC_VERIFICATION_RESULT and reproducible:
             derived.update(_derived_poc_facts(fact, fact_context.category))
         elif fact.evidence_type is EvidenceType.VERIFICATION_OBSERVATION and reproducible:
-            derived.update(_derived_observation_facts(fact, fact_context.category))
+            derived.update(_derived_observation_facts())
     return frozenset(derived)
 
 
-def _derived_observation_facts(
-    fact: ReviewEvidenceFact, category: FindingCategory
-) -> set[str]:
-    derived = {"minimal_reproduction"}
-    observation = fact.replay_facts.get("observation")
-    if not isinstance(observation, dict) or observation.get("verdict") != "verified_trigger":
-        return derived
-    if category is FindingCategory.MEMORY_CORRUPTION:
-        # verified_trigger already encodes an attributed target crash on every
-        # replay with a clean control input; the inputs array carries the
-        # digest-bound attacker input that drove it.
-        derived.update({"repeatable_crash", "matching_environment", "controllable_input"})
-    return derived
+def _derived_observation_facts() -> set[str]:
+    return {"minimal_reproduction"}
 
 
 def _derived_poc_facts(

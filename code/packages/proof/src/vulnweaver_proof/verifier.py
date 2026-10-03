@@ -48,18 +48,76 @@ def parse_observation(payload: object) -> VerificationObservation:
 def observation_is_reproducible(observation: VerificationObservation) -> bool:
     """A trigger counts as reproducible only if every replay crashed in-target."""
 
-    total_runs = observation["replay_runs"] + 1
     return (
-        observation["replay_runs"] >= MIN_REPLAY_RUNS
-        and observation["trigger_runs"] == total_runs
+        observation_is_consistent(observation)
+        and str(observation["verdict"]) == VerificationOutcome.VERIFIED_TRIGGER
+        and observation["replay_runs"] == MIN_REPLAY_RUNS
+        and observation["trigger_runs"] >= MIN_REPLAY_RUNS + 1
     )
+
+
+def observation_is_consistent(observation: VerificationObservation) -> bool:
+    """Check that the verdict and counters follow from the recorded runs."""
+
+    runs = observation["runs"]
+    if any(run["target_frames"] and (run["timed_out"] or not _run_crashed(run)) for run in runs):
+        return False
+    control = [run for run in runs if run["role"] == "control"]
+    trigger = [run for run in runs if run["role"] == "trigger"]
+    replay = [run for run in runs if run["role"] == "replay"]
+    if not control or observation["replay_runs"] != len(replay):
+        return False
+    if observation["trigger_runs"] != sum(
+        1 for run in (*trigger, *replay) if _run_attributed(run)
+    ):
+        return False
+
+    timed_out = any(run["timed_out"] for run in runs)
+    trigger_failure = next((run for run in trigger if _run_attributed(run)), None)
+    if timed_out:
+        verdict, reasons = VerificationOutcome.INCONCLUSIVE, ["target_timeout"]
+    elif any(_run_crashed(run) for run in control):
+        verdict, reasons = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS, [
+            "control_input_failed"
+        ]
+    elif trigger_failure is None:
+        verdict = VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS
+        reasons = [
+            "target_not_involved" if any(_run_crashed(run) for run in trigger)
+            else "no_trigger_observed"
+        ]
+    elif (
+        len(replay) == MIN_REPLAY_RUNS
+        and all(_run_attributed(run) for run in replay)
+        and all(run["input_name"] == trigger_failure["input_name"] for run in replay)
+    ):
+        verdict = VerificationOutcome.VERIFIED_TRIGGER
+        reasons = ["target_exception_attributed", "control_input_clean", "replay_stable"]
+    else:
+        verdict, reasons = VerificationOutcome.INCONCLUSIVE, ["non_deterministic_trigger"]
+    return (
+        str(observation["verdict"]) == str(verdict)
+        and list(observation["verdict_reasons"]) == reasons
+    )
+
+
+def _run_crashed(run: Mapping[str, object]) -> bool:
+    exit_code = run["exit_code"]
+    return (exit_code is not None and exit_code != 0) or run["signal"] is not None
+
+
+def _run_attributed(run: Mapping[str, object]) -> bool:
+    return _run_crashed(run) and bool(run["target_frames"]) and not bool(run["timed_out"])
 
 
 def poc_result_from_observation(observation: VerificationObservation) -> PocResult:
     # The verdict arrives as plain JSON strings, so compare by value.
     verdict = str(observation["verdict"])
     if verdict == VerificationOutcome.VERIFIED_TRIGGER:
-        return PocResult.EXPLOITABLE
+        # The current verifier observes a repeatable Python exception in the
+        # selected target function. That is useful behavior evidence, but it
+        # does not establish security impact or an exploitable crash.
+        return PocResult.INCONCLUSIVE
     if verdict == VerificationOutcome.REJECTED_UNDER_TEST_CONDITIONS:
         return PocResult.NOT_EXPLOITABLE_UNDER_ENVIRONMENT
     if verdict == VerificationOutcome.ENVIRONMENT_ERROR:
@@ -75,18 +133,15 @@ def evidence_from_observation(
     evidence_id: str,
     bundle_ref: str,
     bundle_digest: str,
-    stdout_ref: str | None,
-    stderr_ref: str | None,
     created_at: str,
 ) -> Evidence:
-    """Build STRONG finding evidence for one verified trigger observation.
+    """Build SUPPORTING evidence for one reproducible target-exception observation.
 
-    Callers must only invoke this for ``verified_trigger`` verdicts; the
-    reproducible flag still records whether replays were stable so the review
-    gate can tell deterministic crashes from flaky ones.
+    A repeated exception is recorded for diagnosis, but does not prove a
+    vulnerability impact. The review gate must not derive crash facts from it.
     """
 
-    if str(observation["verdict"]) != VerificationOutcome.VERIFIED_TRIGGER:
+    if not observation_is_reproducible(observation):
         raise ValueError("evidence is only derived from verified triggers")
     crashed = next(
         (
@@ -96,25 +151,35 @@ def evidence_from_observation(
         ),
         None,
     )
+    stable_observation = {
+        **observation,
+        "runs": [
+            {**run, "duration_millis": 0}
+            for run in observation["runs"]
+        ],
+    }
     return cast(
         Evidence,
         {
             "schema_version": SchemaVersion.VALUE_1_0_0,
             "id": evidence_id,
             "type": EvidenceType.VERIFICATION_OBSERVATION,
-            "strength": EvidenceStrength.STRONG,
+            "strength": EvidenceStrength.SUPPORTING,
             "artifact_ref": bundle_ref,
             "digest": bundle_digest,
             "tool": observation["verifier"],
             "input_ref": bundle_ref,
             "command_hash": observation["driver_digest"],
             "exit_code": None if crashed is None else crashed["exit_code"],
-            "stdout_ref": stdout_ref,
-            "stderr_ref": stderr_ref,
+            # The canonical POC record retains the first execution log. These
+            # references vary on a lease retry and are not part of the finding
+            # evidence identity.
+            "stdout_ref": None,
+            "stderr_ref": None,
             "replay_recipe": {
                 "kind": "verification_observation",
                 "reproducible": observation_is_reproducible(observation),
-                "observation": dict(observation),
+                "observation": stable_observation,
             },
             "created_at": created_at,
         },

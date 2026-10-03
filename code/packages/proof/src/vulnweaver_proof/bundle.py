@@ -15,7 +15,7 @@ import io
 import json
 import tarfile
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import cast
 
@@ -38,6 +38,80 @@ BUNDLE_CONTROL_PREFIX = "controls/"
 DEFAULT_MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_INPUTS = 8
 MAX_CONTROLS = 8
+
+
+def load_execution_bundle_manifest(
+    store: ArtifactStore, object_ref: str, *, max_bytes: int = DEFAULT_MAX_BUNDLE_BYTES
+) -> tuple[ExecutionBundleManifest, str]:
+    """Read and verify the exact bundle manifest and every member from CAS."""
+
+    bundle = _load_member(store, object_ref, limit=max_bytes)
+    members: dict[str, bytes] = {}
+    try:
+        with tarfile.open(fileobj=io.BytesIO(bundle.content), mode="r:*") as archive:
+            for info in archive:
+                name = info.name[2:] if info.name.startswith("./") else info.name
+                if not info.isfile() or name in members:
+                    raise ExecutionBundleError("execution bundle contains an invalid member")
+                if name != BUNDLE_MANIFEST_NAME and name not in {
+                    BUNDLE_DRIVER_NAME,
+                    BUNDLE_TARGET_NAME,
+                } and not name.startswith((BUNDLE_INPUT_PREFIX, BUNDLE_CONTROL_PREFIX)):
+                    raise ExecutionBundleError("execution bundle contains an unexpected member")
+                source = archive.extractfile(info)
+                if source is None:
+                    raise ExecutionBundleError("execution bundle member is unreadable")
+                content = source.read(max_bytes + 1)
+                if len(content) != info.size or len(content) > max_bytes:
+                    raise ExecutionBundleError("execution bundle member size is invalid")
+                members[name] = content
+    except tarfile.TarError as error:
+        raise ExecutionBundleError("execution bundle is not a tar archive") from error
+    try:
+        manifest = json.loads(members[BUNDLE_MANIFEST_NAME].decode("utf-8"))
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ExecutionBundleError("execution bundle manifest is invalid") from error
+    try:
+        validate_contract("ExecutionBundleManifest", cast(Mapping[str, object], manifest))
+    except (TypeError, ValueError) as error:
+        raise ExecutionBundleError("execution bundle manifest is invalid") from error
+    typed_manifest = cast(ExecutionBundleManifest, manifest)
+    if (
+        typed_manifest["driver"]["name"] != BUNDLE_DRIVER_NAME
+        or typed_manifest["target"]["name"] != BUNDLE_TARGET_NAME
+        or any(
+            not member["name"].startswith(BUNDLE_INPUT_PREFIX)
+            for member in typed_manifest.get("inputs") or []
+        )
+        or any(
+            not member["name"].startswith(BUNDLE_CONTROL_PREFIX)
+            for member in typed_manifest.get("controls") or []
+        )
+    ):
+        raise ExecutionBundleError("execution bundle member names are invalid")
+    if not typed_manifest.get("inputs") or not typed_manifest.get("controls"):
+        raise ExecutionBundleError("execution bundle requires inputs and controls")
+    declared: dict[str, BundleFileMember] = {}
+    manifest_members = [
+        typed_manifest["driver"],
+        typed_manifest["target"],
+        *(typed_manifest.get("inputs") or []),
+        *(typed_manifest.get("controls") or []),
+    ]
+    for member in manifest_members:
+        name = str(member["name"])
+        if name in declared:
+            raise ExecutionBundleError("execution bundle member is declared more than once")
+        declared[name] = member
+    if set(declared) | {BUNDLE_MANIFEST_NAME} != set(members):
+        raise ExecutionBundleError("execution bundle contains missing or undeclared members")
+    for name, member in declared.items():
+        content = members[name]
+        if _digest_of(content) != member["digest"] or len(content) != member["size_bytes"]:
+            raise ExecutionBundleError("execution bundle member digest or size is invalid")
+    if typed_manifest["target"]["digest"] != typed_manifest["target_binding"]["digest"]:
+        raise ExecutionBundleError("execution bundle target binding digest is invalid")
+    return typed_manifest, _digest_of(bundle.content)
 
 
 class ExecutionBundleError(ValueError):

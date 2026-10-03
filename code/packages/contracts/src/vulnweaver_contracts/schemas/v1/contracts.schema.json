@@ -999,7 +999,7 @@
       "additionalProperties": false,
       "required": ["target_callable", "input_mode"],
       "properties": {
-        "target_callable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*){0,7}$", "maxLength": 256},
+        "target_callable": {"type": "string", "pattern": "^(?!.*(?:^|\\.)__)[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*){0,7}$", "maxLength": 256},
         "input_mode": {"type": "string", "enum": ["text", "bytes", "json"]}
       }
     },
@@ -1133,7 +1133,7 @@
         "target_binding": {"$ref": "#/$defs/TargetBinding"},
         "inputs": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
         "controls": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/BundleFileMember"}},
-        "runs": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/VerificationRun"}},
+        "runs": {"type": "array", "maxItems": 18, "items": {"$ref": "#/$defs/VerificationRun"}},
         "trigger_runs": {"type": "integer", "minimum": 0},
         "replay_runs": {"type": "integer", "minimum": 0},
         "untrusted_claims": {"anyOf": [{"$ref": "#/$defs/JsonObject"}, {"type": "null"}]},

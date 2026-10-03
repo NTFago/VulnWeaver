@@ -8,7 +8,11 @@ from vulnweaver_proof.auto_exploit import (
     GeneratedExploit,
 )
 from vulnweaver_proof.auto_poc import POC_VERIFICATION, PocVerificationScheduler
-from vulnweaver_proof.bundle import ExecutionBundleError, build_execution_bundle
+from vulnweaver_proof.bundle import (
+    ExecutionBundleError,
+    build_execution_bundle,
+    load_execution_bundle_manifest,
+)
 from vulnweaver_proof.client import SandboxRunnerClient
 from vulnweaver_proof.executor import (
     ProofExecutionError,
@@ -28,6 +32,8 @@ from vulnweaver_proof.verifier import (
     REPORT_FILE_NAME,
     ObservationError,
     evidence_from_observation,
+    observation_is_consistent,
+    observation_is_reproducible,
     parse_observation,
     poc_result_from_observation,
 )
@@ -51,7 +57,10 @@ __all__ = [
     "SandboxRunnerClient",
     "ScriptRefOwnershipError",
     "build_execution_bundle",
+    "load_execution_bundle_manifest",
     "evidence_from_observation",
+    "observation_is_consistent",
+    "observation_is_reproducible",
     "ensure_script_ref_belongs_to_project",
     "GeneratedScriptPolicyResult",
     "parse_observation",

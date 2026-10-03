@@ -15,10 +15,12 @@ import io
 import json
 import os
 import re
+import signal
+import subprocess
+import sys
 import tarfile
 import tempfile
 import time
-import types
 from pathlib import Path
 
 MANIFEST_NAME = "vulnweaver-execution-bundle.json"
@@ -31,7 +33,9 @@ REPORT_NAME = "execution-report.json"
 MAX_BUNDLE_BYTES = 256 * 1024 * 1024
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_INPUT_BYTES = 64 * 1024
+RUN_TIMEOUT_SECONDS = 30
 REPLAY_COUNT = 2
+TARGET_EXCEPTION_EXIT_CODE = 10
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
 
@@ -82,8 +86,8 @@ def _load_bundle(path: Path) -> dict[str, bytes]:
                     name != MANIFEST_NAME
                     and name != DRIVER_NAME
                     and name != TARGET_NAME
-                    and not _input_name_pattern(INPUT_PREFIX).match(name)
-                    and not _input_name_pattern(CONTROL_PREFIX).match(name)
+                    and not _input_name_pattern(INPUT_PREFIX).fullmatch(name)
+                    and not _input_name_pattern(CONTROL_PREFIX).fullmatch(name)
                 ):
                     raise BundleError("bundle_member_unexpected")
                 if name in members:
@@ -117,7 +121,7 @@ def _load_bundle(path: Path) -> dict[str, bytes]:
     for member in [manifest["driver"], manifest["target"], *(manifest.get("inputs") or []),
                    *(manifest.get("controls") or [])]:
         declared[str(member["name"])] = member
-    if set(declared) != set(members):
+    if set(declared) | {MANIFEST_NAME} != set(members):
         raise BundleError("bundle_member_missing")
     for name, member in declared.items():
         content = members[name]
@@ -225,14 +229,6 @@ class _Run:
         return self.crashed and self.target_frames
 
 
-def _code_object_ids(code: types.CodeType) -> set[int]:
-    result = {id(code)}
-    for value in code.co_consts:
-        if isinstance(value, types.CodeType):
-            result.update(_code_object_ids(value))
-    return result
-
-
 def _run_invocation(
     invocation: dict[str, str],
     target_bytes: bytes,
@@ -244,42 +240,79 @@ def _run_invocation(
     run = _Run(role, input_name)
     started = time.monotonic()
     try:
-        mode = invocation["input_mode"]
-        value: object = input_bytes
-        if mode == "text":
-            value = input_bytes.decode("utf-8")
-        elif mode == "json":
-            value = json.loads(input_bytes)
-        source = target_bytes.decode("utf-8")
-        filename = f"vulnweaver-target://{target_digest.removeprefix('sha256:')}"
-        code = compile(source, filename, "exec")
-        target_code_ids = _code_object_ids(code)
-        namespace: dict[str, object] = {
-            "__name__": "__vulnweaver_target__",
-            "__file__": filename,
-        }
-        exec(code, namespace, namespace)
-        target_callable: object = namespace
-        for part in invocation["target_callable"].split("."):
-            if isinstance(target_callable, dict):
-                target_callable = target_callable.get(part)
-            else:
-                target_callable = getattr(target_callable, part, None)
-        if not callable(target_callable):
-            raise ValueError("target callable is not available")
-        target_callable(value)
-    except BaseException as error:
-        run.exit_code = 1
-        traceback = error.__traceback__
-        while traceback is not None:
-            if id(traceback.tb_frame.f_code) in locals().get("target_code_ids", set()):
+        with tempfile.TemporaryDirectory(
+            prefix=f"vw-proof-{role}-", dir=_work_root()
+        ) as run_dir_value:
+            run_dir = Path(run_dir_value)
+            target_path = _write_member(run_dir, "target.py", target_bytes, 0o444)
+            input_path = _write_member(run_dir, "input.bin", input_bytes, 0o444)
+            invocation_path = _write_member(
+                run_dir,
+                "invocation.json",
+                json.dumps(invocation, ensure_ascii=True, sort_keys=True).encode("utf-8"),
+                0o444,
+            )
+            worker = Path(__file__).with_name("vulnweaver-proof-target-worker")
+            if not worker.is_file():
+                raise BundleError("target_worker_unavailable")
+            environment = {
+                "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+                "PYTHONHASHSEED": "0",
+                "PYTHONIOENCODING": "utf-8",
+            }
+            try:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(worker),
+                        "--target",
+                        str(target_path),
+                        "--input",
+                        str(input_path),
+                        "--invocation",
+                        str(invocation_path),
+                        "--target-digest",
+                        target_digest,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=run_dir,
+                    env=environment,
+                    start_new_session=(os.name == "posix"),
+                )
+            except OSError as error:
+                raise BundleError("target_worker_unavailable") from error
+            try:
+                run.exit_code = process.wait(timeout=RUN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                run.timed_out = True
+                _kill_process_group(process)
+                process.wait()
+            finally:
+                # Kill descendants that inherited this invocation's session
+                # before the supervisor writes the observation.
+                _kill_process_group(process)
+            if run.exit_code == TARGET_EXCEPTION_EXIT_CODE:
                 run.target_frames = True
-                break
-            traceback = traceback.tb_next
-    else:
-        run.exit_code = 0
+            elif run.exit_code is not None and run.exit_code < 0:
+                run.signal = -run.exit_code
+    except BundleError:
+        raise
+    except OSError as error:
+        raise BundleError("target_worker_io_error") from error
     run.duration_millis = int((time.monotonic() - started) * 1000)
     return run
+
+
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.poll() is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
 
 
 def _observation_id(finding_id: str, kind: str, bundle_id: str) -> str:
@@ -362,16 +395,14 @@ def execute_bundle(bundle_path: Path, finding_id: str, kind: str) -> dict[str, o
                        else ["no_trigger_observed"])
         elif all(run.attributed for run in replay_runs):
             verdict = VERIFIED_TRIGGER
-            reasons = ["target_crash_attributed", "control_input_clean", "replay_stable"]
+            reasons = ["target_exception_attributed", "control_input_clean", "replay_stable"]
         else:
             verdict = INCONCLUSIVE
             reasons = ["non_deterministic_trigger"]
 
         runs = [run.record() for run in (*control_runs, *trigger_runs, *replay_runs)]
-        trigger_count = (
-            1 + sum(1 for run in replay_runs if run.attributed)
-            if chosen is not None
-            else 0
+        trigger_count = sum(
+            1 for run in (*trigger_runs, *replay_runs) if run.attributed
         )
         return {
             "schema_version": "1.0.0",

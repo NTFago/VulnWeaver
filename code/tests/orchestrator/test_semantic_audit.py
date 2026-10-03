@@ -426,15 +426,10 @@ def test_binary_pseudocode_finding_is_anchored_by_address(
     asyncio.run(scenario())
 
 
-def test_executor_drops_a_candidate_whose_derived_id_collides(
+def test_candidate_identity_survives_constraint_wording_drift(
     persistence_database_url: str, tmp_path: object
 ) -> None:
-    """Two candidates at the same location and CWE derive the same finding id.
-
-    The store refuses to merge them -- they are genuinely different findings --
-    and that refusal used to escape as an unhandled EntityConflict and take the
-    whole audit job down.  The colliding candidate is dropped and counted.
-    """
+    """The exact CWE/location anchor stays stable across model paraphrases."""
 
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
@@ -452,7 +447,8 @@ def test_executor_drops_a_candidate_whose_derived_id_collides(
         first = model_finding(real_path, 2)
         second = {
             **model_finding(real_path, 2),
-            "title": "a different title for the same constraint",
+            "title": "eval reaches attacker-controlled expression",
+            "constraint": "request expressions must never be evaluated as code",
         }
         model = FakeAuditModel(report([first, second]))
         auditor = SemanticAuditor(
@@ -468,8 +464,7 @@ def test_executor_drops_a_candidate_whose_derived_id_collides(
             assert result["status"] is JobStatus.SUCCEEDED
             async with database.transaction() as repositories:
                 findings = await repositories.findings.list_for_task(task_id)
-            # Only the first candidate persists; the colliding one is dropped
-            # rather than aborting the audit.
+            # The same anchored issue remains one candidate despite wording drift.
             assert len(findings) == 1
             assert findings[0]["title"] == "eval on request data"
         finally:

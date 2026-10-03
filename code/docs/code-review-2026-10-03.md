@@ -2,7 +2,7 @@
 
 > 本文记录代码审查发现的当前实现缺陷，不是修复完成记录。以代码、定向测试和复现为证据；历史 ADR 记录的是设计决策和当时的验证范围，不能替代本清单的当前状态。优先级中的 P0 表示结果可信度或核心链路已被破坏，P1 表示确定的漏报、确认阻断或数据语义错误，P2 表示覆盖透明度问题。
 
-> 后续进展（2026-10-03）：本表保留复审时的代码证据。CR-09–11 已在本地 `fix/target-bound-verification` 实施修复，静态检查通过，pytest 与真实 Runner 尚未运行；验收状态见根目录 `DEVELOPMENT_STATUS.md`。CR-04 部分修复；CR-05 约束身份指纹已实现待验证；CR-06 部分修复；CR-07/08 尚待实施。旧自动验证结论不得按新协议追认。
+> 后续进展（2026-10-03）：下表和 04d1281 章节保留各轮复审时的历史代码证据。针对 `main @ 2757f35` 的复核项已在 `fix/proof-supervisor-boundary` 修复：Linux 全量 Python 门禁 711 passed / 4 skipped、覆盖率 81.69%；真实 Runner 正反例 3 passed。目标异常映射为 `INCONCLUSIVE`，只产生 `SUPPORTING` observation，FindingReviewGate 不从中推导崩溃事实。合并后的最终镜像重建与重启仍待验收。CR-04 独立影响判据、CR-06 部分覆盖、CR-07/08 仍待处理。旧自动验证结论不得按新协议追认。
 
 ## 范围和验证边界
 
@@ -46,17 +46,35 @@ Linux 开发容器中，`tests/orchestrator/test_poc_fact_derivation.py tests/pr
 
 | ID | 优先级 / 状态 | 当前代码证据与可达影响 | 修复及验收入口 |
 |---|---|---|---|
-| CR-09 | P0 / 待修复 | `apps/proof-tool/vulnweaver-proof-entrypoint::_run_driver` 仅用 `str(target) in stderr` 给 `target_frames` 赋值。stderr 完全由模型生成的驱动控制；驱动只需在攻击输入时打印目标路径并以非零状态退出、在对照输入时正常退出，三次运行即可满足 `verified_trigger`，无需加载原目标。`verifier.py`、worker 和 review 继续采信该布尔值导出的结论。现有 `driver_forged_markers.py` 只伪造 stdout marker，没有覆盖伪造 stderr。 | 由可信执行器采集不能由驱动伪造的目标参与和故障归因证据；至少加入「伪造 stderr 路径、未加载目标」的真实 Runner 负例，证明零强证据、零确认。 |
-| CR-10 | P0 / 待修复 | 入口将原目标与驱动写入同一个 `/work` 目录，以同一容器 UID 拥有文件，`0o444` 仅撤销写位；驱动可把目标改为可写，换入其他内容执行，再恢复原字节。入口只在全部驱动运行后比较一次目标摘要，因此不能证明运行时加载的是原版本。现有 `driver_tampering.py` 只覆盖未恢复的篡改。 | 在驱动无法修改的独立只读挂载或权限域中提供目标，并在执行边界验证身份；加入「运行期间替换、结束前恢复」的真实 Runner 负例。 |
-| CR-11 | P0 / 待修复 | 手动 `/api/findings/{finding_id}/proof` 接受调用方的 `script_ref`；`ProofJobScheduler` 与 `ProofJobExecutor` 仅检查该引用属于 Finding 所在项目。入口从 bundle manifest 原样回显 `target_binding`，worker 的 `_read_observation` 只比较 `finding_id` 和 `kind`，review 也不核对证据绑定版本。同一项目里针对样本 A 的可触发 bundle 可作为样本 B 的 proof 引用提交，入口会使用请求参数把 B 的 ID 写入 report，worker 可给 B 链接强证据。`build_execution_bundle` 也未断言 `target_binding.digest == target.digest`；现有入口测试甚至以全零绑定摘要得到 `verified_trigger`。 | 调度和执行时核对 bundle 对应当前 Finding 的 artifact/version/digest，入口核对 binding 与目标成员摘要，worker 采信前再次核对期望绑定；加入同项目跨 Finding 复用 bundle 和错误绑定摘要负例。 |
+| CR-09 | P0 / 已修复并验收 | 04d1281 的历史实现以 stderr 推断目标参与。后续曾改成同进程 compile/exec，导致新的报告伪造路径；当前修复每次 invocation 使用目标子进程，supervisor 独立生成报告。 | 入口与真实 Runner 测试确认目标 monkeypatch `json.dumps` 不能伪造报告；真实 Runner 正反例 3 passed。 |
+| CR-10 | P0 / 已修复 | 当前入口直接从逐成员摘要校验的 bundle 读取原始目标字节，并在独立子进程调用目标，不再依赖模型可写文件或 stderr 归因。 | `test_entrypoint.py` 与真实 Runner 覆盖目标摘要、报告隔离和正负例。 |
+| CR-11 | P0 / 已修复 | bundle 绑定 Finding ID 与 TargetBinding；入口校验成员摘要，worker 根据请求 Finding 的当前 artifact/version/kind/digest 和 bundle manifest 核对 observation，review 再检查 evidence 绑定。 | proof/orchestrator 定向与全量测试通过；真实 Runner 正例和报告伪造负例通过。 |
 
 上述三项修复前，新协议的 `verified_trigger` 不足以独立证明当前 Finding 的原目标被触发。既有正反例测试仍证明它覆盖了当时列出的输入；不能覆盖这三类构造。修复涉及 proof 信任边界，应按 ADR-036 更新契约、调用方及真实 Runner 验收。
 
-## 本地修复回访（2026-10-03，待运行测试）
+## CR-09–11 修复回访（2026-10-03）
 
-- **CR-09**：`ExploitScript` 改为 `ProofInvocation`（目标函数路径 + 输入编码），proof 入口不再执行模型给出的 Python。入口从摘要校验过的目标字节编译模块，并通过解释器 traceback 中的原始 code object identity 判定目标帧，不检查模型可写的 stderr。
-- **CR-10**：原目标不再写入驱动可修改的工作目录；入口直接编译 bundle 中已验摘要的字节。
+- **CR-09**：`ExploitScript` 改为 `ProofInvocation`（目标函数路径 + 输入编码），proof 入口不再执行模型给出的 Python。每次 invocation 由新子进程编译和调用目标，父入口只根据子进程退出状态写观测报告。
+- **CR-10**：原目标字节经 bundle 摘要校验后传入子进程；子进程不持有父入口的报告状态。每轮设 30 秒超时，超时后 supervisor 杀掉该进程组。
 - **CR-11**：ExecutionBundle 增加 `finding_id`；组装时要求 target member digest 与 TargetBinding digest 相等；入口核对 Finding ID；worker 与复核事实构造都核对 Finding 的 artifact/version/kind/digest。
-- **CR-05**：SemanticAuditFinding 要求提供 `constraint` 描述；规范化约束参与 Finding/evidence ID，以区分同位置同 CWE 的不同约束。
+- **worker 验证**：依据 worker 自建 bundle 校验 driver/inputs/controls 摘要、角色与计数、verdict/reasons 自洽；目标异常 observation 只建立 SUPPORTING evidence，不单独证明漏洞影响。
+- **CR-05**：semantic 与 agentic finding-report 均要求提供 `constraint`；同一任务的 CWE+精确位置用于稳定 Finding ID，避免约束措辞变化制造重复候选。
+- **重试幂等**：生成的 driver/inputs 从派生工件复用，bundle 时间戳取稳定 Job 创建时间；PoC 和 evidence 同事务写入，timeout/environment 失败遵循 Job retry policy。
 
-验证边界：Linux dev 容器中的 Ruff、Proof/Orchestrator Pyright、contracts `--check` 和 proof 入口 AST 解析通过。未运行 pytest、真实 Runner 负例、镜像构建或部署；不要把本地实现标成已验收。
+验证边界：Linux dev 容器 `pnpm run check:python` 为 711 passed / 4 skipped，覆盖率 81.69%；Ruff、Pyright、contracts `--check` 通过。4 项跳过包括 3 项需配置的真实 Runner 测试和 1 项 Docker runtime integration；真实 Runner 定向重跑为 3 passed。合并后的镜像重建与服务重启仍待验收。
+
+## 2026-10-03 复核 `main @ 2757f35`：入口与观测报告的新缺陷
+
+用户提交的复核报告确认 CR-09/10/11 的目标绑定锚定方向成立、未发现绕过，同时实证两个新的 P0。当前分支已修复：
+
+| ID | 发现 | 修复与验证 |
+|---|---|---|
+| P0-1 | 成员等值比较没有把必需的 manifest 计入声明集合，导致所有合法 bundle 被拒。 | 比较集合改为 `declared ∪ {MANIFEST_NAME}`；仍保持严格等值；额外成员、符号链接和摘要负例保留。 |
+| P0-2 | 目标代码在入口进程内执行，可 monkeypatch 报告器全局并伪造 `verified_trigger`。 | 目标调用移入每轮独立子进程；单轮 30 秒超时并杀进程组；报告只由未执行 bundle 代码的父入口写出。入口和真实 Runner 的 monkeypatch 负例通过。 |
+| P1-1 | callable 解析可选择导入模块属性，可能把观测器变成命令执行器。 | 契约拒绝 `__` 路径段，worker 仅接受编译目标模块中的 Python 函数；`os.system` 负例确认 marker 未创建。 |
+| P1-2 | worker 未将观测报告的成员摘要、运行次数和 verdict 与自建 bundle 核对。 | 读取并验证 CAS bundle manifest，比较成员摘要/运行角色/计数和 verdict 自洽性；不一致报告不产生 STRONG 证据。 |
+| P1-3 | lease 重试时 POC/evidence 冲突可逃逸，部分落库且 retryable 标记阻断重试。 | 生成物复用、时间戳稳定、PoC+evidence 原子事务、超时/环境错误结构化可重试；增加全链重投和 timeout 回归。 |
+| P1-5 | agentic `finding-report` 没有 constraint 字段。 | schema、checkpoint serialization、提示词和测试同步；历史 checkpoint 缺字段时用 rationale 暂时兼容。 |
+| P1-6 | 任意目标函数异常在对照干净且重放稳定时可成为 `verified_trigger`。 | `verified_trigger` 仅保留为可重复目标异常观测；PoC 结果映射为 `INCONCLUSIVE`，evidence strength 为 `SUPPORTING`，复核不从该 observation 推导崩溃/可控输入/匹配环境事实。正例和复核拒绝确认回归通过。 |
+
+旧 `tests/proof/test_http_replay.py` 使用已废弃的裸脚本协议且不能验证当前 bundle 行为，已删除；目标绑定 HTTP 正反例以 `tests/proof/test_target_bound_runner.py` 为准。full Python 门禁 711 passed / 4 skipped；真实 Runner 定向验收 3 passed。

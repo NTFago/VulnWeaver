@@ -586,7 +586,9 @@ class SemanticAuditor:
                 cwe_id = str(finding["cwe_id"])
                 issue_identity = _issue_identity(finding)
                 finding_id = _stable_id(
-                    "finding", job["task_id"], cwe_id, _canonical(location), issue_identity
+                    # Stable anchors and CWE survive model paraphrases of the
+                    # same invariant across audit rounds.
+                    "finding", job["task_id"], cwe_id, _canonical(location)
                 )
                 evidence_id = _stable_id(
                     "evidence", run_id, cwe_id, _canonical(location), issue_identity

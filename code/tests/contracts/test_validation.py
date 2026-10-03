@@ -530,7 +530,7 @@ def test_verification_observation_contract_enforces_typed_verdicts() -> None:
         "kind": "proof_of_concept",
         "finding_id": "finding:sample",
         "verdict": "verified_trigger",
-        "verdict_reasons": ["target_crash_attributed", "replay_stable"],
+        "verdict_reasons": ["target_exception_attributed", "replay_stable"],
         "driver_digest": "sha256:" + "a" * 64,
         "target_binding": {
             "artifact_id": "artifact:sample",

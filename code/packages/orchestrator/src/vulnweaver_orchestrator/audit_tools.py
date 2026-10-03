@@ -235,11 +235,21 @@ AUDIT_TOOLS: tuple[JsonObject, ...] = (
                             "title",
                             "severity",
                             "rationale",
+                            "constraint",
                             "path",
                             "start_line",
                         ]
                     },
-                    {"required": ["cwe_id", "title", "severity", "rationale", "address"]},
+                    {
+                        "required": [
+                            "cwe_id",
+                            "title",
+                            "severity",
+                            "rationale",
+                            "constraint",
+                            "address",
+                        ]
+                    },
                 ],
                 "properties": {
                     "cwe_id": {"type": "string", "pattern": "^CWE-[0-9]{1,6}$"},
@@ -249,6 +259,7 @@ AUDIT_TOOLS: tuple[JsonObject, ...] = (
                         "enum": ["info", "low", "medium", "high", "critical"],
                     },
                     "rationale": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "constraint": {"type": "string", "minLength": 1, "maxLength": 1024},
                     "path": {"type": "string", "minLength": 1, "maxLength": 1024},
                     "start_line": {"type": "integer", "minimum": 1},
                     "end_line": {"type": "integer", "minimum": 1},
@@ -281,6 +292,7 @@ class ReportedFinding:
     title: str
     severity: str
     rationale: str
+    constraint: str
     path: str | None
     start_line: int | None
     end_line: int | None
@@ -297,6 +309,7 @@ class ReportedFinding:
             "title": self.title,
             "severity": self.severity,
             "rationale": self.rationale,
+            "constraint": self.constraint,
         }
         if self.address is not None:
             document["address"] = self.address
@@ -971,6 +984,7 @@ class AuditStepExecutor:
                 title=str(arguments["title"]),
                 severity=str(arguments["severity"]),
                 rationale=str(arguments["rationale"]),
+                constraint=str(arguments["constraint"]),
                 path=path,
                 start_line=start_line,
                 end_line=_optional_int(arguments, "end_line"),

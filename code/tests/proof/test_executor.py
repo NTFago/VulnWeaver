@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
+    ArtifactKind,
     FindingStatus,
     Job,
     JobKind,
@@ -18,7 +19,11 @@ from vulnweaver_contracts import (
     SandboxStatus,
 )
 from vulnweaver_persistence import Database
-from vulnweaver_proof import ProofExecutionService, ProofJobExecutor
+from vulnweaver_proof import (
+    ProofExecutionService,
+    ProofJobExecutor,
+    build_execution_bundle,
+)
 
 IMAGE_DIGEST = "sha256:" + "a" * 64
 
@@ -220,13 +225,36 @@ def test_sandbox_timeout_and_cancel_are_not_reported_as_exploitable() -> None:
 
 
 def _observation(verdict: str, finding_id: str = "finding:proof-test") -> dict[str, object]:
+    verified = verdict == "verified_trigger"
+    runs = [
+        {
+            "role": "control", "input_name": "0000", "exit_code": 0, "signal": None,
+            "duration_millis": 3, "target_frames": False, "timed_out": False,
+        },
+        {
+            "role": "trigger", "input_name": "0000", "exit_code": 10 if verified else 0,
+            "signal": None, "duration_millis": 8, "target_frames": verified,
+            "timed_out": False,
+        },
+    ]
+    if verified:
+        runs.extend(
+            {
+                "role": "replay", "input_name": "0000", "exit_code": 10, "signal": None,
+                "duration_millis": 7, "target_frames": True, "timed_out": False,
+            }
+            for _ in range(2)
+        )
     return {
         "schema_version": "1.0.0",
         "id": "observation:proof-test",
         "kind": "proof_of_concept",
         "finding_id": finding_id,
         "verdict": verdict,
-        "verdict_reasons": ["target_crash_attributed"],
+        "verdict_reasons": (
+            ["target_exception_attributed", "control_input_clean", "replay_stable"]
+            if verified else ["no_trigger_observed"]
+        ),
         "driver_digest": "sha256:" + "c" * 64,
         "target_binding": {
             "artifact_id": "artifact:proof-test",
@@ -236,13 +264,56 @@ def _observation(verdict: str, finding_id: str = "finding:proof-test") -> dict[s
         },
         "inputs": [{"name": "inputs/0000", "digest": "sha256:" + "e" * 64, "size_bytes": 4}],
         "controls": [{"name": "controls/0000", "digest": "sha256:" + "f" * 64, "size_bytes": 4}],
-        "runs": [],
-        "trigger_runs": 3,
-        "replay_runs": 2,
+        "runs": runs,
+        "trigger_runs": 3 if verified else 0,
+        "replay_runs": 2 if verified else 0,
         "untrusted_claims": None,
         "verifier": {"name": "proof-entrypoint", "version": "2.0.0", "image_digest": None},
         "created_at": "2026-10-03T08:00:00Z",
     }
+
+
+def _bundle_for_request(
+    store: LocalContentAddressedStore, request: ProofRequest
+) -> dict[str, object]:
+    target = store.put_stream(
+        io.BytesIO(b"def parse(value):\n    raise ValueError('target exception')\n"),
+        max_bytes=1024,
+    )
+    driver = store.put_stream(
+        io.BytesIO(b'{"target_callable":"parse","input_mode":"text"}'), max_bytes=1024
+    )
+    crafted = store.put_stream(io.BytesIO(b"trigger"), max_bytes=1024)
+    control = store.put_stream(io.BytesIO(b"control"), max_bytes=1024)
+    bundle = build_execution_bundle(
+        store,
+        bundle_id="execution-bundle:proof-test",
+        finding_id=request["finding_id"],
+        driver_ref=driver.object_ref,
+        target_binding={
+            "artifact_id": "artifact:proof-test",
+            "version_id": "artifact-version:proof-test",
+            "artifact_kind": ArtifactKind.SOURCE_ARCHIVE,
+            "digest": target.digest,
+        },
+        target_ref=target.object_ref,
+        input_refs=[crafted.object_ref],
+        control_refs=[control.object_ref],
+        created_at="2026-10-03T08:00:00Z",
+    )
+    request["script_ref"] = bundle.stored.object_ref
+    return {
+        "driver_digest": bundle.manifest["driver"]["digest"],
+        "target_binding": dict(bundle.manifest["target_binding"]),
+        "inputs": [dict(member) for member in bundle.manifest["inputs"]],
+        "controls": [dict(member) for member in bundle.manifest["controls"]],
+    }
+
+
+def _bind_observation_to_bundle(
+    observation: dict[str, object], bundle_fields: dict[str, object]
+) -> None:
+    observation.update(bundle_fields)
 
 
 class _ReportSandbox:
@@ -271,9 +342,13 @@ class _ReportSandbox:
         )
 
 
-def test_verified_observation_maps_to_exploitable(tmp_path: object) -> None:
+def test_verified_target_exception_maps_to_inconclusive(tmp_path: object) -> None:
     store = LocalContentAddressedStore(cast(Any, tmp_path))
-    payload = json.dumps(_observation("verified_trigger")).encode("utf-8")
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("verified_trigger")
+    _bind_observation_to_bundle(observation, fields)
+    payload = json.dumps(observation).encode("utf-8")
     report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
     service = ProofExecutionService(
         _ReportSandbox([{"path": "execution-report.json",
@@ -287,17 +362,17 @@ def test_verified_observation_maps_to_exploitable(tmp_path: object) -> None:
 
     run = asyncio.run(
         service.run(
-            _request(),
+            request,
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
             expected_target_binding=cast(
-                Any, _observation("verified_trigger")["target_binding"]
+                Any, observation["target_binding"]
             ),
         )
     )
 
-    assert run.poc["result"] == "exploitable"
+    assert run.poc["result"] == "inconclusive"
     assert run.poc["status"] == "completed"
     assert isinstance(run.observation, dict)
     assert run.observation["verdict"] == "verified_trigger"
@@ -305,7 +380,11 @@ def test_verified_observation_maps_to_exploitable(tmp_path: object) -> None:
 
 def test_rejected_observation_maps_to_not_exploitable(tmp_path: object) -> None:
     store = LocalContentAddressedStore(cast(Any, tmp_path))
-    payload = json.dumps(_observation("rejected_under_test_conditions")).encode("utf-8")
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("rejected_under_test_conditions")
+    _bind_observation_to_bundle(observation, fields)
+    payload = json.dumps(observation).encode("utf-8")
     report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
     service = ProofExecutionService(
         _ReportSandbox([{"path": "execution-report.json",
@@ -319,12 +398,12 @@ def test_rejected_observation_maps_to_not_exploitable(tmp_path: object) -> None:
 
     run = asyncio.run(
         service.run(
-            _request(),
+            request,
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
             expected_target_binding=cast(
-                Any, _observation("rejected_under_test_conditions")["target_binding"]
+                Any, observation["target_binding"]
             ),
         )
     )
@@ -335,7 +414,11 @@ def test_rejected_observation_maps_to_not_exploitable(tmp_path: object) -> None:
 
 def test_report_bound_to_another_finding_is_ignored(tmp_path: object) -> None:
     store = LocalContentAddressedStore(cast(Any, tmp_path))
-    payload = json.dumps(_observation("verified_trigger", finding_id="finding:other")).encode()
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("verified_trigger", finding_id="finding:other")
+    _bind_observation_to_bundle(observation, fields)
+    payload = json.dumps(observation).encode()
     report = store.put_stream(io.BytesIO(payload), max_bytes=65536)
     service = ProofExecutionService(
         _ReportSandbox([{"path": "execution-report.json",
@@ -349,13 +432,103 @@ def test_report_bound_to_another_finding_is_ignored(tmp_path: object) -> None:
 
     run = asyncio.run(
         service.run(
-            _request(),
+            request,
             finding_status=FindingStatus.CONFIRMED,
             exploit_validation_enabled=False,
             cancellation=asyncio.Event(),
             expected_target_binding=cast(
-                Any, _observation("verified_trigger")["target_binding"]
+                Any, observation["target_binding"]
             ),
+        )
+    )
+
+    assert run.observation is None
+
+
+def test_bundle_for_another_finding_is_not_reusable(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("verified_trigger")
+    _bind_observation_to_bundle(observation, fields)
+    report = store.put_stream(
+        io.BytesIO(json.dumps(observation).encode()), max_bytes=65536
+    )
+    request["finding_id"] = "finding:other"
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json", "object_ref": report.object_ref,
+                         "digest": report.digest, "size_bytes": report.size_bytes}]),
+        tool_name="proof", tool_version="1.0.0", store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            request,
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+            expected_target_binding=cast(Any, observation["target_binding"]),
+        )
+    )
+
+    assert run.observation is None
+    assert run.poc["result"] == "inconclusive"
+
+
+def test_bundle_observation_target_binding_mismatch_is_ignored(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("verified_trigger")
+    _bind_observation_to_bundle(observation, fields)
+    report = store.put_stream(
+        io.BytesIO(json.dumps(observation).encode()), max_bytes=65536
+    )
+    expected_binding = dict(observation["target_binding"])
+    expected_binding["digest"] = "sha256:" + "f" * 64
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json", "object_ref": report.object_ref,
+                         "digest": report.digest, "size_bytes": report.size_bytes}]),
+        tool_name="proof", tool_version="1.0.0", store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            request,
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+            expected_target_binding=cast(Any, expected_binding),
+        )
+    )
+
+    assert run.observation is None
+    assert run.poc["result"] == "inconclusive"
+
+
+def test_observation_run_counters_must_match_recorded_runs(tmp_path: object) -> None:
+    store = LocalContentAddressedStore(cast(Any, tmp_path))
+    request = _request()
+    fields = _bundle_for_request(store, request)
+    observation = _observation("verified_trigger")
+    observation["trigger_runs"] = 2
+    _bind_observation_to_bundle(observation, fields)
+    report = store.put_stream(
+        io.BytesIO(json.dumps(observation).encode()), max_bytes=65536
+    )
+    service = ProofExecutionService(
+        _ReportSandbox([{"path": "execution-report.json", "object_ref": report.object_ref,
+                         "digest": report.digest, "size_bytes": report.size_bytes}]),
+        tool_name="proof", tool_version="1.0.0", store=store,
+    )
+
+    run = asyncio.run(
+        service.run(
+            request,
+            finding_status=FindingStatus.CONFIRMED,
+            exploit_validation_enabled=False,
+            cancellation=asyncio.Event(),
+            expected_target_binding=cast(Any, observation["target_binding"]),
         )
     )
 

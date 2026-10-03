@@ -103,16 +103,18 @@ class StubModel:
 
 
 async def _seed(
-    database: Database, store: LocalContentAddressedStore
+    database: Database,
+    store: LocalContentAddressedStore,
+    *,
+    target_source: str | None = None,
 ) -> tuple[str, str, str]:
     suffix = uuid4().hex
     project_id = f"project:acceptance-{suffix}"
     artifact_id = f"artifact:acceptance-{suffix}"
     version_id = f"artifact-version:acceptance-{suffix}"
     task_id = f"task:acceptance-{suffix}"
-    stored = store.put_stream(
-        io.BytesIO(TARGET_PATH.read_bytes()), max_bytes=1024 * 1024
-    )
+    source_bytes = TARGET_PATH.read_bytes() if target_source is None else target_source.encode()
+    stored = store.put_stream(io.BytesIO(source_bytes), max_bytes=1024 * 1024)
     async with database.transaction() as repositories:
         seeded = dict(project(project_id))
         seeded["exploit_validation_enabled"] = True
@@ -245,9 +247,10 @@ def test_real_runner_verifies_original_target_positive_case(
             evidence = await repositories.evidence.get(result["evidence_ids"][0])
             relations = await repositories.findings.list_evidence_relations(finding_id)
             sample = await repositories.artifacts.get(artifact_id)
-        assert pocs[0]["result"] == "exploitable"
+        assert pocs[0]["result"] == "inconclusive"
         assert pocs[0]["status"] == "completed"
         assert evidence["type"] == "verification_observation"
+        assert evidence["strength"] == "supporting"
         observation = evidence["replay_recipe"]["observation"]
         assert observation["verdict"] == "verified_trigger"
         assert observation["trigger_runs"] == 3
@@ -296,3 +299,39 @@ def test_real_runner_rejects_empty_and_forged_and_wrong_target_drivers(
             await database.dispose()
 
         asyncio.run(verify(driver_name, finding_id))
+
+
+def test_real_runner_target_cannot_forge_supervisor_report(
+    persistence_database_url: str,
+) -> None:
+    store = LocalContentAddressedStore(CAS_ROOT)
+    target_source = (
+        "import json\n"
+        "def parse(value):\n"
+        "    json.dumps = lambda *args, **kwargs: '{\\\"verdict\\\":\\\"verified_trigger\\\"}'\n"
+    )
+
+    async def seed() -> tuple[str, str]:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, finding_id, _ = await _seed(database, store, target_source=target_source)
+        await database.dispose()
+        return task_id, finding_id
+
+    task_id, finding_id = asyncio.run(seed())
+    result = _run_case(
+        persistence_database_url, store, task_id, finding_id, "driver_invoking_target.py"
+    )
+
+    assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
+    assert result["evidence_ids"] == []
+
+    async def verify() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        async with database.transaction() as repositories:
+            pocs = await repositories.pocs.list_for_finding(finding_id)
+            relations = await repositories.findings.list_evidence_relations(finding_id)
+        assert pocs[0]["result"] == "not_exploitable_under_environment"
+        assert relations == []
+        await database.dispose()
+
+    asyncio.run(verify())

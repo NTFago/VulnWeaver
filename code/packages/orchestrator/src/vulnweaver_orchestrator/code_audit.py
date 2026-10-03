@@ -111,7 +111,9 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "code you have read substantiates it; findings saved for the end are findings "
     "lost to a deadline. Choose the most specific applicable CWE, and make the "
     "rationale name its evidence: the function you read, the line or address, and "
-    "how attacker-controlled data reaches the sink. Source findings need path and "
+    "how attacker-controlled data reaches the sink. Include a concise constraint: "
+    "the specific security invariant that the code violates, phrased consistently "
+    "across repeated audits of the same issue. Source findings need path and "
     "start_line; binary findings need the function address copied exactly from a "
     "tool result — anything that does not anchor to an indexed function is "
     "discarded. Set verification_request to fuzz only when dynamic confirmation "
@@ -509,6 +511,7 @@ def _finding_document(finding: ReportedFinding) -> JsonObject:
         "title": finding.title,
         "severity": finding.severity,
         "rationale": finding.rationale,
+        "constraint": finding.constraint,
         "path": finding.path,
         "start_line": finding.start_line,
         "end_line": finding.end_line,
@@ -524,11 +527,16 @@ def _finding_from_document(document: Mapping[str, object]) -> ReportedFinding:
         value = document.get(key)
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
+    rationale = _str_value(document.get("rationale"))
     return ReportedFinding(
         cwe_id=_str_value(document.get("cwe_id")),
         title=_str_value(document.get("title")),
         severity=_str_value(document.get("severity")) or "unknown",
-        rationale=_str_value(document.get("rationale")),
+        rationale=rationale,
+        # Older checkpoints predate the required field. Keep them resumable;
+        # the fallback is only for historical state, while new tool calls must
+        # provide an explicit invariant.
+        constraint=_str_value(document.get("constraint")) or rationale[:1024],
         path=_optional_str(document.get("path")),
         start_line=optional_int("start_line"),
         end_line=optional_int("end_line"),
