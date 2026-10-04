@@ -250,7 +250,7 @@ async def _facts_mode(args: argparse.Namespace) -> int:
         "pseudocode": list(ghidra.pseudocode),
         "symbolic_facts": list(angr.symbolic_facts),
         "imports": list(imports),
-        "strings": list(extract_strings(target, metadata, limits)),
+        "strings": list(extract_strings(target, metadata, limits).strings),
         "samples": {
             "objdump_functions": _sampled(objdump.functions),
             "ghidra_pseudocode": _sampled(ghidra.pseudocode),
