@@ -6,7 +6,9 @@
 
 ## 当前焦点
 
-2026-10-04 审计修复轮（分支 `feat/realworld-acceptance-samples @ 3902c4e`）：用户复审发现的 RA-01～RA-05 已全部修复并部署。核心语义变化：①注入 reach 不再由输出差异推断——target-worker 以 `sys.setprofile` 观测控制面 sink 词典的 C 调用并在触发时以退出码 20 结束（解释器事件不可伪造），entrypoint 逐 run 记录 `sink_fired`，worker 仅在 crafted+replays 全触发时写 `sink_reached`，AST 保护枚举降级为诊断；②鉴权确认事实派生整体移除（行为差分≠约束违反），Finding 保持候选，解封依赖 oracle 提案 §5 的可执行约束判据；③约束提取严格 path/line/address 匹配；④分页汇总逐片段重验摘要并读嵌套 report，损坏即硬失败；⑤行为判定从运行摘要重算差分，相同摘要+`differed=true` 被拒。全量 Python 门禁 **753 passed / 4 skipped**、Ruff/Pyright/contracts/TypeScript 通过；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **3 passed**。
+2026-10-04 本轮复审（分支 `feat/realworld-acceptance-samples`）：**注入确认链重新标为待修复**。RG-01/P0：目标代码与 `sys.setprofile` 同进程，能用 `os._exit(20)` 伪装父进程信任的 sink 退出码，或关闭 profiler 漏报；RG-02/P0：真实 sink 调用与输入差分也不证明 crafted 输入进入 sink；RG-03/P1：AST 按短名选函数，可能把另一个类的同名方法当成执行目标扫描，非空 anchor 条件无法发现错位。详见 [`code/docs/code-review-2026-10-04-gates.md`](code/docs/code-review-2026-10-04-gates.md)。本轮只改质量门禁：并行且保留完整带来源日志，补 contracts 漂移/Web 构建，强制测当前源码，覆盖率补 `proof`/`reporting` 并排除生成声明。Linux dev 容器完整门禁 **753 passed / 4 skipped，覆盖率 81.18%，190.7 秒**；Ruff、Pyright、contracts、TypeScript/Web 构建均通过。未修改产品确认逻辑、未部署；在 RG-01～03 消除前不把注入 Finding 的既有证据链视为可信闭环。
+
+2026-10-04 上一轮修复记录（分支 `feat/realworld-acceptance-samples @ 3902c4e`，注入结论由本轮 RG-01～03 修正）：RA-01～RA-05 当时均按既有回归关闭并部署。①注入 reach 由 target-worker 的 `sys.setprofile` 观测经退出码 20 传给 entrypoint；该退出码现发现可由目标伪装。②鉴权确认事实派生移除，Finding 保持候选。③约束提取严格 path/line/address 匹配。④分页汇总逐片段重验摘要并读取嵌套 report。⑤行为判定从运行摘要重算差分。历史门禁 **753 passed / 4 skipped**、Ruff/Pyright/contracts/TypeScript 通过；当时重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **3 passed**，但未覆盖本轮 RG 负例。
 
 2026-10-04 最新分支只读审计（`feat/realworld-acceptance-samples @ bce0a24`）：发现 CR-04 的注入和鉴权证据映射仍可把普通输入差分提升为确认条件；另有源文件约束匹配错误、分页汇总报告丢失 findings、观测一致性校验接受相同摘要却声称差分。详见下方"本轮审计待修复"。本轮仅运行定向测试与无害契约级复现，未修改程序代码或部署。
 
@@ -24,16 +26,17 @@
 
 | 编号 | 状态 | 影响与解除条件 |
 |---|---|---|
+| RG-01～03 / P0/P1 | 受阻（注入确认可信度） | 同进程画像的退出码可伪装/关闭；C 调用事件不证明输入传播，AST 短名匹配可选错同名方法而非空 anchor 无法发现。按 `code/docs/code-review-2026-10-04-gates.md` 改可信观测与事实条件，补 Sandbox Runner 负例；完成前不把注入结果作为可信确认。 |
 | CR-01、CR-02 / P0 | 已完成（P0 范围） | 执行输入与元数据分离为 bundle 成员并逐成员摘要校验；原目标以只读成员绑定（TargetBinding：artifact/version/digest）；`SandboxStatus` 成功不再产生任何漏洞结论，结论仅由可信入口的 `VerificationObservation` 决定。真实 Runner 正反例验收通过（`tests/proof/test_target_bound_runner.py`，opt-in）。C/C++ 目标构建绑定转 P1。 |
 | CR-03 / P1 | 已完成 | 生成的受限调用描述与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
-| CR-04 / P1 | 注入已闭环；鉴权待可执行约束判据 | ①注入——reach 由解释器级 sink 触发观测证明（target-worker C 调用画像，exit 20，逐 run `sink_fired`），worker 仅在 crafted+replays 全触发时写 `sink_reached`，AST 枚举降级为诊断并仅在验证 reach 随行，gate 派生 `source_to_sink_path`+`protection_analysis`（RA-01 修复，回归 `tests/proof/test_sink_reach_and_matching.py`）；②鉴权——RA-02 修复：差分证据不派生任何鉴权确认事实（行为差分≠约束违反），Finding 保持候选，解封依赖 oracle 提案 §5 可执行约束判据立项；③独立崩溃/利用 oracle 立项评估已完成（[`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)）。 |
+| CR-04 / P1 | 注入重开（RG-01～03）；鉴权待可执行约束判据 | 注入现有 C 调用画像经目标进程退出码 20 传递，目标可伪装退出码或关闭 profiler；任意 sink 调用加输入差分不证明输入到 sink，AST 短名匹配还可能扫描错误方法。须先可信观测与输入传播判据，再允许派生确认事实，并用真实 Runner 负例验收。鉴权已不从差分证据派生确认事实，保持候选；独立崩溃/利用 oracle 评估见 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)。 |
 | CR-05 / P1 | 已完成 | 必填 constraint + `_issue_identity` 归一指纹（NFKC/空白/大小写）进入 evidence 身份；同任务 CWE+精确位置稳定去重；同函数不同源码行回归通过；新增同函数双地址（二进制）回归通过。 |
 | CR-06 / P1 | 已完成 | 回退审计分页化（64 函数/页）+ 逐页投影与 checkpoint 续跑，8h deadline 兜底（TIMEOUT 可重试），消除 256 函数截断；汇总报告逐片段重验 CAS 摘要并合并嵌套 findings，缺失/篡改即硬失败（RA-04 修复）。源码搜索按唯一文件计数（此前已修）；finding-report 读取证明键为 `(version_id, path, line)`，跨版本同路径读取不再互相授权（回归 `tests/orchestrator/test_code_audit.py`）。 |
 | CR-07 / P1 | 已完成（本轮量化+优化） | 基准：2000 函数图 neighborhood depth1 402ms→**54ms**，6000 函数 **110ms**（`code/scripts/benchmark_pair_neighborhood.py`）。邻域下推递归 CTE，只取到达子图；审计入口以 `has_functions` 探针替代全量装载，agent 成功路径零重复装载、回退路径单次装载。`pair.neighborhood` 全图入 Python 的旧实现已移除；`agent_runs.save_progress` 写放大与 ProjectView N+1 仍是候选项（见下一步 8）。 |
 | CR-08 / P2 | 已完成 | 聚合 merge 逐集合记录 offered/retained/limit/截断原因（去重不计截断），strings 提取报告 offered；覆盖信息进入 `BinaryAnalysisResult.coverage`、规划 facts `coverage_incomplete`、agent `artifact_facts` summary 与 `analysis_baseline.truncated_collections`；imports 独立 `max_imports`（默认不变）。超限样本回归见 `tests/binary_analysis/test_coverage.py`。 |
 | CR-09–11 / P0 | 已修复、Runner 验收并部署 | 目标调用移入每轮隔离子进程，supervisor 独立写报告；bundle/observation 绑定 Finding 与目标版本，入口和 worker 交叉核对摘要。Runner 正反例 3 passed，镜像重建且应用容器已重启。 |
 | 复核 P0-1/2、P1-1/2/3/4/5 | 已修复并通过全量门禁/定向 Runner | manifest 严格成员检查包含 manifest 本身；导入模块 callable 拒绝；观察计数、运行角色、bundle 成员和 verdict 自洽；目标调用单轮超时；PoC 与 evidence 同事务、生成物按 job 幂等复用，TIMEOUT/ENVIRONMENT 按策略重试；agentic finding-report 要求 constraint，Finding 身份以 CWE+精确位置稳定去重。 |
-| 复核 P1-6 | 已修复 | 可重复目标异常结果为 `INCONCLUSIVE`，观测只作为 `SUPPORTING` evidence；`FindingReviewGate` 不从此 observation 推导崩溃、可控输入或匹配环境事实。独立影响判据仍是自动确认所需条件（鉴权类现已由差分 oracle 满足，见 CR-04）。 |
+| 复核 P1-6 | 已修复 | 可重复目标异常结果为 `INCONCLUSIVE`，观测只作为 `SUPPORTING` evidence；`FindingReviewGate` 不从此 observation 推导崩溃、可控输入或匹配环境事实。鉴权类仍需可执行约束判据，注入类待 RG-01～03。 |
 
 近期附带修复：`pocs.result` 列 varchar(32) 装不下契约值 `not_exploitable_under_environment`（33 字符），迁移 `0024` 加宽至 64 并同步 models。
 
@@ -96,6 +99,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 本轮质量门禁与分支复审（Linux dev 容器） | 旧串行入口全量：753 passed / 4 skipped、覆盖率 81.80%，pytest 自身 145.97 秒；新并行入口首次全量 167.9 秒。补 `proof`/`reporting` 覆盖并排除生成声明后，`pnpm run check` **753 passed / 4 skipped、扩展后覆盖率 81.18%、总耗时 190.7 秒**，Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过；`node --check scripts/check.mjs` 与 `git diff --check` 通过。人为移除 `pnpm` 的 PATH 负例返回 exit 1 并逐项报错。4 skipped 为 3 个真实 Runner 配置项和 1 个 Docker runtime opt-in；本轮未跑 Runner/镜像重建、未部署。RG-01～03 为静态代码路径推导，待隔离环境负例验收。 |
 | 2026-10-04 | 分支（`3902c4e`）RA-01~05 修复门禁与栈内部署 | `pnpm run check:python`：**753 passed / 4 skipped**（修复过程一轮 752+1 失败系旧鉴权派生测试未同步 RA-02 语义，已更新）；Ruff、Pyright 0 errors、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 定向验收 **3 passed**。新增回归：sink 触发/清洁目标 entrypoint 正反例、相同摘要 forged 观测拒绝、无 sink 触发不写 sink_reached、多 Finding 约束提取、损坏片段硬失败、续跑聚合计数。 |
 | 2026-10-04 | 分支（`708a4f4`）CR-04 收尾门禁与栈内部署 | `pnpm run check:python`：**742 passed / 4 skipped**（上一轮曾出现 1 项 worker 并行偶发 error，隔离/目录级/全量复跑均通过确认为偶发）；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、宿主机 `/health/ready` 返回 ready、Web 200；真实 Runner 定向验收 **3 passed**。注入全链确认回归 `test_injection_with_protection_enumeration_confirms` 通过。 |
 | 2026-10-04 | 分支 `feat/realworld-acceptance-samples`（`92bb0d7`）CR-04~08 修复门禁与栈内部署 | `pnpm run check:python`：**735 passed / 4 skipped**，覆盖率 **81.79%**；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests、`vite build` 通过。4 项跳过为 3 个需 Runner 配置的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**（`SANDBOX_RUNNER_URL`/`SANDBOX_RUNNER_TOKEN` 取自栈 `.env`）。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate exit 0（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` ready、Web 200（web 容器需 `--force-recreate` 刷新 nginx 上游缓存，见经验教训）。 |
@@ -111,11 +115,11 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 更早的门禁记录（T45–T55，2026-09-11 至 2026-10-01）与 T46–T52 各轮 E2E 细节见 Git 提交与 `code/docs/progress/`。
 
-## 本轮审计待修复（2026-10-04，分支 `bce0a24`）——已全部修复（`3902c4e`）
+## 前轮审计修复（2026-10-04，`bce0a24` → `3902c4e`；RA-01 由 RG-01～03 重开）
 
 | 编号 | 优先级 / 状态 | 原始发现与修复 |
 |---|---|---|
-| RA-01 | P0 / 已修复 | 原发现：注入差分证据对任何稳定输出差异写 `sink_reached=True`，AST 枚举连未执行的 sink 也列出。修复：target-worker 在绑定调用期间以 `sys.setprofile` 观测控制面 sink 词典的 C 调用（解释器事件，目标代码不可伪造），触发则以退出码 20 结束；entrypoint 逐 run 记录 `sink_fired`（完成语义、非崩溃，契约 `VerificationRun.sink_fired` 可选字段）；worker 仅在 crafted+两次 replay 全部触发时写 `sink_reached`（`sink_reach_is_verified`）；AST 枚举降级为诊断，仅在机器验证 reach 随行，gate 仅在该组合派生 `protection_analysis`。回归：`tests/proof/test_sink_reach_and_matching.py`、`tests/proof/test_differential_verification.py::test_behavior_without_sink_fire_claims_no_reach`。 |
+| RA-01 | P0 / 重开（RG-01～03） | 前轮移除了“单凭输出差分写 `sink_reached`”的直接路径，并增加 `sys.setprofile` C 调用画像和重放要求；但目标仍能伪装 exit 20 或关闭 profiler，且 sink 触发没有证明输入进入 sink。原回归只覆盖声明的机制，没有覆盖这些负例。详见本轮审查文档。 |
 | RA-02 | P0 / 已修复（鉴权降级为候选） | 原发现：约束文本 SHA-256 回显不检验违反关系，普通输入差异即派生鉴权确认事实。修复：删除 `_derived_poc_facts` 鉴权分支——`constraint_analysis`/`behavior_difference`/`reachable_path` 不再从差分证据派生，鉴权 Finding 回到候选；`constraint_digest` marker 保留为诚实溯源。可执行约束判据方向（断言 DSL/不变量探针）记入 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) §5，解封需另行走 ADR 提案。回归：`test_auth_markers_derive_no_confirmation_facts`、gate 拒绝测试。 |
 | RA-03 | P1 / 已修复 | 原发现：`_constraint_from_report` 把 `None == None` 当地址匹配，同 CWE 报告错取第一条约束。修复：源条目仅按确切 path+line 匹配，二进制条目须两侧都有地址才比较；缺字段永不相等。回归：`test_constraint_extraction_requires_exact_location`、`..._ignores_partial_location_matches`、`..._matches_binary_address_on_both_sides`。 |
 | RA-04 | P1 / 已修复 | 原发现：分页汇总读包装对象顶层 `findings`，分页 findings 全部丢失而 coverage 仍标 complete。修复：汇总读取 `fragment["report"]`，逐片段重验 CAS 摘要，缺失/不可读/摘要不符即 `semantic_audit.fallback_fragment_missing` 硬失败。回归：`test_resumed_aggregate_carries_every_page_finding`、`test_corrupted_page_fragment_fails_the_audit_instead_of_losing_findings`。 |
@@ -125,17 +129,18 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：真实项目闭环与 oracle P0.5 提案**
+**下一步：先关闭 RG-01～03，再继续真实项目闭环与 oracle 提案**
 
-1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。鉴权类解封依赖 §5 的可执行约束判据立项。
-2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计；完成后 R3 目标绑定动态轨可执行。
-3. **审查清单回归观察**：用真实模型在栈内走一次 candidate → 差分/异常 observation → 模型 re-review → confirmed（鉴权与注入教学样本各一次），确认 `POC_VERIFICATION_RESULT` 标记与复核提示词兼容；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
+1. **RG-01～03 / 注入确认边界**：先补固定无害目标的 Sandbox Runner 负例：退出码 20 伪装、关闭 profiler、常量 sink 与独立输出差分、不同类的同名方法。基于负例设计目标不可伪造的 sink/参数传播观测；在可信判据落地前禁止这些 marker 推导注入确认事实。修改 ADR-036、契约与消费者后做全链回归。
+2. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例；鉴权类解封依赖 §5 的可执行约束判据。
+3. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计。
+4. **审查清单回归观察**：RG-01～03 关闭后，用真实模型走 candidate → observation → 独立 re-review → policy 全链；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
 
 **收尾与观察（非阻塞）**
 
-4. 完成上表中 T52–T60 的剩余验证与观察项；合并本分支入 main 后按惯例重建镜像。
-5. RealWorld 验收样本 R1/R2 轨在栈内执行验证。
-6. 逆向耗时优化（用户已问询，未立项）：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按输入大小分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②Ghidra program DB 作为派生工件回投沙箱复用（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
-7. 真实壳扩展：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
-8. 性能后续候选项：`agent_runs.save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1；`AuditWorkspace.load` 在超大索引下的内存驻留（现已被入口探针隔离为单次装载）。
-9. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+5. 完成上表中 T52–T60 的剩余验证与观察项；合并本分支入 main 后按惯例重建镜像。
+6. RealWorld 验收样本 R1/R2 轨在栈内执行验证。
+7. 逆向耗时优化（用户已问询，未立项）：binary-facts 时间的主体是 Ghidra headless 对 18MB PE 的全量自动分析+反编译（一次性容器每轮重建 Ghidra program DB 无缓存）。候选方向：①事实首轮降配（`max_pseudocode_functions` 按输入大小分级或首轮跳过伪代码、agent 按需定向请求——target_addresses 管道已存在可复用）；②Ghidra program DB 作为派生工件回投沙箱复用（需 profile 支持额外只读输入，设计变更）；③入口脚本并行反编译。动前者需按 ADR 纪律评审。
+8. 真实壳扩展：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
+9. 性能后续候选项：`agent_runs.save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1；`AuditWorkspace.load` 在超大索引下的内存驻留（现已被入口探针隔离为单次装载）。
+10. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
