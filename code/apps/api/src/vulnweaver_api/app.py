@@ -370,15 +370,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "model endpoint must use HTTP or HTTPS",
                     f"model_tiers.{tier_name}.base_url",
                 )
-            if (
-                tier["thinking_mode"] == "custom"
-                and int(tier["thinking_budget_tokens"] or 0) < 1024
-            ):
-                raise ApiInputError(
-                    "invalid_thinking_budget",
-                    "custom thinking mode requires a budget of at least 1024 tokens",
-                    f"model_tiers.{tier_name}.thinking_budget_tokens",
-                )
             tier["base_url"] = tier_base_url
             tier["model_name"] = tier_model
         values["review_model_base_url"] = base_url
@@ -393,9 +384,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 stored_key = body.review_model_api_key
             if stored_key is not None:
                 values["review_model_api_key"] = stored_key
-            previous_tier_keys = cast(
-                dict[str, object], previous.get("tier_api_keys") or {}
-            )
+            previous_tier_keys = cast(dict[str, object], previous.get("tier_api_keys") or {})
             tier_keys: dict[str, object] = {
                 key: value
                 for key, value in previous_tier_keys.items()
@@ -436,11 +425,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             raw_keys = stored.get("provider_api_keys")
             if isinstance(raw_keys, dict):
                 stored_keys = cast(dict[str, object], raw_keys)
-        provider_entry = (
-            stored_providers.get(body.provider_id or "")
-            if body.provider_id
-            else None
-        )
+        provider_entry = stored_providers.get(body.provider_id or "") if body.provider_id else None
         if isinstance(provider_entry, dict) and not base_url:
             candidate = cast(dict[str, object], provider_entry).get("base_url")
             if isinstance(candidate, str):
@@ -832,9 +817,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         same response so one request replaces the previous polling storm.
         """
         if after < -1:
-            raise ApiInputError(
-                "invalid_event_cursor", "event cursor must be >= -1", "after"
-            )
+            raise ApiInputError("invalid_event_cursor", "event cursor must be >= -1", "after")
         async with database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
             jobs = await repositories.jobs.list_for_task(task_id)
@@ -895,9 +878,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "updated_at": _format_api_datetime(checkpoint.created_at),
                     "input_tokens": usage_dict.get("input_tokens"),
                     "output_tokens": usage_dict.get("output_tokens"),
-                    "journal_tail": cast(
-                        "list[dict[str, Any]]", journal[-5:]
-                    ),
+                    "journal_tail": cast("list[dict[str, Any]]", journal[-5:]),
                 }
             )
         timestamps = [task["updated_at"], *(job["updated_at"] for job in jobs)]
@@ -1445,7 +1426,7 @@ def _content_disposition(filename: str) -> str:
     """Emit an ASCII fallback plus an RFC 5987 UTF-8 filename."""
     ascii_fallback = filename.encode("ascii", "ignore").decode() or "download"
     encoded = quote(filename, safe="!#$&+-.^_`|~")
-    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _validate_upload_kind(kind: ArtifactKind) -> None:
@@ -1492,9 +1473,7 @@ def _product_settings_response(values: dict[str, object]) -> ProductSettingsResp
         if isinstance(stored_tier_keys, dict)
         else {}
     )
-    configured: dict[str, bool] = {
-        tier: tier in stored_key_map for tier in _TIER_NAMES
-    }
+    configured: dict[str, bool] = {tier: tier in stored_key_map for tier in _TIER_NAMES}
     stored_provider_keys = values.get("provider_api_keys")
     provider_key_map: dict[str, object] = (
         {str(k): v for k, v in cast(dict[str, object], stored_provider_keys).items()}
@@ -1572,13 +1551,58 @@ def _validate_model_providers(body: ProductSettingsBody) -> None:
                     f"model_providers.{provider.id}.models.{model.model_id}",
                 )
             seen_models.add(model.model_id)
-            if model.thinking_mode == "custom" and model.thinking_budget_tokens < 1024:
+            if (
+                model.thinking_style in {"deepseek", "kimi"}
+                and provider.api_format != "openai-chat"
+            ):
                 raise ApiInputError(
-                    "invalid_thinking_budget",
-                    "custom thinking mode requires a budget of at least 1024 tokens",
-                    f"model_providers.{provider.id}.models.{model.model_id}"
-                    ".thinking_budget_tokens",
+                    "invalid_thinking_style",
+                    "vendor thinking control requires OpenAI Chat",
+                    f"model_providers.{provider.id}.models.{model.model_id}.thinking_style",
                 )
+            if provider.api_format == "anthropic-messages" and model.thinking_effort in {
+                "none",
+                "minimal",
+            }:
+                raise ApiInputError(
+                    "invalid_thinking_effort",
+                    "Anthropic effort must be low, medium, high, xhigh or max",
+                    f"model_providers.{provider.id}.models.{model.model_id}.thinking_effort",
+                )
+            if model.thinking_style in {"deepseek", "kimi"} and model.thinking_effort not in {
+                None,
+                "low",
+                "high",
+                "max",
+            }:
+                raise ApiInputError(
+                    "invalid_thinking_effort",
+                    "this provider supports low, high or max effort",
+                    f"model_providers.{provider.id}.models.{model.model_id}.thinking_effort",
+                )
+            if model.thinking_style == "kimi":
+                if model.model_id not in {"kimi-k3", "kimi-k2.6"} and not model.model_id.startswith(
+                    "kimi-k2.7-code"
+                ):
+                    raise ApiInputError(
+                        "invalid_thinking_style",
+                        "Kimi thinking control is not verified for this model",
+                        f"model_providers.{provider.id}.models.{model.model_id}.thinking_style",
+                    )
+                if (
+                    model.model_id == "kimi-k3" or model.model_id.startswith("kimi-k2.7-code")
+                ) and model.thinking_mode == "off":
+                    raise ApiInputError(
+                        "invalid_thinking_mode",
+                        "this Kimi model cannot disable thinking",
+                        f"model_providers.{provider.id}.models.{model.model_id}.thinking_mode",
+                    )
+                if model.model_id != "kimi-k3" and model.thinking_effort is not None:
+                    raise ApiInputError(
+                        "invalid_thinking_effort",
+                        "Kimi K2.x does not support reasoning_effort",
+                        f"model_providers.{provider.id}.models.{model.model_id}.thinking_effort",
+                    )
     bindings = body.agent_model_bindings
     for role in _TIER_NAMES:
         binding = getattr(bindings, role)
@@ -1631,9 +1655,7 @@ def _merge_provider_api_keys(
     return merged
 
 
-async def _probe_model_list(
-    base_url: str, api_format: str, api_key: str | None
-) -> list[str]:
+async def _probe_model_list(base_url: str, api_format: str, api_key: str | None) -> list[str]:
     """Fetch a provider's model list; bounded, credential-free errors only."""
 
     parsed = urlparse(base_url)

@@ -6,8 +6,8 @@
 //   Anthropic https://platform.claude.com/docs（claude-sonnet-5-5 等，1M / 128K）
 //   OpenAI    https://developers.openai.com/api/docs/models（gpt-6.1-sol 等，1.05M / 128K）
 // 上下文窗口用于网关的粗粒度（约 4 字符/token）上下文裁剪估计；最大输出
-// token 作为该模型的输出上限默认值（Anthropic 的 max_tokens 等）；0 表示交由
-// 供应商默认决定。所有字段保存后均可手工修改。
+// token 只登记模型的物理输出能力，供 Anthropic 必填 max_tokens 等协议字段使用；
+// 0 表示交由供应商默认决定。所有字段保存后均可手工修改。
 
 export interface PresetModel {
   model_id: string;
@@ -32,8 +32,8 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     base_url: "https://api.deepseek.com",
     api_format: "openai-chat",
     models: [
-      { model_id: "deepseek-flash", context_window_tokens: 1000000, max_output_tokens: 384000, note: "DeepSeek-V4.1-Flash，性价比主力，默认开启思考" },
-      { model_id: "deepseek-v4-pro", context_window_tokens: 1000000, max_output_tokens: 384000, note: "DeepSeek-V4-Pro-0813，能力上限更高" },
+      { model_id: "deepseek-flash", context_window_tokens: 1000000, max_output_tokens: 393216, note: "DeepSeek-V4.1-Flash，性价比主力，默认开启思考" },
+      { model_id: "deepseek-v4-pro", context_window_tokens: 1000000, max_output_tokens: 393216, note: "DeepSeek-V4-Pro-0813，能力上限更高" },
     ],
     hint: "OpenAI 兼容端点（无 /v1 后缀）；API Key 在 https://platform.deepseek.com 创建。",
   },

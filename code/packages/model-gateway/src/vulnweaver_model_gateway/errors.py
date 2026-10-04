@@ -25,6 +25,7 @@ class ModelGatewayError(RuntimeError):
         self.message = message
         self.details = cast(JsonObject, dict(details or {}))
         self.attempt_decisions: tuple[tuple[str, str], ...] = ()
+        self.attempt_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         if retryable is not None:
             self.retryable = retryable
         super().__init__(message)

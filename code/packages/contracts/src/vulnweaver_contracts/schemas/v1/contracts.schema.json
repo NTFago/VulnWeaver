@@ -368,7 +368,11 @@
       "required": ["input_tokens", "output_tokens"],
       "properties": {
         "input_tokens": {"type": "integer", "minimum": 0},
-        "output_tokens": {"type": "integer", "minimum": 0}
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "cached_input_tokens": {"type": "integer", "minimum": 0},
+        "cache_write_input_tokens": {"type": "integer", "minimum": 0},
+        "reasoning_output_tokens": {"type": "integer", "minimum": 0},
+        "missing_usage_responses": {"type": "integer", "minimum": 0}
       }
     },
     "SourceLocation": {
@@ -1665,7 +1669,9 @@
         "context_window_tokens": {"type": "integer", "minimum": 0, "maximum": 100000000},
         "max_output_tokens": {"type": "integer", "minimum": 0, "maximum": 10000000},
         "thinking_mode": {"type": "string", "enum": ["off", "default", "custom"]},
-        "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000}
+        "thinking_budget_tokens": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "thinking_effort": {"anyOf": [{"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]}, {"type": "null"}]},
+        "thinking_style": {"type": "string", "enum": ["standard", "deepseek", "kimi"]}
       }
     },
     "AgentModelBinding": {

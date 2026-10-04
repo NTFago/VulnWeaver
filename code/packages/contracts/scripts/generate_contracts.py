@@ -135,7 +135,19 @@ def render_python(bundle: dict[str, Any]) -> str:
                 annotation = _python_type(property_schema)
                 if property_name not in required:
                     annotation = f"NotRequired[{annotation}]"
-                lines.append(f"    {property_name}: {annotation}")
+                field = f"    {property_name}: {annotation}"
+                if (
+                    len(field) > 100
+                    and annotation.startswith("NotRequired[")
+                    and " | " in annotation
+                ):
+                    members = annotation[len("NotRequired[") : -1].split(" | ")
+                    lines.append(f"    {property_name}: NotRequired[")
+                    lines.append(f"        {members[0]}")
+                    lines.extend(f"        | {member}" for member in members[1:])
+                    lines.append("    ]")
+                else:
+                    lines.append(field)
             lines.append("")
         else:
             annotation = _python_type(schema)

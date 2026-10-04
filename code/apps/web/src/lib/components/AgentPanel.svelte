@@ -60,6 +60,10 @@
         <div class="meta">
           <span>决策 {run.decisions.length}</span>
           <span>输入 {run.token_usage.input_tokens} · 输出 {run.token_usage.output_tokens}</span>
+          {#if run.token_usage.cached_input_tokens}<span>缓存读取 {run.token_usage.cached_input_tokens}</span>{/if}
+          {#if run.token_usage.cache_write_input_tokens}<span>缓存写入 {run.token_usage.cache_write_input_tokens}</span>{/if}
+          {#if run.token_usage.reasoning_output_tokens}<span>思考输出 {run.token_usage.reasoning_output_tokens}</span>{/if}
+          {#if run.token_usage.missing_usage_responses}<span title="供应商未返回完整用量，显示的合计不是精确值">{run.token_usage.missing_usage_responses} 次请求用量缺失</span>{/if}
           <span>{typeof run.duration_ms === "number" ? `耗时 ${formatDuration(run.duration_ms) || "不足 1 秒"}` : run.status === "running" ? "运行中" : "未记录耗时"}</span>
         </div>
         {#if run.decisions.length > 0}

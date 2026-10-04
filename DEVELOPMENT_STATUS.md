@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 模型网关重写已在独立 worktree `feat/model-gateway-adapters` 完成并通过本地门禁（基于 `main @ e7511d9`），见 ADR-037。三种线协议已拆到适配器；思考强度改为供应商原生参数，设置页不再提供思考预算或回答上限，旧档位预算校验亦已移除；用量新增缓存/思考明细及缺失标记，并保留错误、重试、回退、JSON 修复调用的已报告用量。Linux `dev` 容器执行 `pnpm run check`：Ruff、Pyright、契约生成检查、前端类型检查/18 个测试/构建均通过，Python **775 passed、7 skipped**，覆盖率 **81.04%**；后续设置页边界修正已单独重跑 `pnpm run check:typescript`，旧档位兼容修正已定向执行 **65 passed**、Ruff、Pyright 均通过。7 个跳过项需真实 Sandbox Runner / Docker runtime；没有真实模型供应商密钥，本轮只验证固定官方格式响应，真实供应商端点与计费对账仍待配置密钥后执行。下一步：用用户授权的测试密钥分别对已配置的供应商做单次结构化请求，核对原生思考参数、响应 usage 与供应商控制台账单；合并后的 `main` 在 Linux `dev` 容器重跑 `pnpm run check`：Ruff、Pyright、契约与前端检查均通过，Python **785 passed、7 skipped**，覆盖率 **81.06%**。已与审计修复轮合并，尚未部署或进行真实端点验收。
+
 2026-10-04 后续修复轮收尾（分支 `fix/audit-followups`，基于 `main @ e7511d9`）。在"当前焦点"①～④（RC-01、CR-06、复审、`extract_strings`）之上，本轮补齐三项决定：
 
 **⑤版本选择规则收敛到 `pair_scopes.py`（原第 16 项）**：新增 `SOURCE_KINDS`/`BINARY_KINDS` 与纯函数 `choose_pair_scope(scoped)`，`scoped` 为按 scope 顺序的 `(version_id, kind, has_functions)`。`SemanticAuditor._pair_scope`、`_auditable_functions` 与 `AuditWorkspace.load` 三处原先各自实现"scope 内首个 source version / 优先持有函数的 binary version"的规则，现全部改由该函数决策，各自只保留自己的查询。`audit_tools` 的模块级 `_SOURCE_KINDS`/`_BINARY_KINDS` 也改用共享定义，消除同名重复。新增 `test_workspace_and_auditor_agree_on_the_anchor_versions` 直接断言两侧选出的 source/binary 版本一致（source 与 binary 各跑一次）——这正是此前**没有任何断言**覆盖、而一旦漂移就会让读取证明授权给错误版本的属性。

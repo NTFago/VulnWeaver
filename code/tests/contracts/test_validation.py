@@ -20,6 +20,23 @@ def _budget() -> dict[str, int]:
     }
 
 
+def test_model_settings_and_usage_extensions_keep_v1_compatibility() -> None:
+    validate_contract("ProviderModelEntry", {
+        "model_id": "kimi-k3", "thinking_mode": "default",
+        "thinking_effort": None, "thinking_style": "kimi",
+    })
+    validate_contract("TokenUsage", {"input_tokens": 3, "output_tokens": 5})
+    validate_contract("TokenUsage", {
+        "input_tokens": 3, "output_tokens": 5,
+        "cached_input_tokens": 1, "reasoning_output_tokens": 2,
+        "missing_usage_responses": 0,
+    })
+    with pytest.raises(ContractValidationError):
+        validate_contract("TokenUsage", {
+            "input_tokens": 3, "output_tokens": 5, "cached_input_tokens": -1,
+        })
+
+
 def test_job_requested_event_validates() -> None:
     validate_contract(
         "QueueEvent",

@@ -3,7 +3,7 @@
 The registry mirrors how end-user tools (cc-switch, dsh, ZCode) organize model
 access: named **providers** carry the connection (base URL, API format, API
 key, enable toggle) plus a **model list** with per-model metadata (context
-window, output ceiling, thinking), and each agent role binds to one
+window, physical output capacity, thinking), and each agent role binds to one
 ``(provider, model)`` pair with an optional fallback pair.
 
 The registry is storage-agnostic: :meth:`ModelAccessConfig.from_settings`
@@ -42,6 +42,8 @@ class ProviderModel:
     max_output_tokens: int = 0
     thinking_mode: str = "off"
     thinking_budget_tokens: int = 0
+    thinking_effort: str | None = None
+    thinking_style: str = "standard"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,13 +134,44 @@ class ModelAccessConfig:
                         f"provider {provider.id!r} model {model.model_id!r} has an unknown "
                         "thinking mode"
                     )
-                if model.thinking_mode == "custom" and (
-                    model.thinking_budget_tokens < 1024
-                ):
+                if model.thinking_effort is not None and model.thinking_effort not in {
+                    "none",
+                    "minimal",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max",
+                }:
                     raise ValueError(
-                        f"provider {provider.id!r} model {model.model_id!r} custom thinking "
-                        "requires a budget of at least 1024 tokens"
+                        f"provider {provider.id!r} model {model.model_id!r} has invalid effort"
                     )
+                if model.thinking_style not in {"standard", "deepseek", "kimi"}:
+                    raise ValueError(f"model {model.model_id!r} has invalid thinking style")
+                if (
+                    model.thinking_style in {"deepseek", "kimi"}
+                    and provider.api_format != "openai-chat"
+                ):
+                    raise ValueError("vendor thinking control requires OpenAI Chat")
+                if model.thinking_style in {"deepseek", "kimi"} and model.thinking_effort not in {
+                    None,
+                    "low",
+                    "high",
+                    "max",
+                }:
+                    raise ValueError("vendor reasoning effort must be low, high or max")
+                if model.thinking_style == "kimi":
+                    if model.model_id not in {
+                        "kimi-k3",
+                        "kimi-k2.6",
+                    } and not model.model_id.startswith("kimi-k2.7-code"):
+                        raise ValueError("Kimi thinking control is not verified for this model")
+                    if (
+                        model.model_id == "kimi-k3" or model.model_id.startswith("kimi-k2.7-code")
+                    ) and model.thinking_mode == "off":
+                        raise ValueError("this Kimi model cannot disable thinking")
+                    if model.model_id != "kimi-k3" and model.thinking_effort is not None:
+                        raise ValueError("Kimi K2.x does not support reasoning_effort")
         roles_seen: set[str] = set()
         for binding in self.bindings:
             if binding.role not in _AGENT_ROLES:
@@ -252,9 +285,7 @@ class ModelAccessConfig:
 
         routes: dict[str, ModelRoute] = {}
         for binding in self.bindings:
-            primary = self._endpoint_for(
-                binding.role, binding.provider_id, binding.model_id
-            )
+            primary = self._endpoint_for(binding.role, binding.provider_id, binding.model_id)
             fallback: ModelEndpoint | None = None
             if binding.fallback_provider_id and binding.fallback_model_id:
                 fallback = self._endpoint_for(
@@ -286,11 +317,15 @@ class ModelAccessConfig:
         timeout = provider.timeout_seconds or self.default_timeout_seconds
         attempts = provider.max_attempts or self.default_max_attempts
         thinking: ThinkingConfig | None = None
-        if model.thinking_mode == "default":
-            thinking = ThinkingConfig(mode="default")
-        elif model.thinking_mode == "custom":
+        if (
+            model.thinking_mode != "off"
+            or model.thinking_effort
+            or model.thinking_style != "standard"
+        ):
             thinking = ThinkingConfig(
-                mode="custom", budget_tokens=model.thinking_budget_tokens
+                mode="default" if model.thinking_mode == "custom" else model.thinking_mode,
+                effort=model.thinking_effort,
+                style=model.thinking_style,
             )
         return ModelEndpoint(
             name=f"{provider.id}:{model.model_id}",
@@ -324,9 +359,7 @@ def _validated_model_int(
     return value
 
 
-def _parse_provider(
-    entry: Mapping[str, object], api_keys: Mapping[str, str]
-) -> ModelProvider:
+def _parse_provider(entry: Mapping[str, object], api_keys: Mapping[str, str]) -> ModelProvider:
     provider_id = entry.get("id")
     if not isinstance(provider_id, str) or not _PROVIDER_ID_PATTERN.match(provider_id):
         raise ModelConfigurationError("stored model provider id is missing or malformed")
@@ -354,9 +387,7 @@ def _parse_provider(
     models: list[ProviderModel] = []
     for model_raw in cast(list[object], models_raw):
         if not isinstance(model_raw, Mapping):
-            raise ModelConfigurationError(
-                f"provider {provider_id!r} model entries must be objects"
-            )
+            raise ModelConfigurationError(f"provider {provider_id!r} model entries must be objects")
         model_source = cast(Mapping[str, object], model_raw)
         model_id = model_source.get("model_id")
         if not isinstance(model_id, str) or not model_id:
@@ -371,9 +402,7 @@ def _parse_provider(
         context_window = _validated_model_int(
             model_source, "context_window_tokens", provider_id, model_id
         )
-        max_output = _validated_model_int(
-            model_source, "max_output_tokens", provider_id, model_id
-        )
+        max_output = _validated_model_int(model_source, "max_output_tokens", provider_id, model_id)
         thinking_budget = _validated_model_int(
             model_source, "thinking_budget_tokens", provider_id, model_id
         )
@@ -386,6 +415,16 @@ def _parse_provider(
             raise ModelConfigurationError(
                 f"provider {provider_id!r} model {model_id!r} thinking_mode is unknown"
             )
+        thinking_effort = model_source.get("thinking_effort")
+        if thinking_effort is not None and not isinstance(thinking_effort, str):
+            raise ModelConfigurationError(
+                f"provider {provider_id!r} model {model_id!r} thinking_effort must be a string"
+            )
+        thinking_style = model_source.get("thinking_style", "standard")
+        if not isinstance(thinking_style, str):
+            raise ModelConfigurationError(
+                f"provider {provider_id!r} model {model_id!r} thinking_style must be a string"
+            )
         models.append(
             ProviderModel(
                 model_id=model_id,
@@ -394,6 +433,8 @@ def _parse_provider(
                 max_output_tokens=max_output,
                 thinking_mode=thinking_mode,
                 thinking_budget_tokens=thinking_budget,
+                thinking_effort=thinking_effort,
+                thinking_style=thinking_style,
             )
         )
     return ModelProvider(

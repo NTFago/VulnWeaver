@@ -376,6 +376,10 @@ class DecisionRecord(TypedDict):
 class TokenUsage(TypedDict):
     input_tokens: int
     output_tokens: int
+    cached_input_tokens: NotRequired[int]
+    cache_write_input_tokens: NotRequired[int]
+    reasoning_output_tokens: NotRequired[int]
+    missing_usage_responses: NotRequired[int]
 
 class SourceLocation(TypedDict):
     artifact_version_id: Identifier
@@ -1154,6 +1158,11 @@ class ProviderModelEntry(TypedDict):
     max_output_tokens: NotRequired[int]
     thinking_mode: NotRequired[Literal['off', 'default', 'custom']]
     thinking_budget_tokens: NotRequired[int]
+    thinking_effort: NotRequired[
+        Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+        | None
+    ]
+    thinking_style: NotRequired[Literal['standard', 'deepseek', 'kimi']]
 
 class AgentModelBinding(TypedDict):
     provider_id: str
