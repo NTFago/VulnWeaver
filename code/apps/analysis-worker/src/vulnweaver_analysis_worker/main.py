@@ -193,8 +193,9 @@ async def _run() -> None:
         fuzz_executor = await _fuzz_executor(
             database, store, tool_registry, model_gateway, config
         )
-        exploit_scheduler = _auto_exploit_scheduler(database, config)
-        poc_scheduler = _poc_scheduler(database, config)
+        proof_image_digest = await _proof_tool_image_digest(config)
+        exploit_scheduler = _auto_exploit_scheduler(database, proof_image_digest)
+        poc_scheduler = _poc_scheduler(database, proof_image_digest)
         fuzz_scheduler = _fuzz_scheduler(
             database,
             store,
@@ -693,31 +694,48 @@ def _proof_executor(
     return ProofJobExecutor(database, service, store=store, script_generator=generator)
 
 
-def _poc_scheduler(
-    database: Database, config: ResolvedDeploymentConfig
-) -> PocVerificationScheduler | None:
-    image_digest = (
+async def _proof_tool_image_digest(config: ResolvedDeploymentConfig) -> str | None:
+    """Resolve the proof-tool digest gating the dynamic-verification schedulers.
+
+    Mirrors _binary_sandbox: a digest pinned in settings or the environment
+    wins, and an unpinned deployment discovers the digest the runner
+    registered for the proof tool. Discovery used to be binary-analysis only,
+    so an operator relying on the settings page's advertised auto-discovery
+    kept the whole PoC/exploit pipeline silently disabled while the analysis
+    path discovered its own digest from the same runner (2026-10-04).
+    """
+    digest = (
         config.digests.proof_tool
+        # Legacy alias still honoured by the deployments that predate the settings page.
         or os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
-        or os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
+        or None
     )
+    if digest:
+        return digest
+    runner_url = os.environ.get("SANDBOX_RUNNER_URL", "").strip()
+    if not runner_url:
+        return None
+    client = _sandbox_client(runner_url, _binary_client_timeout(config))
+    return await client.tool_digest(
+        os.environ.get("PROOF_TOOL_NAME", "proof-tool"),
+        os.environ.get("PROOF_TOOL_VERSION", "1.0.0"),
+    )
+
+
+def _poc_scheduler(
+    database: Database, image_digest: str | None
+) -> PocVerificationScheduler | None:
     if not image_digest:
-        # Candidate-stage PoC verification shares the pinned proof image gate.
+        # Candidate-stage PoC verification shares the resolved proof image gate.
         return None
     return PocVerificationScheduler(database, image_digest=image_digest)
 
 
 def _auto_exploit_scheduler(
-    database: Database, config: ResolvedDeploymentConfig
+    database: Database, image_digest: str | None
 ) -> AutoExploitScheduler | None:
-    image_digest = (
-        config.digests.proof_tool
-        # Legacy alias still honoured by the deployments that predate the settings page.
-        or os.environ.get("PROOF_TOOL_IMAGE_DIGEST", "").strip()
-        or os.environ.get("PROOF_IMAGE_DIGEST", "").strip()
-    )
     if not image_digest:
-        # Without a pinned proof image the automatic exploit pipeline stays off.
+        # Without a resolved proof image the automatic exploit pipeline stays off.
         return None
     return AutoExploitScheduler(database, image_digest=image_digest)
 
