@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 RF 修复复核（`feat/realworld-acceptance-samples @ 17caa13`，只读产品代码）：逐项核对 `1ca1d20` 的 RF-01/02 修复及 Worker 结算、断点顺序；本轮范围内未发现新的可操作缺陷。Linux `dev` 容器使用当前源码定向运行分页与 Worker 续跑测试 **9 passed**，受影响两个文件 Ruff 通过；`git diff --check c3c82eb..HEAD` 通过。未独立重跑全量门禁、镜像或真实 Runner 验收；这些结果沿用下方 RF 修复轮的记录。工作区原有未跟踪 `.zcodeignore` 未触碰。
+
 2026-10-04 RF 修复轮（分支 `feat/realworld-acceptance-samples @ 1ca1d20`）：RP 修复复审的 RF-01～02 已修复并部署。①RF-01：分页模型调用失败时 `_AuditError` 现在原样携带网关失败的结构化 `kind`/`retryable`/`message` 到 WorkerResult——可重试传输失败（超时、HTTP 408/429/5xx → `ModelTransportError` retryable=True）不再被 `_AuditError` 默认值抹成终态，断点在下一 attempt 被消费；新增 Worker 结算级回归：第 0 页成功、第 1 页传输失败、Worker 自动重入队、attempt 2 从断点恢复只重跑第 1 页（第 0 页从未重发，页拆分断言锁定）。②RF-02：Worker 时钟测试改为在第 0 页完成之后（第 3 次时钟调用）触发截止，并断言 attempt 1 保存 `next_page=1` 断点、attempt 2 只执行剩余页、最终断点 completed。新并行门禁完整输出：**761 passed / 7 skipped、覆盖率 81.10%、192.1s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。至此"分页回退审计可恢复"对本地截止与模型传输故障两类中断均经 Worker 结算级验证。
 
 2026-10-04 RP 修复复审（`feat/realworld-acceptance-samples @ 69cfba2`）：RP-01～03 的主要代码路径已修复，Linux `dev` 容器定向测试 **8 passed**。仍发现 RF-01/P1：分页模型传输失败返回的可重试标志被 `_AuditError` 默认值抹掉，Worker 终结 Job，断点无法续跑；RF-02/P2：新增 Worker 测试在第一页之前触发截止，未验证从已完成页继续。详见 [`code/docs/code-review-2026-10-04-paged-audit-followup.md`](code/docs/code-review-2026-10-04-paged-audit-followup.md)。本轮只读产品代码，未独立运行全量门禁或部署。
