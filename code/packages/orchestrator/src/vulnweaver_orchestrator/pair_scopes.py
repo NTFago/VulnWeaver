@@ -11,10 +11,41 @@ zero functions.
 
 from __future__ import annotations
 
-from vulnweaver_contracts import Task
+from collections.abc import Iterable
+
+from vulnweaver_contracts import ArtifactKind, Task
 from vulnweaver_persistence import Repositories
 
 BINARY_IMPORT_TOOL = "binary-import"
+
+SOURCE_KINDS = (ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY)
+BINARY_KINDS = (ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED)
+
+
+def choose_pair_scope(
+    scoped: Iterable[tuple[str, ArtifactKind, bool]],
+) -> tuple[str, str]:
+    """Pick the versions an audit anchors its findings to, in scope order.
+
+    ``scoped`` yields ``(version_id, kind, has_functions)``. A source finding
+    anchors to the first source version; a binary finding to the version that
+    actually carries the PAIR graph, since a packed input's graph lives on the
+    derived analysis version rather than on the uploaded image.
+
+    This lives here, with the scope itself, because every entry point has to
+    agree on it: the code-read proof authorizes a report against the version
+    ``_resolve_location`` will anchor it to, so any second copy of the rule that
+    drifts silently authorizes the wrong file (CR-06). Callers keep their own
+    queries -- only the decision is shared.
+    """
+    source_version_id = ""
+    binary_version_id = ""
+    for version_id, kind, has_functions in scoped:
+        if kind in SOURCE_KINDS:
+            source_version_id = source_version_id or version_id
+        elif kind in BINARY_KINDS and (has_functions or not binary_version_id):
+            binary_version_id = version_id
+    return source_version_id, binary_version_id
 
 
 async def pair_version_scope(repositories: Repositories, task: Task) -> list[str]:

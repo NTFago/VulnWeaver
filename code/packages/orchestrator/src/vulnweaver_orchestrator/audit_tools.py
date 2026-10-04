@@ -37,7 +37,12 @@ from vulnweaver_persistence import Database
 from vulnweaver_source_analysis import SourceExcerptReader, SourceImportError
 from vulnweaver_tool_runtime import ScheduledToolCall
 
-from vulnweaver_orchestrator.pair_scopes import pair_version_scope
+from vulnweaver_orchestrator.pair_scopes import (
+    BINARY_KINDS,
+    SOURCE_KINDS,
+    choose_pair_scope,
+    pair_version_scope,
+)
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader
 
 # The audit tools are in-process readers: they have no container image. The
@@ -72,9 +77,7 @@ _MAX_STATIC_LEADS = 200
 _MAX_SYMBOLIC_ADDRESSES = 16
 _MAX_SYMBOLIC_RUNS = 2
 
-_SOURCE_KINDS = (ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY)
-_BINARY_KINDS = (ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED)
-_ALL_KINDS = [kind.value for kind in (*_SOURCE_KINDS, *_BINARY_KINDS)]
+_ALL_KINDS = [kind.value for kind in (*SOURCE_KINDS, *BINARY_KINDS)]
 
 
 def _spec(
@@ -350,8 +353,9 @@ class AuditWorkspace:
         self.fact_loader = fact_loader or SourceReviewFactLoader(database, store)
         self._functions: list[AuditFunctionRef] = []
         self._functions_by_id: dict[str, AuditFunctionRef] = {}
-        # The version a source finding will be anchored to; see `load`.
+        # The versions a finding will be anchored to; see `load`.
         self._source_version_id: str = ""
+        self._binary_version_id: str = ""
         self._version_kinds: dict[str, ArtifactKind] = {}
         self._versions: dict[str, ArtifactVersion] = {}
         self._files: dict[tuple[str, str], str | None] = {}
@@ -368,23 +372,17 @@ class AuditWorkspace:
             # Binary graphs are stored under the derived analysis version, which
             # is absent from ``artifact_version_ids`` when the input was packed;
             # resolve the same scope the single-shot audit reads.
+            scoped: list[tuple[str, ArtifactKind, bool]] = []
             for version_id in await pair_version_scope(repositories, task):
                 version = await repositories.artifacts.get_version(version_id)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
                 kind = ArtifactKind(artifact["kind"])
                 self._version_kinds[version_id] = kind
                 self._versions[version_id] = version
-                # A source finding is anchored to the first source version in
-                # scope (`semantic_audit._auditable_functions` picks it the same
-                # way), so that is the version whose file a read proof has to
-                # name. Resolving the proof by position in `_functions` instead
-                # let one version's read authorize a report anchored to another
-                # (CR-06) -- `_function_sort_key` sorts by path and line but not
-                # by version, so ties fell back to scope order.
-                if kind in _SOURCE_KINDS:
-                    self._source_version_id = self._source_version_id or version_id
                 # The functions' own artifact_version_id is authoritative.
-                for function in await repositories.pair.list_functions(version_id):
+                functions = await repositories.pair.list_functions(version_id)
+                scoped.append((version_id, kind, bool(functions)))
+                for function in functions:
                     ref = AuditFunctionRef(
                         version_id=function["artifact_version_id"], function=function
                     )
@@ -392,6 +390,12 @@ class AuditWorkspace:
                         continue
                     self._functions_by_id[ref.function["id"]] = ref
                     self._functions.append(ref)
+        # The read proof is checked against the versions the finding will be
+        # anchored to, using the same rule the auditor anchors with (CR-06).
+        # Resolving by position in `_functions` instead let one version's read
+        # authorize a report anchored to another: `_function_sort_key` sorts by
+        # path, line and name but never by version.
+        self._source_version_id, self._binary_version_id = choose_pair_scope(scoped)
         self._functions.sort(key=_function_sort_key)
 
     @property
@@ -413,9 +417,19 @@ class AuditWorkspace:
 
         A model-supplied address is only ever a claim; the index decides whether
         it names a function. The interval rule matches ``PairRepository``.
+
+        The lookup is confined to the version a binary finding is anchored to,
+        for the same reason the source lookup is confined to its version
+        (CR-06): two binary versions in one scope may cover the same address,
+        and the index is sorted by path, line and name -- never by version --
+        so an unconfined lookup answers with whichever came first.
         """
 
+        if not self._binary_version_id:
+            return None
         for ref in self._functions:
+            if ref.version_id != self._binary_version_id:
+                continue
             location = ref.function["binary_location"]
             if location is None:
                 continue

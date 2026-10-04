@@ -67,7 +67,12 @@ from vulnweaver_orchestrator.investigation_memory import (
     InvestigationMemory,
     build_memory_document,
 )
-from vulnweaver_orchestrator.pair_scopes import pair_version_scope
+from vulnweaver_orchestrator.pair_scopes import (
+    BINARY_KINDS,
+    SOURCE_KINDS,
+    choose_pair_scope,
+    pair_version_scope,
+)
 from vulnweaver_orchestrator.source_facts import SourceReviewFactLoader, SourceReviewFacts
 
 AUDIT_BASELINE = "semantic_function_audit"
@@ -849,28 +854,18 @@ class SemanticAuditor:
 
         async with self._database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
-            source_version_id = ""
-            binary_version_id = ""
+            scoped: list[tuple[str, ArtifactKind, bool]] = []
             has_functions = False
             for version_id_value in await pair_version_scope(repositories, task):
                 version = await repositories.artifacts.get_version(version_id_value)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
-                kind = artifact["kind"]
-                if kind in {ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY}:
-                    source_version_id = source_version_id or version_id_value
-                elif kind in {ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED}:
-                    # Packed inputs hold their PAIR graphs on the derived
-                    # analysis version, so a version that actually carries
-                    # functions wins over the uploaded image.
-                    version_has_functions = await repositories.pair.has_functions(
-                        version_id_value
-                    )
-                    if version_has_functions or not binary_version_id:
-                        binary_version_id = version_id_value
-                else:
+                kind = ArtifactKind(artifact["kind"])
+                if kind not in (*SOURCE_KINDS, *BINARY_KINDS):
                     continue
-                if not has_functions:
-                    has_functions = await repositories.pair.has_functions(version_id_value)
+                carries_functions = await repositories.pair.has_functions(version_id_value)
+                has_functions = has_functions or carries_functions
+                scoped.append((version_id_value, kind, carries_functions))
+        source_version_id, binary_version_id = choose_pair_scope(scoped)
         return _PairScope(
             has_functions=has_functions,
             source_version_id=source_version_id,
@@ -884,29 +879,17 @@ class SemanticAuditor:
         async with self._database.transaction() as repositories:
             task = await repositories.tasks.get(task_id)
             entries: list[tuple[str, PairFunction]] = []
-            source_version_id = ""
-            binary_version_id = ""
+            scoped: list[tuple[str, ArtifactKind, bool]] = []
             for version_id_value in await pair_version_scope(repositories, task):
                 version = await repositories.artifacts.get_version(version_id_value)
                 artifact = await repositories.artifacts.get(version["artifact_id"])
-                kind = artifact["kind"]
-                if kind in {ArtifactKind.SOURCE_ARCHIVE, ArtifactKind.SOURCE_REPOSITORY}:
-                    source_version_id = source_version_id or version_id_value
-                elif kind in {ArtifactKind.ELF, ArtifactKind.PE, ArtifactKind.DERIVED}:
-                    # Packed inputs hold their PAIR graphs on the derived
-                    # analysis version, so a version that actually carries
-                    # functions wins over the uploaded image.
-                    functions = await repositories.pair.list_functions(version_id_value)
-                    if functions or not binary_version_id:
-                        binary_version_id = version_id_value
-                    entries.extend((version_id_value, function) for function in functions)
+                kind = ArtifactKind(artifact["kind"])
+                if kind not in (*SOURCE_KINDS, *BINARY_KINDS):
                     continue
-                else:
-                    continue
-                entries.extend(
-                    (version_id_value, function)
-                    for function in await repositories.pair.list_functions(version_id_value)
-                )
+                functions = await repositories.pair.list_functions(version_id_value)
+                scoped.append((version_id_value, kind, bool(functions)))
+                entries.extend((version_id_value, function) for function in functions)
+            source_version_id, binary_version_id = choose_pair_scope(scoped)
         # No truncation here (CR-06): the paged fallback audits every entry, and
         # the agent path investigates through the workspace tools instead.
         entries.sort(key=lambda item: _function_sort_key(item[1]))

@@ -322,8 +322,18 @@ def binary_function(identifier: str, version_id: str) -> PairFunction:
 
 
 async def seed(
-    database: Database, build_functions: Callable[[str], list[PairFunction]]
+    database: Database,
+    build_functions: Callable[[str], list[PairFunction]],
+    *,
+    kind: ArtifactKind = ArtifactKind.SOURCE_ARCHIVE,
 ) -> tuple[str, str]:
+    """A task whose one artifact version holds the given functions.
+
+    ``kind`` decides which pipeline the task looks like, and the audit resolves
+    its anchor versions from it: a task holding binary functions has to be
+    modelled with a binary artifact, or the audit would look for a source
+    version it does not have and drop every finding.
+    """
     suffix = uuid4().hex
     version_id = f"artifact-version:{suffix}"
     functions = build_functions(version_id)
@@ -334,6 +344,7 @@ async def seed(
                 f"artifact:{suffix}",
                 project_id=f"project:{suffix}",
                 current_version_id=version_id,
+                kind=kind,
             )
         )
         await repositories.artifacts.add_version(
@@ -424,6 +435,7 @@ def test_workspace_reads_list_shaped_pseudocode(
         suffix, version_id = await seed(
             database,
             lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)],
+            kind=ArtifactKind.ELF,
         )
         async with database.transaction() as repositories:
             functions = await repositories.pair.list_functions(version_id)
@@ -823,7 +835,9 @@ def test_symbolic_execute_is_refused_without_a_runner_or_a_project_opt_in(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         suffix, _ = await seed(
-            database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
+            database,
+            lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)],
+            kind=ArtifactKind.ELF,
         )
         workspace = AuditWorkspace(database, LocalContentAddressedStore(tmp_path), f"task:{suffix}")
         try:
@@ -850,7 +864,9 @@ def test_symbolic_execute_anchors_addresses_on_the_index_and_caps_runs(
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
         suffix, _ = await seed(
-            database, lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)]
+            database,
+            lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)],
+            kind=ArtifactKind.ELF,
         )
         workspace = AuditWorkspace(database, LocalContentAddressedStore(tmp_path), f"task:{suffix}")
         try:
@@ -1177,3 +1193,49 @@ def test_completed_checkpoint_is_never_replayed(
         await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_workspace_and_auditor_agree_on_the_anchor_versions(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    """The read proof authorizes against the very versions the audit anchors to.
+
+    Both sides now resolve them with the shared rule in ``pair_scopes``, but
+    nothing asserted they agree -- and when the rule lived in three separate
+    copies, a drift in one of them would silently authorize a read of a file the
+    finding is not anchored to. That is the failure CR-06 was about, so the
+    agreement is worth pinning directly.
+    """
+
+    async def scenario(
+        kind: ArtifactKind, build: Callable[[str], list[PairFunction]]
+    ) -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        suffix, version_id = await seed(database, build, kind=kind)
+        task_id = f"task:{suffix}"
+        workspace = AuditWorkspace(
+            database, LocalContentAddressedStore(tmp_path), task_id
+        )
+        auditor = SemanticAuditor(database, cast(Any, None), cast(Any, None))
+        try:
+            await workspace.load()
+            scope = await auditor._pair_scope(task_id)
+            assert scope.source_version_id == workspace._source_version_id
+            assert scope.binary_version_id == workspace._binary_version_id
+            # The one version this task has is the one both sides anchor to.
+            assert version_id in (scope.source_version_id, scope.binary_version_id)
+        finally:
+            await database.dispose()
+
+    asyncio.run(
+        scenario(
+            ArtifactKind.SOURCE_ARCHIVE,
+            lambda vid: [source_function(f"pair-fn:{uuid4().hex}", vid, "src/app.py")],
+        )
+    )
+    asyncio.run(
+        scenario(
+            ArtifactKind.ELF,
+            lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)],
+        )
+    )

@@ -51,12 +51,13 @@ def artifact(
     *,
     project_id: str = "project:t03",
     current_version_id: str = "artifact-version:t03",
+    kind: ArtifactKind = ArtifactKind.SOURCE_ARCHIVE,
 ) -> Artifact:
     return Artifact(
         schema_version="1.0.0",
         id=identifier,
         project_id=project_id,
-        kind=ArtifactKind.SOURCE_ARCHIVE,
+        kind=kind,
         current_version_id=current_version_id,
         created_at=TIMESTAMP,
     )
