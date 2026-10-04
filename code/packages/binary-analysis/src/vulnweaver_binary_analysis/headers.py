@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import struct
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -496,31 +497,39 @@ def _pe_architecture(machine: int) -> BinaryArchitecture:
     )
 
 
+# An ASCII string run is a maximal stretch of printable bytes (tab included).
+# The pattern is compiled once so the per-byte walk happens in C.
+_ASCII_RUN = re.compile(rb"[\x20-\x7e\t]+")
+
+
 def _ascii_strings(
     data: bytes, metadata: BinaryMetadata, limits: BinaryAnalysisLimits
 ) -> tuple[list[BinaryString], int]:
-    """Return (kept, offered): kept stops at the cap, offered counts every run."""
+    """Return (kept, offered): kept stops at the cap, offered counts every run.
+
+    Runs are located by a compiled regex rather than by walking every byte of a
+    NUL-terminated copy of the image: the scan stays in C and the copy is gone,
+    which is what the large string-dense images pay for.
+    """
     records: list[BinaryString] = []
     offered = 0
-    start: int | None = None
-    for index, value in enumerate(data + b"\0"):
-        if 0x20 <= value <= 0x7E or value in (9,):
-            if start is None:
-                start = index
+    for match in _ASCII_RUN.finditer(data):
+        start, end = match.span()
+        if end - start < limits.min_string_chars:
             continue
-        if start is not None and index - start >= limits.min_string_chars:
-            offered += 1
-            if len(records) < limits.max_strings:
-                raw = data[start:index][: limits.max_string_chars]
-                records.append(
-                    BinaryString(
-                        value=raw.decode("ascii", "replace"),
-                        encoding="ascii",
-                        file_offset=start,
-                        virtual_address=metadata.offset_to_virtual_address(start),
-                    )
+        offered += 1
+        if len(records) < limits.max_strings:
+            # The value is capped; the run is not, so a long printable stretch
+            # still yields exactly one record.
+            raw = data[start:end][: limits.max_string_chars]
+            records.append(
+                BinaryString(
+                    value=raw.decode("ascii", "replace"),
+                    encoding="ascii",
+                    file_offset=start,
+                    virtual_address=metadata.offset_to_virtual_address(start),
                 )
-        start = None
+            )
     return records, offered
 
 
@@ -529,7 +538,16 @@ def _utf16le_strings(
     metadata: BinaryMetadata,
     limits: BinaryAnalysisLimits,
 ) -> tuple[list[BinaryString], int]:
-    """Return (kept, offered): kept stops at the cap, offered counts every run."""
+    """Return (kept, offered): kept stops at the cap, offered counts every run.
+
+    This stays a byte-by-byte walk on purpose. It advances two bytes at a time
+    from offset 0, so it only ever examines *even* pair starts (a run aligned to
+    an odd offset is invisible to it) and it reads plain ASCII as pairs with
+    deterministic junk. Those are properties of its output, not of its
+    implementation, so a regex or vectorised rewrite would change which strings
+    a binary is reported to contain; ``test_utf16_scan_only_sees_even_pair_starts``
+    pins them.
+    """
     records: list[BinaryString] = []
     offered = 0
     index = 0

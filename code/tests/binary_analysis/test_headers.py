@@ -11,6 +11,7 @@ from vulnweaver_binary_analysis import (
 )
 
 from tests.binary_analysis.samples import elf64_sample, packed_elf64_sample, pe64_sample
+from tests.binary_analysis.test_coverage import _metadata
 
 
 def test_inspects_x64_elf_sections_and_addresses(tmp_path: Path) -> None:
@@ -142,3 +143,100 @@ def test_pe_with_virtual_only_executable_section_is_packed(tmp_path) -> None:
 
     assert inspect_binary(packed, BinaryAnalysisLimits()).packed
     assert not inspect_binary(plain, BinaryAnalysisLimits()).packed
+
+
+def test_a_printable_run_at_the_end_of_the_image_is_still_a_string(tmp_path: Path) -> None:
+    """The scan covers the image itself; nothing is appended to flush the tail."""
+    sample = tmp_path / "tail.bin"
+    sample.write_bytes(b"\x00\x00trailing-run")
+    extraction = extract_strings(
+        sample, _metadata(), BinaryAnalysisLimits(min_string_chars=4)
+    )
+    assert [item["value"] for item in extraction.strings] == ["trailing-run"]
+    assert extraction.strings[0]["file_offset"] == 2
+
+
+def test_long_utf16_run_is_reported_as_consecutive_windows(tmp_path: Path) -> None:
+    """A UTF-16 run past ``max_string_chars`` splits the way it always has.
+
+    The byte-by-byte scan this replaced stopped a record at the cap, stepped
+    past the character it stopped on, and carried on, so windows begin
+    ``max_string_chars + 1`` characters apart. Pin it: the offsets are not
+    something a reader would guess.
+    """
+    sample = tmp_path / "wide.bin"
+    sample.write_bytes(("ABCDEFGHIJKLMNOPQRSTUVWXYZ" * 4).encode("utf-16-le"))
+    extraction = extract_strings(
+        sample,
+        _metadata(),
+        BinaryAnalysisLimits(max_strings=20, min_string_chars=4, max_string_chars=8),
+    )
+    assert [item["value"] for item in extraction.strings] == [
+        "ABCDEFGH",
+        "JKLMNOPQ",
+        "STUVWXYZ",
+        "BCDEFGHI",
+        "KLMNOPQR",
+        "TUVWXYZA",
+        "CDEFGHIJ",
+        "LMNOPQRS",
+        "UVWXYZAB",
+        "DEFGHIJK",
+        "MNOPQRST",
+        "VWXYZ",
+    ]
+    assert [item["file_offset"] for item in extraction.strings] == list(range(0, 200, 18))
+    assert extraction.offered == 12
+
+
+def test_long_ascii_run_is_one_record_with_a_capped_value(tmp_path: Path) -> None:
+    """The value is capped; the run is not split."""
+    sample = tmp_path / "long.bin"
+    sample.write_bytes(b"X" * 50)
+    extraction = extract_strings(
+        sample, _metadata(), BinaryAnalysisLimits(min_string_chars=4, max_string_chars=6)
+    )
+    assert [item["value"] for item in extraction.strings] == ["XXXXXX"]
+    assert extraction.offered == 1
+
+
+def test_offered_counts_every_run_across_both_encodings(tmp_path: Path) -> None:
+    """``offered`` stays an exact count of candidates, cap or no cap (CR-08)."""
+    sample = tmp_path / "both.bin"
+    sample.write_bytes(
+        b"".join(b"ascii-%02d\x00" % index for index in range(6))
+        # No separator between them, so the four wide strings are one UTF-16 run.
+        + "".join(f"wide-{index:02d}" for index in range(4)).encode("utf-16-le")
+    )
+    limits = BinaryAnalysisLimits(max_strings=2, min_string_chars=4)
+    extraction = extract_strings(sample, _metadata(), limits)
+    assert [item["value"] for item in extraction.strings] == ["ascii-00", "ascii-01"]
+    # Six ASCII runs plus the one UTF-16 run, against a cap of two.
+    assert extraction.offered == 7
+    assert extraction.truncated is True
+
+
+def test_utf16_scan_only_sees_even_pair_starts(tmp_path: Path) -> None:
+    """Characterises the UTF-16 walk, whose output must not drift.
+
+    It steps two bytes at a time from offset 0, so it only ever tries even pair
+    starts. A run one byte late is perfectly good UTF-16LE and still invisible,
+    and plain ASCII is read as pairs with deterministic junk. Both show up in
+    what a binary is reported to contain, which is why this pass stays
+    byte-by-byte instead of being vectorised like the ASCII one.
+    """
+    odd = tmp_path / "odd.bin"
+    odd.write_bytes(b"\x7f" + "wide-string".encode("utf-16-le"))
+    extraction = extract_strings(
+        odd, _metadata(), BinaryAnalysisLimits(min_string_chars=4)
+    )
+    assert extraction.strings == ()
+    assert extraction.offered == 0
+
+    # The same run one byte earlier is found in full — the alignment is the
+    # whole difference, not the bytes.
+    even = tmp_path / "even.bin"
+    even.write_bytes(b"\x00\x00" + "wide-string".encode("utf-16-le"))
+    aligned = extract_strings(even, _metadata(), BinaryAnalysisLimits(min_string_chars=4))
+    assert [item["value"] for item in aligned.strings] == ["wide-string"]
+    assert [item["file_offset"] for item in aligned.strings] == [2]
