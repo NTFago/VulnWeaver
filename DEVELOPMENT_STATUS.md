@@ -6,7 +6,9 @@
 
 ## 当前焦点
 
-2026-10-04 RP 修复轮（分支 `feat/realworld-acceptance-samples @ 69cfba2`）：分页审计续审的 RP-01～03 已修复并部署。①RP-01：分页截止超时改为可重试 TIMEOUT（结构化失败带"覆盖不完整、下次 attempt 从断点恢复"消息），新增 **Worker 结算级**测试驱动真实 `ReliableWorker`——attempt 1 截止停止、Worker 记录失败并重新入队、attempt 2 从断点恢复直至全覆盖（`tests/worker/test_worker_semantic_audit_retry.py`）；②RP-02：断点绑定页大小与有序 (version, function) 索引摘要，页大小或索引变化的续跑丢弃旧断点并全量重审（绝不把未审计函数计为 complete），聚合覆盖改用断点自身绑定的页大小/页数（回归：页大小变更后重审全部 4 函数、coverage 完整为真）；③RP-03：分页证据身份加入页片段（同一问题跨页产生两条证据、各自绑定片段 report_ref/digest，链接到同一稳定 Finding），页内重复候选按证据 ID 去重（回归：跨页重复候选不再 EntityConflict）。新并行门禁完整输出：**760 passed / 7 skipped、覆盖率 81.07%、184.5s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。
+2026-10-04 RP 修复复审（`feat/realworld-acceptance-samples @ 69cfba2`）：RP-01～03 的主要代码路径已修复，Linux `dev` 容器定向测试 **8 passed**。仍发现 RF-01/P1：分页模型传输失败返回的可重试标志被 `_AuditError` 默认值抹掉，Worker 终结 Job，断点无法续跑；RF-02/P2：新增 Worker 测试在第一页之前触发截止，未验证从已完成页继续。详见 [`code/docs/code-review-2026-10-04-paged-audit-followup.md`](code/docs/code-review-2026-10-04-paged-audit-followup.md)。本轮只读产品代码，未独立运行全量门禁或部署。
+
+2026-10-04 RP 修复轮（分支 `feat/realworld-acceptance-samples @ 69cfba2`）：分页审计续审的 RP-01～03 已修复并部署。①RP-01：分页截止超时改为可重试 TIMEOUT（结构化失败带"覆盖不完整、下次 attempt 从断点恢复"消息），新增 **Worker 结算级**测试驱动真实 `ReliableWorker`——attempt 1 在第一页前截止、Worker 记录失败并重新入队、attempt 2 从第 0 页重跑直至全覆盖（续页断言仍缺）（`tests/worker/test_worker_semantic_audit_retry.py`）；②RP-02：断点绑定页大小与有序 (version, function) 索引摘要，页大小或索引变化的续跑丢弃旧断点并全量重审（绝不把未审计函数计为 complete），聚合覆盖改用断点自身绑定的页大小/页数（回归：页大小变更后重审全部 4 函数、coverage 完整为真）；③RP-03：分页证据身份加入页片段（同一问题跨页产生两条证据、各自绑定片段 report_ref/digest，链接到同一稳定 Finding），页内重复候选按证据 ID 去重（回归：跨页重复候选不再 EntityConflict）。新并行门禁完整输出：**760 passed / 7 skipped、覆盖率 81.07%、184.5s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。
 
 2026-10-04 分页语义审计续审（`feat/realworld-acceptance-samples @ 9251e79`，只读产品代码）：发现 RP-01/P1：截止超时被标 `retryable=False`，Worker 不会消费已保存断点；RP-02/P1：断点未绑定页大小/索引身份，变更页大小后可能把未审计函数汇总为 `complete=true`；RP-03/P2：跨页重复候选生成相同证据 ID、不同片段引用，触发 `EntityConflict` 中断审计。详见 [`code/docs/code-review-2026-10-04-paged-audit.md`](code/docs/code-review-2026-10-04-paged-audit.md)。Linux `dev` 容器定向分页测试 **5 passed**；该测试未覆盖 Worker 结算、断点配置变化或跨页重复候选。本轮未修改产品代码或部署，未跑全量门禁。
 
@@ -137,7 +139,9 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：可信判据立项与真实项目闭环（RG-01～03、RP-01～03 已关闭）**
+**下一步：先修复分页审计 RF-01～02，再推进可信判据与真实项目闭环（RG-01～03、RP-01～03 的原缺陷已关闭）**
+
+0. **分页审计剩余恢复缺口**：保留模型网关失败的原始可重试属性（RF-01）；调整 Worker 时钟测试，使第一页实际完成且断言只续跑剩余页（RF-02）。随后定向重跑分页、Worker、持久化测试与静态检查。
 
 1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例——解释器信号经 OS wait status 传递，`os._exit` 无法伪造信号死亡，是当前架构内首个目标不可伪造的观测通道；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。注入确认事实的恢复依赖输入传播判据提案；鉴权类解封依赖 §5 的可执行约束判据。
 2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计。
