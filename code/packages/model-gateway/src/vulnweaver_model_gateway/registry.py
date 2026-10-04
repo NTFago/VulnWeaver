@@ -288,8 +288,12 @@ class ModelAccessConfig:
             primary = self._endpoint_for(binding.role, binding.provider_id, binding.model_id)
             fallback: ModelEndpoint | None = None
             if binding.fallback_provider_id and binding.fallback_model_id:
+                # The fallback endpoint must key its models dict by the bare
+                # role: _request_with_fallback resolves the model through
+                # model_for(tier), so a suffixed key would make every fallback
+                # switch fail with model_configuration_error.
                 fallback = self._endpoint_for(
-                    f"{binding.role} fallback",
+                    binding.role,
                     binding.fallback_provider_id,
                     binding.fallback_model_id,
                 )
