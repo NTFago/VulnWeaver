@@ -2,7 +2,9 @@
 
 复审范围：`69cfba2` 对 RP-01～03 的修复及相邻的模型失败、Worker 续跑链路。三项原问题的主要代码路径已修正：截止失败现为可重试、断点绑定页大小与有序函数 ID、跨页证据按页区分。Linux `dev` 容器使用当前源码运行 `uv run --no-sync pytest -q tests/orchestrator/test_semantic_audit_paging.py tests/worker/test_worker_semantic_audit_retry.py`，**8 passed**。本轮未运行全量门禁或部署。
 
-## 仍需修复
+> 修复记录（2026-10-04，`1ca1d20`）：两项均已修复。RF-01：`_AuditError` 原样携带网关失败的结构化 `kind`/`retryable`/`message` 到 WorkerResult；新增 Worker 结算级回归 `test_transport_failure_on_second_page_is_retried_and_resumes`（第 0 页成功、第 1 页 `model_transport_error`/DEPENDENCY/retryable 失败、Worker 自动重入队、attempt 2 从断点恢复只重跑第 1 页）。RF-02：时钟改为第 3 次调用（第 0 页完成后的截止检查）触发，测试断言 attempt 1 保存 `next_page=1`、attempt 2 仅执行剩余页（`test_deadline_after_page_zero_is_retried_and_resumes_remaining_page`）。全量门禁 761 passed / 7 skipped；部署后真实 Runner 验收 6 passed。
+
+## 仍需修复（已全部修复，保留原始发现）
 
 | 编号 | 优先级 | 代码证据与影响 | 修复判据 |
 |---|---|---|---|

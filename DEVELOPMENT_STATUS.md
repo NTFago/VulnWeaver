@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 RF 修复轮（分支 `feat/realworld-acceptance-samples @ 1ca1d20`）：RP 修复复审的 RF-01～02 已修复并部署。①RF-01：分页模型调用失败时 `_AuditError` 现在原样携带网关失败的结构化 `kind`/`retryable`/`message` 到 WorkerResult——可重试传输失败（超时、HTTP 408/429/5xx → `ModelTransportError` retryable=True）不再被 `_AuditError` 默认值抹成终态，断点在下一 attempt 被消费；新增 Worker 结算级回归：第 0 页成功、第 1 页传输失败、Worker 自动重入队、attempt 2 从断点恢复只重跑第 1 页（第 0 页从未重发，页拆分断言锁定）。②RF-02：Worker 时钟测试改为在第 0 页完成之后（第 3 次时钟调用）触发截止，并断言 attempt 1 保存 `next_page=1` 断点、attempt 2 只执行剩余页、最终断点 completed。新并行门禁完整输出：**761 passed / 7 skipped、覆盖率 81.10%、192.1s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。至此"分页回退审计可恢复"对本地截止与模型传输故障两类中断均经 Worker 结算级验证。
+
 2026-10-04 RP 修复复审（`feat/realworld-acceptance-samples @ 69cfba2`）：RP-01～03 的主要代码路径已修复，Linux `dev` 容器定向测试 **8 passed**。仍发现 RF-01/P1：分页模型传输失败返回的可重试标志被 `_AuditError` 默认值抹掉，Worker 终结 Job，断点无法续跑；RF-02/P2：新增 Worker 测试在第一页之前触发截止，未验证从已完成页继续。详见 [`code/docs/code-review-2026-10-04-paged-audit-followup.md`](code/docs/code-review-2026-10-04-paged-audit-followup.md)。本轮只读产品代码，未独立运行全量门禁或部署。
 
 2026-10-04 RP 修复轮（分支 `feat/realworld-acceptance-samples @ 69cfba2`）：分页审计续审的 RP-01～03 已修复并部署。①RP-01：分页截止超时改为可重试 TIMEOUT（结构化失败带"覆盖不完整、下次 attempt 从断点恢复"消息），新增 **Worker 结算级**测试驱动真实 `ReliableWorker`——attempt 1 在第一页前截止、Worker 记录失败并重新入队、attempt 2 从第 0 页重跑直至全覆盖（续页断言仍缺）（`tests/worker/test_worker_semantic_audit_retry.py`）；②RP-02：断点绑定页大小与有序 (version, function) 索引摘要，页大小或索引变化的续跑丢弃旧断点并全量重审（绝不把未审计函数计为 complete），聚合覆盖改用断点自身绑定的页大小/页数（回归：页大小变更后重审全部 4 函数、coverage 完整为真）；③RP-03：分页证据身份加入页片段（同一问题跨页产生两条证据、各自绑定片段 report_ref/digest，链接到同一稳定 Finding），页内重复候选按证据 ID 去重（回归：跨页重复候选不再 EntityConflict）。新并行门禁完整输出：**760 passed / 7 skipped、覆盖率 81.07%、184.5s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。
@@ -107,6 +109,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支（`1ca1d20`）RF-01～02 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**761 passed / 7 skipped、覆盖率 81.10%、总耗时 192.1s**（pytest 157.2s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 7 个镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 验收 **6 passed**。新增回归：网关传输失败（DEPENDENCY/retryable）经 Worker 结算自动重试并从断点恢复（第 0 页不重发）；截止测试时钟改为第 0 页完成后触发，断言 `next_page=1` 断点与 attempt 2 只跑剩余页。 |
 | 2026-10-04 | 分支（`69cfba2`）RP-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**760 passed / 7 skipped、覆盖率 81.07%、总耗时 184.5s**（pytest 148.7s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 7 个镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 验收 **6 passed**（含注入 forgery 负例）。新增回归：Worker 结算级截止超时重试并断点恢复（attempt 2 全覆盖）、页大小变更丢弃断点全量重审且 coverage 完整为真、跨页重复候选双证据链接同一 Finding。 |
 | 2026-10-04 | 分支（`add7676`）RG-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**757 passed / 7 skipped、覆盖率 81.05%、总耗时 177.5s**（pytest 143.6s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200。真实 Runner 验收 **6 passed**：既有正反例 3 项 + 新增注入 forgery 负例（exit-20 伪装、常量 sink：伪造落地于 observation/marker 但 `derive_established_facts` 仅得 `minimal_reproduction`，Finding 保持候选）与 profiler 致盲负例（无 reach 声明）。共享 CAS 卷 runner 建新目录后曾报 `ArtifactStoreIOError`，`chmod -R a+rwX` 后恢复。 |
 | 2026-10-04 | 本轮质量门禁与分支复审（Linux dev 容器） | 旧串行入口全量：753 passed / 4 skipped、覆盖率 81.80%，pytest 自身 145.97 秒；新并行入口首次全量 167.9 秒。补 `proof`/`reporting` 覆盖并排除生成声明后，`pnpm run check` **753 passed / 4 skipped、扩展后覆盖率 81.18%、总耗时 190.7 秒**，Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过；`node --check scripts/check.mjs` 与 `git diff --check` 通过。人为移除 `pnpm` 的 PATH 负例返回 exit 1 并逐项报错。4 skipped 为 3 个真实 Runner 配置项和 1 个 Docker runtime opt-in；本轮未跑 Runner/镜像重建、未部署。RG-01～03 为静态代码路径推导，待隔离环境负例验收。 |
@@ -139,9 +142,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：先修复分页审计 RF-01～02，再推进可信判据与真实项目闭环（RG-01～03、RP-01～03 的原缺陷已关闭）**
-
-0. **分页审计剩余恢复缺口**：保留模型网关失败的原始可重试属性（RF-01）；调整 Worker 时钟测试，使第一页实际完成且断言只续跑剩余页（RF-02）。随后定向重跑分页、Worker、持久化测试与静态检查。
+**下一步：可信判据立项与真实项目闭环（RG-01～03、RP-01～03、RF-01～02 已关闭）**
 
 1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例——解释器信号经 OS wait status 传递，`os._exit` 无法伪造信号死亡，是当前架构内首个目标不可伪造的观测通道；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。注入确认事实的恢复依赖输入传播判据提案；鉴权类解封依赖 §5 的可执行约束判据。
 2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计。
