@@ -6,6 +6,19 @@
 
 ## 当前焦点
 
+2026-10-04 稳定性缺陷修复轮（`feat/realworld-acceptance-samples`，未提交）。对 `/code-review`（high 档，dedup 未 verify）在 `git diff main...HEAD` 上的 6 条发现逐条独立核实后，只修其中真正影响运行的 3 项——**并发现 review 漏报的 P0**。
+
+①**P0（review 漏报）沙箱二进制事实链在本分支被改崩**：CR-08 把 `extract_strings` 返回类型从 `tuple[BinaryString, ...]` 换成 `StringExtraction`（`headers.py:118`），但 `code/apps/binary-tools/vulnweaver-binary-entrypoint:253` 仍是 `list(extract_strings(...))`。`StringExtraction` 是 frozen/slots dataclass、无 `__iter__`，构造 facts 文档即抛 `TypeError`，`main()` 把它转成 exit 1 → 配置了 sandbox 时（`analysis-worker/main.py:370` 走 `BinaryFactsAdapter`）**二进制导入主路径 100% 失败**。该 entrypoint 在本分支未被改动，属于改了返回类型未同步消费者；`tests/binary_analysis/` 此前从未执行过这个脚本，所以没拦住。修复：`list(extract_strings(...).strings)`。
+
+②**supervisor 无上限读取目标输出**：`vulnweaver-proof-entrypoint` 原为 `output_path.read_bytes()[:64KiB]`——先把整文件读进内存再切片。target 在子进程内执行不可信样本且 stdout 直连该文件，30s 超时内可写出上百 MB。改为 `observed_stream.read(MAX_OBSERVED_OUTPUT_BYTES)` 前缀读，并订正那条与事实不符的注释（原文称 "reads back bounded"）。
+
+③**分页审计断点隐患**：`semantic_audit.py` 原先用 `except Exception` 吞掉断点保存失败，且把"读失败"与"无断点"都当作 `None`。断点缺失时重试会从第 0 页全量重审——`run_id` 含 `job["attempt"]`（369 行）、evidence id 含 `run_id`（1005 行），于是每次 attempt 追加一整套**不可回收**的重复证据行，并再烧一个 8h deadline，最终仍以覆盖不完整终态失败。修复：保存侧返回落盘结果 + 有界重试（3 次 × 0.5s），截止分支在断点确实落盘时才维持可重试 `fallback_deadline`（RP-01/RF-01 语义不变），否则抛 `fallback_checkpoint_unavailable`（`DEPENDENCY`/`retryable=False`）；读取侧把 `list()` 异常改为可重试的 `fallback_checkpoint_unreadable`，在任何模型调用之前结束 attempt。
+
+④`verifier.py` 的 `sink_reach_is_verified` docstring 仍声称 sink 观测 "the target code cannot forge"，与 ADR-036 / RG-01～03 的结论直接矛盾（本轮 review 正是被它误导），**仅订正注释文字，行为不变**。
+
+**未修（已在计划中说明理由）**：review #1（`protection_analysis` 无派生路径）与 #3（退出码可伪造）是 RG-01～03 / ADR-036 的**已决策**，不是缺陷；review #2（`audit_tools.py:778` 按列表顺序而非 anchor version 解析读取证明，CR-06 声称的 `(version_id, path, line)` 授权在多版本 scope 下未真正生效）是**真实正确性缺陷**，review #6（`extract_strings` 丢失上限提前退出，实测 45MB 稠密文本 7.98s vs main 约 0.03s）是**性能回归**——两者都不影响稳定运行，留待下一轮。
+
+
 2026-10-04 RF 修复复核（`feat/realworld-acceptance-samples @ 17caa13`，只读产品代码）：逐项核对 `1ca1d20` 的 RF-01/02 修复及 Worker 结算、断点顺序；本轮范围内未发现新的可操作缺陷。Linux `dev` 容器使用当前源码定向运行分页与 Worker 续跑测试 **9 passed**，受影响两个文件 Ruff 通过；`git diff --check c3c82eb..HEAD` 通过。未独立重跑全量门禁、镜像或真实 Runner 验收；这些结果沿用下方 RF 修复轮的记录。工作区原有未跟踪 `.zcodeignore` 未触碰。
 
 2026-10-04 RF 修复轮（分支 `feat/realworld-acceptance-samples @ 1ca1d20`）：RP 修复复审的 RF-01～02 已修复并部署。①RF-01：分页模型调用失败时 `_AuditError` 现在原样携带网关失败的结构化 `kind`/`retryable`/`message` 到 WorkerResult——可重试传输失败（超时、HTTP 408/429/5xx → `ModelTransportError` retryable=True）不再被 `_AuditError` 默认值抹成终态，断点在下一 attempt 被消费；新增 Worker 结算级回归：第 0 页成功、第 1 页传输失败、Worker 自动重入队、attempt 2 从断点恢复只重跑第 1 页（第 0 页从未重发，页拆分断言锁定）。②RF-02：Worker 时钟测试改为在第 0 页完成之后（第 3 次时钟调用）触发截止，并断言 attempt 1 保存 `next_page=1` 断点、attempt 2 只执行剩余页、最终断点 completed。新并行门禁完整输出：**761 passed / 7 skipped、覆盖率 81.10%、192.1s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。至此"分页回退审计可恢复"对本地截止与模型传输故障两类中断均经 Worker 结算级验证。
@@ -111,6 +124,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支稳定性修复轮（Linux `dev` 容器，未提交） | 修复前先在容器内复现：`StringExtraction` 不可迭代（`TypeError: 'StringExtraction' object is not iterable`）使新回归测试 2 failed；断点两条新测试在"装回旧行为"（`uv sync --reinstall` 后重跑）下分别以 `SUCCEEDED`（读失败被当作无断点、静默从第 0 页重审并"成功"）和错误失败码失败。修复后 `pnpm run check` 完整输出：**767 passed / 7 skipped、覆盖率 81.14%、总耗时 187.6s**（pytest 150.93s）；Ruff 通过、Pyright **0 errors**、contracts `--check` 通过、TypeScript 18 tests + `vite build` 通过；`git diff --check` 无空白错误。新增回归 6 项：沙箱二进制 facts 文档可构造且 strings 与提取器一致（`tests/binary_analysis/test_binary_entrypoint_facts.py`）、supervisor 不回读整份观测输出（`tests/proof/test_entrypoint.py`）、截止断点不可用时终态且保底重试过写、健康断点仍可续跑（对照）、断点读失败在零模型调用前结束（`tests/orchestrator/test_semantic_audit_paging.py`）。7 skipped 为 5 项需真实 Runner/CAS 配置与 1 项 Docker runtime opt-in。**未做**：镜像重建、栈内部署、真实 Runner 验收（改动落在 `apps/binary-tools` 与 `apps/proof-tool` 两个入口，重建后需同步重建 sandbox-runner/dispatcher 三个镜像）。 |
 | 2026-10-04 | 分支（`1ca1d20`）RF-01～02 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**761 passed / 7 skipped、覆盖率 81.10%、总耗时 192.1s**（pytest 157.2s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 7 个镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 验收 **6 passed**。新增回归：网关传输失败（DEPENDENCY/retryable）经 Worker 结算自动重试并从断点恢复（第 0 页不重发）；截止测试时钟改为第 0 页完成后触发，断言 `next_page=1` 断点与 attempt 2 只跑剩余页。 |
 | 2026-10-04 | 分支（`69cfba2`）RP-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**760 passed / 7 skipped、覆盖率 81.07%、总耗时 184.5s**（pytest 148.7s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 7 个镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 验收 **6 passed**（含注入 forgery 负例）。新增回归：Worker 结算级截止超时重试并断点恢复（attempt 2 全覆盖）、页大小变更丢弃断点全量重审且 coverage 完整为真、跨页重复候选双证据链接同一 Finding。 |
 | 2026-10-04 | 分支（`add7676`）RG-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**757 passed / 7 skipped、覆盖率 81.05%、总耗时 177.5s**（pytest 143.6s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200。真实 Runner 验收 **6 passed**：既有正反例 3 项 + 新增注入 forgery 负例（exit-20 伪装、常量 sink：伪造落地于 observation/marker 但 `derive_established_facts` 仅得 `minimal_reproduction`，Finding 保持候选）与 profiler 致盲负例（无 reach 声明）。共享 CAS 卷 runner 建新目录后曾报 `ArtifactStoreIOError`，`chmod -R a+rwX` 后恢复。 |
@@ -158,3 +172,5 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 8. 真实壳扩展：UPX-defaced 经 unipacker 已实测；ConfuserEx/.NET 样本走 de4dotEx 待真实样本；MPRESS 三路受阻（官方死链/网络/wine bug），有可达环境时补。
 9. 性能后续候选项：`agent_runs.save_progress` 每轮全量重写 decisions JSONB 的写放大（可追加表化）；ProjectView 打开时 artifact detail N+1；`AuditWorkspace.load` 在超大索引下的内存驻留（现已被入口探针隔离为单次装载）。
 10. 首跑注册的 API 账号 `vw-e2e`（密码在测试脚本常量中）仅用于联调，正式使用时建议改密或换账号。
+11. **CR-06 读取证明的版本核对未真正生效（本轮 review #2，待修）**：`audit_tools.py:778 _resolve_source_ref` 按 `self._functions` 的列表顺序返回第一个 `(path, 行区间)` 命中的 ref，而 `semantic_audit._resolve_location` 把 finding 锚在 `source_version_id`。task scope 含多个版本、且同一路径的行区间重叠时，"读了 A 版本的同一段代码"会给锚定在 B 版本的报告放行（反向顺序则误拒合法报告）。CR-06 声称授权键为 `(version_id, path, line)`，实现未兑现；现有 `test_code_audit.py` 的 CR-06 回归只覆盖单版本顺序，故未暴露。修法：`_resolve_source_ref` 增加 `version_id` 参数并按 `_read_source_lines` 的实际键匹配。
+12. **`extract_strings` 上限提前退出回归（本轮 review #6，待修）**：CR-08 为统计 `offered` 移除了 `_ascii_strings` 的 `break` 与 `_utf16le_strings` 的 `len(records) < remaining` 条件，导致每次导入都要对整张镜像做两趟 Python 逐字节遍历（外加 `data + b"\0"` 整份拷贝）。dev 容器实测 45MB 稠密文本 ascii 2.07s + utf16 5.90s = 7.98s，main 同输入约 0.03s。绝对量是秒级、相对 Ghidra 约 30 分钟的流水线不成比例，故未列入本轮；修法是改用编译正则定位 run（保留精确 `offered`），并恢复 ASCII 已满时跳过 UTF-16 通道的闸门。
