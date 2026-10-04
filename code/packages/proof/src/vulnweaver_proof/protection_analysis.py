@@ -84,34 +84,37 @@ def scan_target_protections(
 ) -> ProtectionScan | None:
     """Enumerate protection-relevant constructs around the bound callable.
 
-    Returns ``None`` when the scan cannot run honestly: the source is not
-    parseable UTF-8 Python, the callable cannot be resolved in the module AST,
-    or the input exceeds the scan bound. A successful scan always yields at
-    least one entry (the sink itself).
+    The dotted callable path is resolved through the module AST exactly the way
+    the target-worker resolves it at runtime (module global, then class
+    attributes), so the scanned node is the executed function (RG-03). Any
+    ambiguity — a name defined more than once at the same level, which static
+    analysis cannot disambiguate against the runtime — refuses the scan
+    instead of guessing. Returns ``None`` when the scan cannot run honestly:
+    unparseable source, an unresolvable or ambiguous callable, or an oversized
+    input. A successful scan always yields at least one entry (the resolved
+    callable anchor).
     """
 
     if len(source) > MAX_SCAN_BYTES:
         return None
     parts = target_callable.split(".")
-    if not parts or any(not part.isidentifier() for part in parts):
+    if not parts or any(not part.isidentifier() or part.startswith("__") for part in parts):
         return None
     try:
         tree = ast.parse(source.decode("utf-8"))
     except (SyntaxError, ValueError, UnicodeDecodeError):
         return None
 
-    functions = {
-        node.name: node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
-    sink_name = parts[-1]
-    sink = functions.get(sink_name)
+    sink = _resolve_ast_callable(tree, parts)
     if sink is None:
         return None
+    sink_name = parts[-1]
 
     # Module-local callee closure starting at the sink: the code the crafted
-    # input can reach without leaving the bound file.
+    # input can reach without leaving the bound file. Only module-level
+    # functions are followed — the runtime resolves calls in the module
+    # namespace, so class-body helpers are not in the closure's name space.
+    module_functions = _unique_top_level_functions(tree)
     selected: dict[str, ast.AST] = {sink_name: sink}
     frontier = [sink_name]
     depth = 0
@@ -121,9 +124,9 @@ def scan_target_protections(
             node = selected.get(name)
             if node is None:
                 continue
-            for callee in _local_callees(node, functions):
+            for callee in _local_callees(node, module_functions):
                 if callee not in selected and len(selected) < MAX_CLOSURE_FUNCTIONS:
-                    selected[callee] = functions[callee]
+                    selected[callee] = module_functions[callee]
                     next_frontier.append(callee)
         frontier = next_frontier
         depth += 1
@@ -133,7 +136,7 @@ def scan_target_protections(
         entries.update(_scan_function(name, node))
     # The bound callable itself resolved in the AST: always record the anchor,
     # so a scan over a clean function still documents what was enumerated.
-    entries.add(_entry(f"callable_resolved:{sink_name}", sink_name, sink.lineno, False))
+    entries.add(_entry(f"callable_resolved:{target_callable}", sink_name, sink.lineno, False))
     ordered = tuple(sorted(entries)[:MAX_ENTRIES])
     if not ordered:
         # Unreachable given the anchor entry above; kept as an honest guard so
@@ -159,6 +162,124 @@ def _local_callees(node: ast.AST, functions: Mapping[str, ast.AST]) -> list[str]
         ):
             callees.append(call.func.id)
     return callees
+
+
+def _unique_top_level_functions(tree: ast.Module) -> dict[str, ast.AST]:
+    """Module-level function defs, refusing any ambiguous (redefined) name.
+
+    A name bound by more than one statement that executes at module scope —
+    two defs, a def inside an ``if``/``try`` branch, or a def plus an
+    assignment — has an implementation static analysis cannot pin against the
+    runtime namespace, so the name is dropped entirely rather than guessed.
+    """
+
+    found: dict[str, ast.AST] = {}
+    ambiguous: set[str] = set()
+    for stmt in _module_scope_statements(tree):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if stmt.name in found:
+                ambiguous.add(stmt.name)
+            else:
+                found[stmt.name] = stmt
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    ambiguous.add(target.id)
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            ambiguous.add(stmt.target.id)
+    return {name: node for name, node in found.items() if name not in ambiguous}
+
+
+def _module_scope_statements(tree: ast.Module) -> list[ast.stmt]:
+    """Statements that execute directly at module scope, through control flow.
+
+    Conditional and exception branches may or may not execute their bodies;
+    because the static view cannot know which branch ran, every def inside one
+    is a candidate and the caller treats multiplied candidates as ambiguous.
+    """
+
+    statements: list[ast.stmt] = []
+    stack: list[ast.stmt] = list(tree.body)
+    while stack:
+        stmt = stack.pop(0)
+        statements.append(stmt)
+        if isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+            stack.extend(stmt.body)
+            stack.extend(stmt.orelse)
+        elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+            stack.extend(stmt.body)
+        elif isinstance(stmt, ast.Try):
+            stack.extend(stmt.body)
+            stack.extend(stmt.orelse)
+            stack.extend(stmt.finalbody)
+            for handler in stmt.handlers:
+                stack.extend(handler.body)
+    return statements
+
+
+def _resolve_ast_callable(
+    tree: ast.Module, parts: list[str]
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Resolve a dotted callable path the way the runtime namespace would.
+
+    Mirrors the target-worker's ``_resolve_target_callable``: the first segment
+    is a module global, each middle segment must be a class, and the last is a
+    function defined in that scope. Any ambiguity or mismatch refuses the scan
+    (returns ``None``) instead of guessing which same-named node executes.
+    """
+
+    if len(parts) == 1:
+        found = _unique_top_level_functions(tree).get(parts[0])
+        return cast(ast.FunctionDef | ast.AsyncFunctionDef | None, found)
+    current: ast.AST | None = _unique_top_level_classes(tree).get(parts[0])
+    if current is None:
+        return None
+    for part in parts[1:-1]:
+        if not isinstance(current, ast.ClassDef):
+            return None
+        nested = _unique_class_functions(current)
+        current = nested.get(part)
+        if current is None:
+            return None
+    final = parts[-1]
+    if isinstance(current, ast.ClassDef):
+        found = _unique_class_functions(current).get(final)
+        return cast(ast.FunctionDef | ast.AsyncFunctionDef | None, found)
+    return None
+
+
+def _unique_top_level_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
+    found: dict[str, ast.ClassDef] = {}
+    ambiguous: set[str] = set()
+    for stmt in _module_scope_statements(tree):
+        if isinstance(stmt, ast.ClassDef):
+            if stmt.name in found:
+                ambiguous.add(stmt.name)
+            else:
+                found[stmt.name] = stmt
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    ambiguous.add(target.id)
+    return {name: node for name, node in found.items() if name not in ambiguous}
+
+
+def _unique_class_functions(class_node: ast.ClassDef) -> dict[str, ast.AST]:
+    """Class-body function defs, refusing ambiguous or dynamically bound names."""
+
+    found: dict[str, ast.AST] = {}
+    ambiguous: set[str] = set()
+    for stmt in class_node.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if stmt.name in found:
+                ambiguous.add(stmt.name)
+            else:
+                found[stmt.name] = stmt
+        elif isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    ambiguous.add(target.id)
+    return {name: node for name, node in found.items() if name not in ambiguous}
 
 
 def _scan_function(name: str, node: ast.AST) -> set[str]:

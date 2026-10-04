@@ -76,13 +76,17 @@ def derive_established_facts(fact_context: ReviewFactContext) -> frozenset[str]:
     does not prove a source-to-sink path or a reachable authentication bypass, so
     injection and business-logic findings stay unconfirmable on a crash alone.
 
-    ``POC_VERIFICATION_RESULT`` closes that gap for sandbox-run PoC scripts: the
-    markers were captured by the sandbox harness from an actual execution against
-    the sample, so ``sink_reached`` with a concrete source/sink pair proves the
-    source-to-sink path, an observed protection list proves protection analysis
-    happened against the live sample, and a recorded behavior difference proves a
-    reachable path with divergent outcomes. Model explanations never enter this
-    branch, so the "model cannot self-confirm" rule is preserved.
+    ``POC_VERIFICATION_RESULT`` markers were previously mapped to injection and
+    auth confirmation facts. That mapping is withdrawn (RA-02, RG-01/RG-02):
+    the sink observation reaches the supervisor through the target's own exit
+    status, which the target can forge or suppress, and a lexicon sink firing
+    does not prove the crafted input propagated into it. Markers remain in the
+    evidence as diagnostics; until a target-unforgeable observation and an
+    executable propagation/constraint criterion exist (see
+    code/docs/oracle-proposal-2026-10-04.md), differential POC evidence
+    establishes only a minimal reproduction, and injection/auth findings stay
+    candidates. Model explanations never enter this branch, so the "model
+    cannot self-confirm" rule is preserved.
 
     ``VERIFICATION_OBSERVATION`` records a repeatable exception from the exact
     target version. That is diagnostic behavior, not proof of security impact;
@@ -121,36 +125,22 @@ def _derived_observation_facts() -> set[str]:
 def _derived_poc_facts(
     fact: ReviewEvidenceFact, category: FindingCategory
 ) -> set[str]:
+    """Differential POC evidence establishes only a minimal reproduction.
+
+    RG-01/RG-02 (2026-10-04 review): the in-process sink observation reaches
+    the supervisor via the target's own exit status — a channel the target can
+    forge (`os._exit(20)`) or suppress (`sys.setprofile(None)`) — and a lexicon
+    sink firing says nothing about the crafted input propagating into it. Until
+    a target-unforgeable observation and an input-propagation criterion exist,
+    ``sink_reached``/``protections_observed`` markers are diagnostics only and
+    derive no injection confirmation facts; the same holds for auth markers
+    (RA-02). Injection and auth findings therefore stay candidates, and
+    confirmation requires the crash oracle (P0.5) or an executable constraint/
+    propagation criterion adopted via ADR.
+    """
+
+    del category  # derivation is category-independent until trusted criteria exist
     derived = {"minimal_reproduction"}
-    markers = fact.replay_facts.get("markers")
-    if not isinstance(markers, dict):
-        return derived
-    if category is FindingCategory.INJECTION:
-        # RA-01: the worker writes ``sink_reached`` only from the interpreter-
-        # level sink-fire observation (target-worker exit 20, recorded by the
-        # supervisor per run) — a stable output difference alone never claims
-        # reach. ``protections_observed`` is the control-plane AST enumeration;
-        # it rides only with a machine-verified reach and names the protection
-        # analysis performed against the live sample.
-        source = markers.get("source")
-        sink = markers.get("sink")
-        if (
-            markers.get("sink_reached") is True
-            and isinstance(source, str)
-            and source
-            and isinstance(sink, str)
-            and sink
-        ):
-            derived.add("source_to_sink_path")
-        protections = markers.get("protections_observed")
-        if markers.get("sink_reached") is True and isinstance(protections, list) and protections:
-            derived.add("protection_analysis")
-    # RA-02: auth/business-logic facts derive from nothing here. A differential
-    # output proves input-dependent behavior, not that the registered security
-    # constraint was violated; the constraint digest in the markers is
-    # provenance binding, not a violation check. Auth findings stay candidates
-    # until an executable constraint criterion exists (see
-    # code/docs/oracle-proposal-2026-10-04.md).
     return derived
 
 

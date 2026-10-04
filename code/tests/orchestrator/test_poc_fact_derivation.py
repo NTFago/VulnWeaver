@@ -52,7 +52,16 @@ def _context(
     )
 
 
-def test_injection_markers_derive_source_to_sink_and_protection_facts() -> None:
+def test_injection_markers_derive_no_confirmation_facts() -> None:
+    """RG-01/RG-02: sink/protection markers are diagnostics, not facts.
+
+    The in-process sink observation reaches the supervisor through the
+    target's own exit status (forgeable, suppressible), and a lexicon sink
+    firing does not prove input propagation. Injection findings stay
+    candidates until a target-unforgeable observation and a propagation
+    criterion exist.
+    """
+
     evidence = _fact(
         evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
         replay_facts={
@@ -66,9 +75,7 @@ def test_injection_markers_derive_source_to_sink_and_protection_facts() -> None:
         },
     )
     derived = derive_established_facts(_context(FindingCategory.INJECTION, [evidence]))
-    assert derived == frozenset(
-        {"minimal_reproduction", "source_to_sink_path", "protection_analysis"}
-    )
+    assert derived == frozenset({"minimal_reproduction"})
 
 
 def test_auth_markers_derive_no_confirmation_facts() -> None:

@@ -336,15 +336,16 @@ def test_auth_differential_without_bound_constraint_does_not_confirm(
     asyncio.run(scenario())
 
 
-def test_injection_with_protection_enumeration_confirms(
+def test_injection_differential_evidence_does_not_confirm(
     persistence_database_url: str,
 ) -> None:
-    """CR-04 closed loop: sink reached + enumerated protections confirm injection.
+    """RG-01/RG-02: sink markers cannot confirm an injection finding.
 
-    All three policy facts derive from the one strong worker record:
-    ``minimal_reproduction`` is its base, ``source_to_sink_path`` comes from
-    ``sink_reached``, and ``protection_analysis`` comes from the deterministic
-    control-plane enumeration of the digest-bound target source.
+    The sink observation rides the target's own exit status (forgeable via
+    ``os._exit(20)``, suppressible via ``sys.setprofile(None)``) and a lexicon
+    sink firing does not prove the crafted input reached it. Markers stay in
+    the evidence as diagnostics; the policy facts they used to satisfy are
+    missing and the finding stays a candidate.
     """
 
     async def scenario() -> None:
@@ -376,21 +377,23 @@ def test_injection_with_protection_enumeration_confirms(
                 ),
             )
             result = await gate.submit(_review(finding_id))
+            assert result.persisted is False
             assert result.decision is not None
-            assert result.decision.allowed is True, result.decision.reason_codes
+            assert "missing_fact:source_to_sink_path" in result.decision.reason_codes
+            assert "missing_fact:protection_analysis" in result.decision.reason_codes
             async with database.transaction() as repositories:
                 stored = await repositories.findings.get(finding_id)
-            assert stored["status"] is FindingStatus.CONFIRMED
+            assert stored["status"] is FindingStatus.CANDIDATE
         finally:
             await database.dispose()
 
     asyncio.run(scenario())
 
 
-def test_injection_sink_reach_still_requires_protection_analysis(
+def test_injection_sink_reach_without_protection_enumeration_yields_no_facts(
     persistence_database_url: str,
 ) -> None:
-    """source_to_sink_path now derives, but the injection policy stays intact."""
+    """Diagnostics without the enumeration derive nothing beyond reproduction."""
 
     async def scenario() -> None:
         database = Database(DatabaseSettings(persistence_database_url))
@@ -420,8 +423,8 @@ def test_injection_sink_reach_still_requires_protection_analysis(
             result = await gate.submit(_review(finding_id))
             assert result.persisted is False
             assert result.decision is not None
+            assert "missing_fact:source_to_sink_path" in result.decision.reason_codes
             assert "missing_fact:protection_analysis" in result.decision.reason_codes
-            assert "missing_fact:source_to_sink_path" not in result.decision.reason_codes
         finally:
             await database.dispose()
 

@@ -101,3 +101,93 @@ def test_scan_follows_module_local_callees() -> None:
     # The closure's sink entry anchors the scan to the bound callable.
     assert scan.sink.startswith("parse@")
     assert scan.marker()[0] != "" and scan.source_digest.startswith("sha256:")
+
+
+# -- RG-03: the scan resolves the full dotted path, never a short-name guess ---
+
+
+def test_scan_resolves_same_named_methods_by_class_path() -> None:
+    """Two same-named methods: the class path pins the scanned node."""
+
+    source = (
+        b"class HandlerA:\n"
+        b"    def parse(self, value):\n"
+        b"        return len(value)\n"
+        b"class HandlerB:\n"
+        b"    def parse(self, value):\n"
+        b"        return eval(value)\n"
+    )
+    clean = scan_target_protections(source, "HandlerA.parse")
+    assert clean is not None
+    assert not any(entry.startswith("dangerous_sink:") for entry in clean.marker())
+    assert any(entry.startswith("callable_resolved:HandlerA.parse@") for entry in clean.marker())
+
+    dangerous = scan_target_protections(source, "HandlerB.parse")
+    assert dangerous is not None
+    assert any(
+        entry.startswith("dangerous_sink:eval@parse:") for entry in dangerous.marker()
+    )
+
+
+def test_scan_refuses_ambiguous_module_level_names() -> None:
+    """A name defined twice at module scope cannot be pinned statically."""
+
+    conditional = (
+        b"if True:\n"
+        b"    def parse(value):\n"
+        b"        return eval(value)\n"
+        b"else:\n"
+        b"    def parse(value):\n"
+        b"        return len(value)\n"
+    )
+    assert scan_target_protections(conditional, "parse") is None
+
+    duplicated = (
+        b"def parse(value):\n"
+        b"    return eval(value)\n"
+        b"def parse(value):\n"
+        b"    return len(value)\n"
+    )
+    assert scan_target_protections(duplicated, "parse") is None
+
+    aliased = (
+        b"def real_parse(value):\n"
+        b"    return eval(value)\n"
+        b"parse = real_parse\n"
+    )
+    assert scan_target_protections(aliased, "parse") is None
+
+
+def test_scan_refuses_class_paths_that_runtime_cannot_resolve() -> None:
+    """Method paths on missing classes or function-prefixed chains refuse."""
+
+    source = b"class Handler:\n    def parse(self, value):\n        return eval(value)\n"
+    assert scan_target_protections(source, "Missing.parse") is None
+    assert scan_target_protections(source, "parse") is None  # short name inside a class
+
+    nested = (
+        b"def outer(value):\n"
+        b"    def inner(v):\n"
+        b"        return eval(v)\n"
+        b"    return inner(value)\n"
+    )
+    # The runtime resolves only module globals and class attributes; a
+    # function-prefixed path cannot resolve there either.
+    assert scan_target_protections(nested, "outer.inner") is None
+
+
+def test_scan_class_method_closure_stays_in_scope() -> None:
+    """A method's closure follows module functions, not other classes' bodies."""
+
+    source = (
+        b"def helper(value):\n"
+        b"    return eval(value)\n"
+        b"class Handler:\n"
+        b"    def parse(self, value):\n"
+        b"        return helper(value)\n"
+    )
+    scan = scan_target_protections(source, "Handler.parse")
+    assert scan is not None
+    assert scan.functions_scanned == 2
+    assert any(entry.startswith("dangerous_sink:eval@") for entry in scan.marker())
+    assert scan.sink.startswith("Handler.parse@")
