@@ -81,6 +81,12 @@ def test_fallback_binding_resolves_into_route() -> None:
     assert route.primary.name == "primary-prov:deepseek-chat"
     assert route.fallback is not None
     assert route.fallback.name == "fallback-prov:deepseek-chat"
+    # The fallback keys its models by the bare role: the gateway resolves the
+    # request model through model_for(tier) when it switches endpoints. A
+    # suffixed key made every fallback switch fail with model_configuration_error
+    # (observed as binary_planning_degraded, 2026-10-04).
+    assert route.fallback.model_for(ModelTier.PLANNING) == "deepseek-chat"
+    assert route.fallback.models == {"planning": "deepseek-chat"}
 
 
 def test_disabled_provider_fails_loudly_at_build_time() -> None:

@@ -11,6 +11,7 @@ from vulnweaver_model_gateway import (
     AgentRunConflict,
     HttpxChatTransport,
     InMemoryAgentRunRecorder,
+    ModelAccessConfig,
     ModelEndpoint,
     ModelGateway,
     ModelGatewaySettings,
@@ -200,6 +201,67 @@ async def test_remote_failure_falls_back_to_local_endpoint() -> None:
         "model_fallback",
         "model_attempt",
     ]
+
+
+@pytest.mark.anyio
+async def test_registry_resolved_fallback_serves_after_primary_failure() -> None:
+    """A registry fallback must answer model_for(tier) when the gateway switches.
+
+    resolve_routes once keyed the fallback endpoint's models by "<role> fallback",
+    so the switch itself failed with model_configuration_error and the caller
+    lost the request the fallback existed for (binary_planning_degraded,
+    2026-10-04). This pins the registry-to-gateway contract end to end, with
+    the production-shaped string-keyed routes.
+    """
+
+    registry = ModelAccessConfig.from_settings(
+        {
+            "model_providers": [
+                {
+                    "id": "primary-prov",
+                    "name": "Primary",
+                    "base_url": "https://primary.example/v1",
+                    "api_format": "openai-chat",
+                    "enabled": True,
+                    "max_attempts": 1,
+                    "models": [{"model_id": "planning-model"}],
+                },
+                {
+                    "id": "fallback-prov",
+                    "name": "Fallback",
+                    "base_url": "https://fallback.example/v1",
+                    "api_format": "openai-chat",
+                    "enabled": True,
+                    "models": [{"model_id": "planning-model"}],
+                },
+            ],
+            "agent_model_bindings": {
+                "planning": {
+                    "provider_id": "primary-prov",
+                    "model_id": "planning-model",
+                    "fallback_provider_id": "fallback-prov",
+                    "fallback_model_id": "planning-model",
+                }
+            },
+            "provider_api_keys": {},
+        }
+    )
+    route = registry.resolve_routes()["planning"]
+    transport = FakeTransport([TimeoutError(), response('{"ok": true}')])
+    model_gateway = ModelGateway(
+        ModelGatewaySettings(routes={"planning": route}, max_repair_attempts=0),
+        transport=transport,
+    )
+    result = await model_gateway.complete_structured(
+        tier=ModelTier.PLANNING,
+        task_id="task:1",
+        run_id="run:registry-fallback",
+        messages=[{"role": "user", "content": "inspect"}],
+        output_contract="JsonObject",
+    )
+    assert result.succeeded
+    assert result.endpoint == "fallback-prov:planning-model"
+    assert result.failure is None
 
 
 @pytest.mark.anyio
