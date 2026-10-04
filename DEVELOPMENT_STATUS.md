@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 RP 修复轮（分支 `feat/realworld-acceptance-samples @ 69cfba2`）：分页审计续审的 RP-01～03 已修复并部署。①RP-01：分页截止超时改为可重试 TIMEOUT（结构化失败带"覆盖不完整、下次 attempt 从断点恢复"消息），新增 **Worker 结算级**测试驱动真实 `ReliableWorker`——attempt 1 截止停止、Worker 记录失败并重新入队、attempt 2 从断点恢复直至全覆盖（`tests/worker/test_worker_semantic_audit_retry.py`）；②RP-02：断点绑定页大小与有序 (version, function) 索引摘要，页大小或索引变化的续跑丢弃旧断点并全量重审（绝不把未审计函数计为 complete），聚合覆盖改用断点自身绑定的页大小/页数（回归：页大小变更后重审全部 4 函数、coverage 完整为真）；③RP-03：分页证据身份加入页片段（同一问题跨页产生两条证据、各自绑定片段 report_ref/digest，链接到同一稳定 Finding），页内重复候选按证据 ID 去重（回归：跨页重复候选不再 EntityConflict）。新并行门禁完整输出：**760 passed / 7 skipped、覆盖率 81.07%、184.5s**；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **6 passed**。
+
 2026-10-04 分页语义审计续审（`feat/realworld-acceptance-samples @ 9251e79`，只读产品代码）：发现 RP-01/P1：截止超时被标 `retryable=False`，Worker 不会消费已保存断点；RP-02/P1：断点未绑定页大小/索引身份，变更页大小后可能把未审计函数汇总为 `complete=true`；RP-03/P2：跨页重复候选生成相同证据 ID、不同片段引用，触发 `EntityConflict` 中断审计。详见 [`code/docs/code-review-2026-10-04-paged-audit.md`](code/docs/code-review-2026-10-04-paged-audit.md)。Linux `dev` 容器定向分页测试 **5 passed**；该测试未覆盖 Worker 结算、断点配置变化或跨页重复候选。本轮未修改产品代码或部署，未跑全量门禁。
 
 2026-10-04 RG 修复轮（分支 `feat/realworld-acceptance-samples @ add7676`）：复审重开的 RG-01～03 已修复并部署。①RG-01/02：确认链诚实降级——`reviews.py` 不再从差分 POC 证据派生任何注入/鉴权确认事实（同进程 sink 观测可被 `os._exit(20)` 伪造或 `sys.setprofile(None)` 致盲，且 sink 触发≠输入传播），`sink_reached`/`protections_observed` 仅作诊断，注入/鉴权 Finding 保持候选；ADR-036 记录"同进程解释器内无法构造目标不可伪造观测通道"的结论与解除条件（P0.5 crash oracle 走 OS wait status、传播判据见 oracle 提案 §5）。②RG-03：AST 保护扫描按完整限定路径解析（镜像运行时的模块全局→类属性语义），同名歧义/条件分支重复定义/别名赋值一律拒绝扫描；`callable_resolved` 锚点记录完整路径。③新增 opt-in Runner 负例（`tests/proof/test_target_bound_injection_negatives.py`）：exit-20 伪装与常量 sink 两例固定"伪造可落地、确认不可达"，profiler 致盲固定保守方向（无 reach 声明）。新并行门禁完整输出：**757 passed / 7 skipped、覆盖率 81.05%、177.5s**，Ruff/Pyright/contracts/TypeScript/Web 构建通过；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收（含 3 个新负例）**6 passed**。共享 CAS 卷在 runner 建新目录后需再次 `chmod -R a+rwX`（已记入经验教训）。
@@ -103,6 +105,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支（`69cfba2`）RP-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**760 passed / 7 skipped、覆盖率 81.07%、总耗时 184.5s**（pytest 148.7s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 7 个镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 验收 **6 passed**（含注入 forgery 负例）。新增回归：Worker 结算级截止超时重试并断点恢复（attempt 2 全覆盖）、页大小变更丢弃断点全量重审且 coverage 完整为真、跨页重复候选双证据链接同一 Finding。 |
 | 2026-10-04 | 分支（`add7676`）RG-01～03 修复门禁与栈内部署 | 新并行入口 `pnpm run check` 完整输出：**757 passed / 7 skipped、覆盖率 81.05%、总耗时 177.5s**（pytest 143.6s），Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200。真实 Runner 验收 **6 passed**：既有正反例 3 项 + 新增注入 forgery 负例（exit-20 伪装、常量 sink：伪造落地于 observation/marker 但 `derive_established_facts` 仅得 `minimal_reproduction`，Finding 保持候选）与 profiler 致盲负例（无 reach 声明）。共享 CAS 卷 runner 建新目录后曾报 `ArtifactStoreIOError`，`chmod -R a+rwX` 后恢复。 |
 | 2026-10-04 | 本轮质量门禁与分支复审（Linux dev 容器） | 旧串行入口全量：753 passed / 4 skipped、覆盖率 81.80%，pytest 自身 145.97 秒；新并行入口首次全量 167.9 秒。补 `proof`/`reporting` 覆盖并排除生成声明后，`pnpm run check` **753 passed / 4 skipped、扩展后覆盖率 81.18%、总耗时 190.7 秒**，Ruff、Pyright 0 errors、contracts `--check`、TypeScript 18 tests、Web 生产构建通过；`node --check scripts/check.mjs` 与 `git diff --check` 通过。人为移除 `pnpm` 的 PATH 负例返回 exit 1 并逐项报错。4 skipped 为 3 个真实 Runner 配置项和 1 个 Docker runtime opt-in；本轮未跑 Runner/镜像重建、未部署。RG-01～03 为静态代码路径推导，待隔离环境负例验收。 |
 | 2026-10-04 | 分支（`3902c4e`）RA-01~05 修复门禁与栈内部署 | `pnpm run check:python`：**753 passed / 4 skipped**（修复过程一轮 752+1 失败系旧鉴权派生测试未同步 RA-02 语义，已更新）；Ruff、Pyright 0 errors、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 定向验收 **3 passed**。新增回归：sink 触发/清洁目标 entrypoint 正反例、相同摘要 forged 观测拒绝、无 sink 触发不写 sink_reached、多 Finding 约束提取、损坏片段硬失败、续跑聚合计数。 |
@@ -134,9 +137,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：先修复分页审计 RP-01～03，再推进可信判据与真实项目闭环（RG-01～03 已关闭）**
-
-0. **分页审计恢复与覆盖修复**：先补 Worker 结算级截止超时重试、页大小变化及跨页重复候选负例，再修复 RP-01～03；定向重跑分页/Worker/持久化测试与静态检查，确认 `coverage.complete` 只在实际全页审核后成立。
+**下一步：可信判据立项与真实项目闭环（RG-01～03、RP-01～03 已关闭）**
 
 1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例——解释器信号经 OS wait status 传递，`os._exit` 无法伪造信号死亡，是当前架构内首个目标不可伪造的观测通道；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。注入确认事实的恢复依赖输入传播判据提案；鉴权类解封依赖 §5 的可执行约束判据。
 2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计。

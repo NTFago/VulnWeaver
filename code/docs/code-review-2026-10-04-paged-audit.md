@@ -2,6 +2,8 @@
 
 审查范围：`feat/realworld-acceptance-samples @ 9251e79` 相对 `main` 新增的分页回退审计、持久断点、证据投影和 Worker 重试链路。本轮只读审查产品代码；未部署或执行样本。Linux `dev` 容器中 `uv run --no-sync pytest -q tests/orchestrator/test_semantic_audit_paging.py` 为 **5 passed**。现有续跑测试手动再次调用 executor，未经过 Worker 结算，因此不能覆盖下列问题。
 
+> 修复记录（2026-10-04，`69cfba2`）：三项均已修复。RP-01：截止超时返回可重试 TIMEOUT（附不完整覆盖消息），新增 `tests/worker/test_worker_semantic_audit_retry.py` 驱动真实 `ReliableWorker` 结算——attempt 1 截止停止、Worker 重新入队、attempt 2 从断点恢复全覆盖。RP-02：断点绑定页大小与有序 (version, function) 索引摘要，配置/索引变化的续跑丢弃断点全量重审，聚合覆盖改用断点自身绑定的页大小/页数。RP-03：分页证据身份加入页片段，跨页重复候选产生两条片段级证据链接同一稳定 Finding，页内重复按证据 ID 去重。回归：`test_page_size_change_discards_checkpoint_and_reaudits_everything`、`test_cross_page_duplicate_candidates_project_without_conflict`。全量门禁 760 passed / 7 skipped；部署后真实 Runner 验收 6 passed。`coverage.complete` 自此只在全部页实际审核后为真。
+
 | 编号 | 优先级 | 发现与触发条件 | 修复判据 |
 |---|---|---|---|
 | RP-01 | P1 | `semantic_audit.py:481-483` 截止时间到达时保存断点并抛出 `FailureKind.TIMEOUT`，但 `:1358-1359` 经 `_failed`（`:1380-1393`）返回 `retryable=False`。`worker.py:375-380` 要求该位为真才重试，所以正常的 8 小时分页截止会直接使 Job 终止；断点不会被自动消费，未审计的函数保持遗漏。`default_retry_policy` 虽包含 TIMEOUT，仍不起作用。 | 截止时间失败返回可重试结构化失败，并用 Worker 结算级测试确认下一次 attempt 从断点继续；重试上限耗尽时明确报告不完整覆盖。 |
