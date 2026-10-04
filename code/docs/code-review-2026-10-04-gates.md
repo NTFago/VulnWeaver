@@ -2,6 +2,8 @@
 
 审查范围：`feat/realworld-acceptance-samples` 相对 `main` 的 proof 观测、复核事实、分页审计、覆盖率配置，以及开发容器内的完整质量门禁。RA-02～RA-05 的修复代码和回归与记录一致；RA-01 在更深的目标代码信任边界上仍有缺口。本轮没有原生运行未知样本；以下 proof 问题由代码路径推导，待经 Sandbox Runner 用固定无害样本补负例。
 
+> 修复记录（2026-10-04，`add7676`）：三项均已处理。RG-01/RG-02 按解除条件的后者执行——`reviews.py` 不再从差分 POC 证据派生任何注入/鉴权确认事实，marker 仅作诊断，注入/鉴权 Finding 保持候选；ADR-036 记录"同进程解释器内无法构造目标不可伪造观测"的结论，可信观测与输入传播判据（crash oracle P0.5 / oracle 提案 §5）另行提案。RG-03 已修复：扫描按完整限定路径解析（镜像运行时语义），同名歧义、条件分支重复定义与别名赋值一律拒绝。Runner 负例已补（`tests/proof/test_target_bound_injection_negatives.py`，opt-in）：exit-20 伪装与常量 sink 固定"伪造可落地、确认不可达"，profiler 致盲固定保守方向；真实 Runner 复跑 6 passed（含原有正反例 3 项）。
+
 ## 待修复问题
 
 | 编号 | 优先级 | 证据及影响 | 解除条件 |
