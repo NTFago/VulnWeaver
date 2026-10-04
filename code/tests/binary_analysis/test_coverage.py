@@ -102,7 +102,13 @@ def test_merge_deduplication_is_not_truncation() -> None:
     assert coverage["complete"] is True
 
 
-def test_string_extraction_counts_offered_beyond_cap(tmp_path) -> None:
+def test_string_extraction_reports_where_it_stopped(tmp_path) -> None:
+    """Reaching the cap is the truncation signal, not a count of what was left.
+
+    The extractor stops as soon as the cap is full, so `offered` is what it
+    examined; counting the whole input instead would mean scanning every byte of
+    both encodings for a number nothing acts on.
+    """
     from vulnweaver_binary_analysis.headers import extract_strings
 
     sample = tmp_path / "strings.bin"
@@ -114,8 +120,30 @@ def test_string_extraction_counts_offered_beyond_cap(tmp_path) -> None:
     )
     assert isinstance(extraction, StringExtraction)
     assert len(extraction.strings) == 3
-    assert extraction.offered > 3
+    assert extraction.offered == 3, "the walk ended at the cap"
+    assert extraction.limit == 3
     assert extraction.truncated is True
+
+    # Below the cap the walk does finish, and then the count is a total.
+    complete = extract_strings(
+        sample,
+        _metadata(),
+        BinaryAnalysisLimits(max_strings=10, min_string_chars=6),
+    )
+    assert len(complete.strings) == 10
+    assert complete.offered == 10
+    assert complete.truncated is True, (
+        "an input holding exactly `limit` candidates is indistinguishable from "
+        "one holding more, which is the point of the conservative signal"
+    )
+
+    roomy = extract_strings(
+        sample,
+        _metadata(),
+        BinaryAnalysisLimits(max_strings=64, min_string_chars=6),
+    )
+    assert roomy.offered == len(roomy.strings) == 10
+    assert roomy.truncated is False
 
 
 def test_build_result_carries_coverage_through_the_contract(tmp_path) -> None:

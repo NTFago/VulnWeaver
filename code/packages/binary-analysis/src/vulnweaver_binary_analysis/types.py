@@ -231,6 +231,7 @@ class BinaryAnalysisAggregate:
     packer: str | None = None
     packed: bool = False
     strings_offered: int = 0
+    strings_limit: int = 0
     strings_truncated: bool = False
     _coverage: _CoverageTracker = field(default_factory=_CoverageTracker, repr=False, compare=False)
 
@@ -257,9 +258,15 @@ class BinaryAnalysisAggregate:
         self._coverage.set_limit("imports", limits.max_imports)
 
     def record_string_extraction(self, *, offered: int, retained: int, limit: int) -> None:
-        """Account for the string extractor's own silent cap (CR-08)."""
+        """Account for the string extractor's own silent cap (CR-08).
+
+        The extractor stops the moment the cap is full, so `offered` is what it
+        examined rather than what the input holds: reaching the cap is itself the
+        truncation signal, and the count cannot be compared against it.
+        """
         self.strings_offered = offered
-        self.strings_truncated = offered > retained and retained >= limit
+        self.strings_limit = limit
+        self.strings_truncated = retained >= limit
 
     def coverage(self) -> dict[str, JsonValue]:
         """JSON-safe per-collection truncation accounting for reports and agents."""
@@ -279,11 +286,11 @@ class BinaryAnalysisAggregate:
         document["strings"] = {
             "offered": self.strings_offered,
             "retained": len(self.strings),
-            "limit": 0,
+            "limit": self.strings_limit,
             "truncated": self.strings_truncated,
             "reason": (
-                f"{max(0, self.strings_offered - len(self.strings))} strings dropped: "
-                "max_strings limit reached"
+                "max_strings limit reached: the extractor stopped there, so "
+                "candidates beyond it were never examined"
                 if self.strings_truncated
                 else None
             ),

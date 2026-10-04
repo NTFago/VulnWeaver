@@ -206,8 +206,12 @@ def test_long_ascii_run_is_one_record_with_a_capped_value(tmp_path: Path) -> Non
     assert extraction.offered == 1
 
 
-def test_offered_counts_every_run_across_both_encodings(tmp_path: Path) -> None:
-    """``offered`` stays an exact count of candidates, cap or no cap (CR-08)."""
+def test_a_full_cap_stops_the_walk_and_skips_the_other_encoding(tmp_path: Path) -> None:
+    """The byte pass filling the cap ends the extraction (CR-08, revised).
+
+    Nothing the UTF-16 pass finds could still be retained, so running it would
+    scan the whole image for records that are discarded on the next line.
+    """
     sample = tmp_path / "both.bin"
     sample.write_bytes(
         b"".join(b"ascii-%02d\x00" % index for index in range(6))
@@ -217,9 +221,28 @@ def test_offered_counts_every_run_across_both_encodings(tmp_path: Path) -> None:
     limits = BinaryAnalysisLimits(max_strings=2, min_string_chars=4)
     extraction = extract_strings(sample, _metadata(), limits)
     assert [item["value"] for item in extraction.strings] == ["ascii-00", "ascii-01"]
-    # Six ASCII runs plus the one UTF-16 run, against a cap of two.
-    assert extraction.offered == 7
+    # The walk ended at the cap: two candidates examined, not seven found.
+    assert extraction.offered == 2
     assert extraction.truncated is True
+
+    # Given room, the same image yields both encodings and an honest total.
+    roomy = extract_strings(
+        sample, _metadata(), BinaryAnalysisLimits(max_strings=64, min_string_chars=4)
+    )
+    assert [item["value"] for item in roomy.strings] == [
+        "ascii-00",
+        "ascii-01",
+        "ascii-02",
+        "ascii-03",
+        "ascii-04",
+        "ascii-05",
+        # The pair walk picks up the byte before the wide text and the four wide
+        # strings run together; that is the pairing behaviour it is documented
+        # for, not something this test is trying to change.
+        "5wide-00wide-01wide-02wide-03",
+    ]
+    assert roomy.offered == 7
+    assert roomy.truncated is False
 
 
 def test_utf16_scan_only_sees_even_pair_starts(tmp_path: Path) -> None:

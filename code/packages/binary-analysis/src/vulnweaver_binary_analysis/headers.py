@@ -102,9 +102,17 @@ def inspect_binary(path: str | Path, limits: BinaryAnalysisLimits | None = None)
 class StringExtraction:
     """Extracted strings plus honest truncation accounting (CR-08).
 
-    ``offered`` counts every candidate string in the input for both encodings,
-    including those dropped because the configured cap was reached, so callers
-    can tell "the binary had no more strings" from "the extractor stopped".
+    ``offered`` counts the candidate strings the extractor actually examined.
+    The walk stops as soon as the cap is full, so when ``truncated`` is set this
+    is a lower bound on what the input holds rather than a total: the extractor
+    stopped, and it stopped *because* it reached the cap. Counting every
+    candidate instead would mean scanning the whole image -- twice, once per
+    encoding -- for a number no caller acts on.
+
+    ``truncated`` therefore reports the observable fact, "the extractor stopped
+    at ``limit``". It is conservative: an input holding exactly ``limit`` strings
+    is indistinguishable from one holding more, because telling them apart is
+    the full scan this accounting exists to avoid.
     """
 
     strings: tuple[BinaryString, ...]
@@ -113,7 +121,7 @@ class StringExtraction:
 
     @property
     def truncated(self) -> bool:
-        return self.offered > len(self.strings)
+        return len(self.strings) >= self.limit
 
 
 def extract_strings(
@@ -124,11 +132,17 @@ def extract_strings(
     configured = limits or BinaryAnalysisLimits()
     data = Path(path).read_bytes()
     ascii_records, ascii_offered = _ascii_strings(data, metadata, configured)
-    utf16_records, utf16_offered = _utf16le_strings(data, metadata, configured)
-    offered = ascii_offered + utf16_offered
     records = list(ascii_records)
+    offered = ascii_offered
     remaining = configured.max_strings - len(records)
-    records.extend(utf16_records[: max(0, remaining)])
+    if remaining > 0:
+        # With the byte pass already at the cap the UTF-16 pass cannot
+        # contribute a record, so it is skipped rather than run and discarded.
+        utf16_records, utf16_offered = _utf16le_strings(
+            data, metadata, configured, remaining
+        )
+        records.extend(utf16_records)
+        offered += utf16_offered
     records.sort(key=lambda item: (item["file_offset"], item["encoding"]))
     kept = tuple(records[: configured.max_strings])
     return StringExtraction(strings=kept, offered=offered, limit=configured.max_strings)
@@ -505,11 +519,13 @@ _ASCII_RUN = re.compile(rb"[\x20-\x7e\t]+")
 def _ascii_strings(
     data: bytes, metadata: BinaryMetadata, limits: BinaryAnalysisLimits
 ) -> tuple[list[BinaryString], int]:
-    """Return (kept, offered): kept stops at the cap, offered counts every run.
+    """Return (kept, offered): the walk stops once the cap is full.
 
     Runs are located by a compiled regex rather than by walking every byte of a
     NUL-terminated copy of the image: the scan stays in C and the copy is gone,
-    which is what the large string-dense images pay for.
+    which is what the large string-dense images pay for. Reaching the cap ends
+    the walk, so ``offered`` counts what was examined and the rest of the image
+    is never read.
     """
     records: list[BinaryString] = []
     offered = 0
@@ -518,18 +534,19 @@ def _ascii_strings(
         if end - start < limits.min_string_chars:
             continue
         offered += 1
-        if len(records) < limits.max_strings:
-            # The value is capped; the run is not, so a long printable stretch
-            # still yields exactly one record.
-            raw = data[start:end][: limits.max_string_chars]
-            records.append(
-                BinaryString(
-                    value=raw.decode("ascii", "replace"),
-                    encoding="ascii",
-                    file_offset=start,
-                    virtual_address=metadata.offset_to_virtual_address(start),
-                )
+        # The value is capped; the run is not, so a long printable stretch still
+        # yields exactly one record.
+        raw = data[start:end][: limits.max_string_chars]
+        records.append(
+            BinaryString(
+                value=raw.decode("ascii", "replace"),
+                encoding="ascii",
+                file_offset=start,
+                virtual_address=metadata.offset_to_virtual_address(start),
             )
+        )
+        if len(records) >= limits.max_strings:
+            break
     return records, offered
 
 
@@ -537,8 +554,9 @@ def _utf16le_strings(
     data: bytes,
     metadata: BinaryMetadata,
     limits: BinaryAnalysisLimits,
+    remaining: int,
 ) -> tuple[list[BinaryString], int]:
-    """Return (kept, offered): kept stops at the cap, offered counts every run.
+    """Return (kept, offered): the walk stops once ``remaining`` records exist.
 
     This stays a byte-by-byte walk on purpose. It advances two bytes at a time
     from offset 0, so it only ever examines *even* pair starts (a run aligned to
@@ -551,7 +569,7 @@ def _utf16le_strings(
     records: list[BinaryString] = []
     offered = 0
     index = 0
-    while index + 1 < len(data):
+    while index + 1 < len(data) and len(records) < remaining:
         start = index
         chars: list[int] = []
         while index + 1 < len(data):
@@ -564,15 +582,14 @@ def _utf16le_strings(
                 break
         if len(chars) >= limits.min_string_chars:
             offered += 1
-            if len(records) < limits.max_strings:
-                records.append(
-                    BinaryString(
-                        value=bytes(chars).decode("ascii"),
-                        encoding="utf-16le",
-                        file_offset=start,
-                        virtual_address=metadata.offset_to_virtual_address(start),
-                    )
+            records.append(
+                BinaryString(
+                    value=bytes(chars).decode("ascii"),
+                    encoding="utf-16le",
+                    file_offset=start,
+                    virtual_address=metadata.offset_to_virtual_address(start),
                 )
+            )
         index = max(index + 2, start + 2)
     return records, offered
 
