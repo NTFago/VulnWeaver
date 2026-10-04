@@ -543,7 +543,17 @@ class SemanticAuditor:
                 run["failure"] = failure
                 run["status"] = RunStatus.FAILED
                 await self._persist_run(run)
-                raise _AuditError(str(failure["code"]), FailureKind.DEPENDENCY)
+                # RF-01: keep the gateway's structured verdict intact. A
+                # retryable transport failure (timeout, HTTP 408/429/5xx) on a
+                # later page must stay retryable, or the worker settles the
+                # job as terminal and the saved checkpoint — with every
+                # completed page — is never consumed by the next attempt.
+                raise _AuditError(
+                    str(failure["code"]),
+                    failure["kind"],
+                    retryable=bool(failure["retryable"]),
+                    message=str(failure["message"]),
+                )
             fragment_ref, fragment_digest = await self._store_report(
                 f"{run_id}-p{page_index}", task_id, report
             )
