@@ -10,8 +10,14 @@ from vulnweaver_binary_analysis import (
     inspect_binary,
 )
 
-from tests.binary_analysis.samples import elf64_sample, packed_elf64_sample, pe64_sample
-from tests.binary_analysis.test_coverage import _metadata
+from tests.binary_analysis.samples import (
+    elf64_sample,
+    packed_elf64_sample,
+    pe64_sample,
+)
+from tests.binary_analysis.samples import (
+    metadata as _metadata,
+)
 
 
 def test_inspects_x64_elf_sections_and_addresses(tmp_path: Path) -> None:
@@ -220,10 +226,9 @@ def test_utf16_scan_only_sees_even_pair_starts(tmp_path: Path) -> None:
     """Characterises the UTF-16 walk, whose output must not drift.
 
     It steps two bytes at a time from offset 0, so it only ever tries even pair
-    starts. A run one byte late is perfectly good UTF-16LE and still invisible,
-    and plain ASCII is read as pairs with deterministic junk. Both show up in
-    what a binary is reported to contain, which is why this pass stays
-    byte-by-byte instead of being vectorised like the ASCII one.
+    starts. A run one byte late is perfectly good UTF-16LE and still invisible.
+    Both show up in what a binary is reported to contain, which is why this pass
+    stays byte-by-byte instead of being vectorised like the ASCII one.
     """
     odd = tmp_path / "odd.bin"
     odd.write_bytes(b"\x7f" + "wide-string".encode("utf-16-le"))
@@ -240,3 +245,35 @@ def test_utf16_scan_only_sees_even_pair_starts(tmp_path: Path) -> None:
     aligned = extract_strings(even, _metadata(), BinaryAnalysisLimits(min_string_chars=4))
     assert [item["value"] for item in aligned.strings] == ["wide-string"]
     assert [item["file_offset"] for item in aligned.strings] == [2]
+
+
+def test_utf16_scan_reads_plain_ascii_as_pairs(tmp_path: Path) -> None:
+    """The other half of the UTF-16 walk's character, pinned the same way.
+
+    Because the walk pairs every two bytes from offset 0, short ASCII strings
+    with their NUL terminators also read as UTF-16, so the same bytes come back
+    under both encodings. It is junk as a string and deterministic as a fact, so
+    it is a property of the output rather than a bug to paper over quietly.
+    """
+    sample = tmp_path / "pairs.bin"
+    sample.write_bytes(b"a\x00b\x00c\x00")
+    extraction = extract_strings(
+        sample, _metadata(), BinaryAnalysisLimits(min_string_chars=1)
+    )
+    assert [(item["value"], item["encoding"]) for item in extraction.strings] == [
+        ("a", "ascii"),
+        ("abc", "utf-16le"),
+        ("b", "ascii"),
+        ("c", "ascii"),
+    ]
+    assert extraction.offered == 4
+
+    # A trailing partial pair is still a run: the tail of "s001" reads as "1".
+    tail = tmp_path / "tail-pair.bin"
+    tail.write_bytes(b"s000\x00s001\x00")
+    found = extract_strings(tail, _metadata(), BinaryAnalysisLimits(min_string_chars=1))
+    assert [(item["value"], item["encoding"]) for item in found.strings] == [
+        ("s000", "ascii"),
+        ("s001", "ascii"),
+        ("1", "utf-16le"),
+    ]

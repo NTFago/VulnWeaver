@@ -681,6 +681,65 @@ def test_deadline_stop_with_a_persisted_checkpoint_stays_retryable(
     asyncio.run(scenario())
 
 
+class FailsAfterFirstSaveCheckpointStore(InMemoryCheckpointStore):
+    """Page checkpoints land; every later write fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.save_calls = 0
+
+    async def save(self, task_id: str, node: str, state, *, created_at: str):
+        self.save_calls += 1
+        if self.save_calls > 1:
+            raise RuntimeError("checkpoint store unavailable")
+        return await super().save(task_id, node, state, created_at=created_at)
+
+
+def test_deadline_save_failure_keeps_a_current_checkpoint_retryable(
+    persistence_database_url: str, tmp_path: object, monkeypatch: Any
+) -> None:
+    """RC-01: a failed *redundant* deadline write must not discard a usable page.
+
+    Page 0's checkpoint landed, so the store already covers every projected page
+    when the deadline fires before page 1. The deadline re-writes the same
+    cumulative state; if that redundant write fails the saved page is still
+    current, and settling terminal would throw a perfectly resumable attempt
+    away. The stop stays the retryable `fallback_deadline`.
+    """
+    monkeypatch.setattr(semantic_audit, "_CHECKPOINT_SAVE_BACKOFF_SECONDS", 0.0)
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, _names = await seed_functions(database, 4)
+        model = PageScriptedModel([])
+        checkpoints = FailsAfterFirstSaveCheckpointStore()
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+            monotonic=_deadline_after_first_page(),
+        )
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await SemanticAuditJobExecutor(database, auditor).execute(
+                audit_job, asyncio.Event()
+            )
+            assert stopped["status"] is JobStatus.FAILED
+            assert stopped["failure"]["code"] == "semantic_audit.fallback_deadline"
+            assert stopped["failure"]["retryable"] is True
+            # Only page 0 ran, and its checkpoint is the one that survives.
+            assert len(model.pages) == 1
+            assert checkpoints.save_calls > 1
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_unreadable_checkpoint_stops_before_any_model_call(
     persistence_database_url: str, tmp_path: object
 ) -> None:

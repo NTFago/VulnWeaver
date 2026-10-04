@@ -23,18 +23,7 @@ from vulnweaver_contracts import (
 )
 
 from tests.binary_analysis.samples import elf64_sample
-
-
-def _metadata() -> BinaryMetadata:
-    return BinaryMetadata(
-        format=BinaryFormat.ELF,
-        architecture="x86_64",
-        bits=64,
-        endianness="little",
-        image_base=0x400000,
-        entry_point=0x1000,
-        sections=(),
-    )
+from tests.binary_analysis.samples import metadata as _metadata
 
 
 def _run(name: str) -> BinaryToolRun:

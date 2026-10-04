@@ -2,6 +2,23 @@ from __future__ import annotations
 
 import struct
 
+from vulnweaver_binary_analysis.types import BinaryMetadata
+from vulnweaver_contracts import BinaryFormat
+
+
+def metadata() -> BinaryMetadata:
+    """The container metadata the string/section tests do not depend on."""
+
+    return BinaryMetadata(
+        format=BinaryFormat.ELF,
+        architecture="x86_64",
+        bits=64,
+        endianness="little",
+        image_base=0x400000,
+        entry_point=0x1000,
+        sections=(),
+    )
+
 
 def elf64_sample(*, machine: int = 62, upx_section: bool = False) -> bytes:
     section_name = b"UPX0" if upx_section else b".text"

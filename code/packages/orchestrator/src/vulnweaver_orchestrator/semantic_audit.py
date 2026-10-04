@@ -520,7 +520,9 @@ class SemanticAuditor:
             # The deadline bounds this attempt's work; the checkpoint hands the
             # remaining pages to the next attempt instead of truncating them.
             if self._monotonic() - start > self._fallback_deadline_seconds:
-                if not await self._save_fallback_checkpoint(task_id, run_id, state):
+                if not await self._save_fallback_checkpoint(
+                    task_id, run_id, state
+                ) and not checkpoint_current:
                     # Without a checkpoint the next attempt restarts at page 0:
                     # it re-projects every already-audited page under its own
                     # run_id, appending a second set of immutable evidence rows,
@@ -540,7 +542,10 @@ class SemanticAuditor:
                     )
                 # RP-01: the stop is resumable by design — the failure must be
                 # retryable or the worker settles the job as terminal and the
-                # saved checkpoint is never consumed.
+                # saved checkpoint is never consumed. RC-01: this write is
+                # redundant when a checkpoint already covers every projected
+                # page (`checkpoint_current`), so a transient failure of it must
+                # not throw that usable checkpoint away and settle terminal.
                 raise _AuditError(
                     "semantic_audit.fallback_deadline",
                     FailureKind.TIMEOUT,
@@ -584,14 +589,15 @@ class SemanticAuditor:
                 # rows. Keep the gateway's code and kind for diagnosis, but
                 # settle terminal rather than promise a resumption the
                 # checkpoint cannot serve.
-                resumable = bool(failure["retryable"]) and checkpoint_current
+                retryable = bool(failure["retryable"])
+                resumable = retryable and checkpoint_current
                 raise _AuditError(
                     str(failure["code"]),
                     failure["kind"],
                     retryable=resumable,
                     message=(
                         str(failure["message"])
-                        if resumable
+                        if resumable or not retryable
                         else (
                             f"{failure['message']} — not retryable: the paged "
                             "fallback audit's checkpoint no longer covers every "
