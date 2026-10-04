@@ -297,10 +297,13 @@ def _run_invocation(
                             target_digest,
                         ],
                         stdin=subprocess.DEVNULL,
-                        # Output lands in a file the supervisor reads back
-                        # bounded; an unbounded stdout pipe could deadlock or
-                        # balloon memory. The child keeps its inherited fd, so
-                        # closing the parent copy here is safe.
+                        # Output lands in a file rather than a pipe: an
+                        # unread pipe would block the child once the buffer
+                        # fills. The supervisor reads back only the bounded
+                        # prefix it hashes, and the run's timeout bounds how
+                        # much the child can write in the meantime. The child
+                        # keeps its inherited fd, so closing the parent copy
+                        # here is safe.
                         stdout=output_stream,
                         stderr=subprocess.DEVNULL,
                         cwd=run_dir,
@@ -330,7 +333,14 @@ def _run_invocation(
                 run.signal = -run.exit_code
             if run.completed:
                 try:
-                    observed = output_path.read_bytes()[:MAX_OBSERVED_OUTPUT_BYTES]
+                    # Read exactly the prefix the digest is taken over. The
+                    # child writes its stdout straight into this file, so a
+                    # target that prints without bound makes the file as large
+                    # as the run timeout allows; reading it whole and slicing
+                    # afterwards would pull all of that into the supervisor's
+                    # memory for a 64 KiB digest.
+                    with output_path.open("rb") as observed_stream:
+                        observed = observed_stream.read(MAX_OBSERVED_OUTPUT_BYTES)
                     run.output_digest = _digest(observed)
                 except OSError as error:
                     raise BundleError("target_worker_io_error") from error

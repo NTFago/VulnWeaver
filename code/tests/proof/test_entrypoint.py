@@ -206,6 +206,52 @@ def test_target_invocation_timeout_is_reported_and_stopped(
     assert run.target_frames is False
 
 
+def test_observed_output_is_read_bounded_not_loaded_whole(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The supervisor never materialises the target's whole stdout.
+
+    The child writes its stdout straight into `observed-output.bin`, so a target
+    that prints without bound grows that file as far as the run timeout allows.
+    Reading it whole and slicing afterwards (`read_bytes()[:N]`) pulls all of it
+    into the supervisor's memory to hash 64 KiB; the read itself has to be
+    bounded. The digest is still taken over the prefix, so both halves are
+    asserted.
+    """
+    loader = SourceFileLoader("proof_entrypoint_bounded", str(ENTRYPOINT))
+    spec = importlib.util.spec_from_loader("proof_entrypoint_bounded", loader)
+    assert spec is not None and spec.loader is not None
+    entrypoint = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entrypoint)
+    monkeypatch.setattr(entrypoint, "MAX_OBSERVED_OUTPUT_BYTES", 4096)
+
+    whole_reads: list[str] = []
+    real_read_bytes = Path.read_bytes
+
+    def recording_read_bytes(self: Path) -> bytes:
+        if self.name == "observed-output.bin":
+            whole_reads.append(str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", recording_read_bytes)
+
+    run = entrypoint._run_invocation(
+        {"target_callable": "parse", "input_mode": "text"},
+        b"import sys\n"
+        b"def parse(value):\n"
+        b"    sys.stdout.write('A' * 20000)\n"
+        b"    return 0\n",
+        "sha256:" + "a" * 64,
+        b"input",
+        "0000",
+        "trigger",
+    )
+
+    assert run.exit_code == 0
+    assert whole_reads == [], "the supervisor must not read the whole observed output"
+    assert run.output_digest == entrypoint._digest(b"A" * 4096)
+
+
 def test_verified_observation_uses_target_bound_digest(tmp_path: Path) -> None:
     driver = json.dumps({"target_callable": "parse", "input_mode": "text"})
     code, report = _execute(tmp_path, driver)
