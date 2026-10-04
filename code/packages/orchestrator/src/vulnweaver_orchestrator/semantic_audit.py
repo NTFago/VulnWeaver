@@ -168,11 +168,20 @@ class _PairScope:
 
 @dataclass(slots=True)
 class _FallbackState:
-    """Resumable progress of the paged fallback audit (checkpoint payload)."""
+    """Resumable progress of the paged fallback audit (checkpoint payload).
+
+    ``page_size`` and ``index_digest`` bind the checkpoint to the exact
+    paging configuration and ordered function index it was produced from
+    (RP-02): a resume under a different page size or a changed index would
+    recompute page boundaries and could count unaudited functions as
+    covered, so such a checkpoint is discarded and the audit restarts.
+    """
 
     job_id: str
     page_count: int
     total_functions: int
+    page_size: int = 0
+    index_digest: str = ""
     next_page: int = 0
     report_refs: list[tuple[str, str]] = field(default_factory=lambda: [])
     finding_ids: list[str] = field(default_factory=lambda: [])
@@ -202,6 +211,8 @@ class _FallbackState:
             "completed": self.completed,
             "next_page": self.next_page,
             "page_count": self.page_count,
+            "page_size": self.page_size,
+            "index_digest": self.index_digest,
             "total_functions": self.total_functions,
             "report_refs": [
                 {"object_ref": object_ref, "digest": digest}
@@ -236,6 +247,10 @@ class _FallbackState:
             job_id=str(state["job_id"]),
             page_count=expected_pages,
             total_functions=_json_int(state["total_functions"]),
+            # RP-02: checkpoints written before the binding fields existed are
+            # rejected (KeyError -> invalid -> fresh re-audit), never resumed.
+            page_size=_json_int(state["page_size"]),
+            index_digest=str(state["index_digest"]),
             next_page=next_page,
             report_refs=entries,
             finding_ids=findings_list,
@@ -243,6 +258,15 @@ class _FallbackState:
             dropped=_json_int(state.get("dropped", 0)),
             completed=bool(state.get("completed")),
         )
+
+
+def _paged_index_digest(entries: list[tuple[str, PairFunction]]) -> str:
+    """Identity of the ordered (version, function) index a checkpoint covers."""
+
+    ordered = "\0".join(
+        f"{version_id}\0{function['id']}" for version_id, function in entries
+    )
+    return "sha256:" + hashlib.sha256(ordered.encode("utf-8")).hexdigest()
 
 
 class AgentFuzzDispatcher(Protocol):
@@ -470,9 +494,16 @@ class SemanticAuditor:
         total = len(entries)
         page_size = self._fallback_page_size
         page_count = math.ceil(total / page_size)
-        state = await self._load_fallback_checkpoint(task_id, job["id"])
+        index_digest = _paged_index_digest(entries)
+        state = await self._load_fallback_checkpoint(task_id, job["id"], page_size, index_digest)
         if state is None:
-            state = _FallbackState(job_id=job["id"], page_count=page_count, total_functions=total)
+            state = _FallbackState(
+                job_id=job["id"],
+                page_count=page_count,
+                total_functions=total,
+                page_size=page_size,
+                index_digest=index_digest,
+            )
         run: dict[str, object] | None = None
         start = self._monotonic()
         for page_index in range(state.next_page, page_count):
@@ -480,7 +511,18 @@ class SemanticAuditor:
             # remaining pages to the next attempt instead of truncating them.
             if self._monotonic() - start > self._fallback_deadline_seconds:
                 await self._save_fallback_checkpoint(task_id, run_id, state)
-                raise _AuditError("semantic_audit.fallback_deadline", FailureKind.TIMEOUT)
+                # RP-01: the stop is resumable by design — the failure must be
+                # retryable or the worker settles the job as terminal and the
+                # saved checkpoint is never consumed.
+                raise _AuditError(
+                    "semantic_audit.fallback_deadline",
+                    FailureKind.TIMEOUT,
+                    retryable=True,
+                    message=(
+                        "paged fallback audit deadline reached; coverage is "
+                        "incomplete and the next attempt resumes from the saved page"
+                    ),
+                )
             page_entries = entries[page_index * page_size : (page_index + 1) * page_size]
             observations = await self._observations(task_id, page_entries)
             response = await self._gateway.complete_structured(
@@ -519,13 +561,14 @@ class SemanticAuditor:
                 fragment_ref,
                 fragment_digest,
                 run_id,
+                page_index=page_index,
             )
             state.record_page(
                 fragment_ref, fragment_digest, page_finding_ids, page_evidence_ids, page_dropped
             )
             await self._save_fallback_checkpoint(task_id, run_id, state)
         report_ref, _report_digest = await self._aggregate_fallback_report(
-            run_id, task_id, state, entries
+            run_id, task_id, state
         )
         if run is None:
             # Fully resumed from the checkpoint: this attempt only aggregated.
@@ -543,8 +586,21 @@ class SemanticAuditor:
             state.dropped,
         )
 
-    async def _load_fallback_checkpoint(self, task_id: str, job_id: str) -> _FallbackState | None:
-        """The newest interrupted fallback checkpoint for exactly this job."""
+    async def _load_fallback_checkpoint(
+        self,
+        task_id: str,
+        job_id: str,
+        page_size: int,
+        index_digest: str,
+    ) -> _FallbackState | None:
+        """The newest interrupted fallback checkpoint for exactly this job.
+
+        RP-02: a checkpoint is only consumable when its recorded page size and
+        ordered index identity match the current run; anything else (including
+        checkpoints from before the binding fields existed) is discarded and
+        the audit restarts from page 0, so unaudited functions can never be
+        counted as covered.
+        """
 
         if self._checkpoints is None:
             return None
@@ -565,13 +621,24 @@ class SemanticAuditor:
             if state.get("job_id") != job_id or state.get("completed"):
                 continue
             try:
-                return _FallbackState.from_document(state)
+                candidate = _FallbackState.from_document(state)
             except (KeyError, TypeError, ValueError) as error:
                 LOGGER.warning(
                     "semantic_audit_checkpoint_invalid",
                     extra={"task_id": task_id, "error": str(error)[:200]},
                 )
                 return None
+            if candidate.page_size != page_size or candidate.index_digest != index_digest:
+                LOGGER.warning(
+                    "semantic_audit_checkpoint_config_changed",
+                    extra={
+                        "task_id": task_id,
+                        "checkpoint_page_size": candidate.page_size,
+                        "current_page_size": page_size,
+                    },
+                )
+                return None
+            return candidate
         return None
 
     async def _save_fallback_checkpoint(
@@ -598,7 +665,6 @@ class SemanticAuditor:
         run_id: str,
         task_id: str,
         state: _FallbackState,
-        entries: list[tuple[str, PairFunction]],
     ) -> tuple[str, str]:
         """Merge the per-page fragments into the run's durable audit report.
 
@@ -622,12 +688,14 @@ class SemanticAuditor:
                 )
             findings.extend(item for item in page_findings if isinstance(item, dict))
         audited_pages = len(state.report_refs)
-        expected_pages = math.ceil(len(entries) / self._fallback_page_size)
+        # Coverage math uses the checkpoint's own binding (RP-02): the page
+        # size and page count the fragments were actually produced with, not
+        # whatever the current configuration happens to be.
         coverage: JsonObject = {
             "total_functions": state.total_functions,
-            "audited_functions": min(audited_pages * self._fallback_page_size, len(entries)),
+            "audited_functions": min(audited_pages * state.page_size, state.total_functions),
             "pages": audited_pages,
-            "complete": audited_pages == expected_pages,
+            "complete": audited_pages == state.page_count,
         }
         summary = (
             f"Fallback audit covered {state.total_functions} indexed function(s) "
@@ -889,6 +957,7 @@ class SemanticAuditor:
         report_digest: str,
         run_id: str,
         *,
+        page_index: int | None = None,
         investigation: list[JsonObject] | None = None,
     ) -> tuple[tuple[str, ...], tuple[str, ...], int, list[JsonObject], list[str]]:
         accepted: list[tuple[str, str]] = []
@@ -897,6 +966,13 @@ class SemanticAuditor:
         agent_fuzz_requested: list[str] = []
         raw_findings = report.get("findings")
         candidates = cast(list[JsonObject], raw_findings) if isinstance(raw_findings, list) else []
+        # RP-03: evidence is immutable and page-fragment-scoped in the paged
+        # audit — the same issue reported on two pages produces two evidence
+        # records (one per fragment's report_ref/digest) linked to the one
+        # stable finding. Within a single page an identical candidate is a
+        # duplicate and is skipped instead of colliding on its evidence id.
+        page_scope = "" if page_index is None else f"p{page_index}"
+        seen_evidence: set[str] = set()
         async with self._database.transaction() as repositories:
             for candidate in candidates:
                 finding = candidate
@@ -917,8 +993,16 @@ class SemanticAuditor:
                     "finding", job["task_id"], cwe_id, _canonical(location)
                 )
                 evidence_id = _stable_id(
-                    "evidence", run_id, cwe_id, _canonical(location), issue_identity
+                    "evidence",
+                    run_id,
+                    page_scope,
+                    cwe_id,
+                    _canonical(location),
+                    issue_identity,
                 )
+                if evidence_id in seen_evidence:
+                    continue
+                seen_evidence.add(evidence_id)
                 await repositories.evidence.create(
                     _evidence(
                         evidence_id,
@@ -962,7 +1046,12 @@ class SemanticAuditor:
                     # the confirmation policy, but it stays in the evidence chain
                     # so a report can show what the auditor asked to have proven.
                     request_evidence_id = _stable_id(
-                        "evidence", run_id, "verification", cwe_id, _canonical(location)
+                        "evidence",
+                        run_id,
+                        "verification",
+                        page_scope,
+                        cwe_id,
+                        _canonical(location),
                     )
                     raw_reason = finding.get("verification_reason")
                     await repositories.evidence.create(
@@ -1322,10 +1411,16 @@ def _stable_id(prefix: str, *parts: str) -> str:
 
 
 class _AuditError(Exception):
-    def __init__(self, code: str, kind: FailureKind) -> None:
+    """A structured audit failure the executor turns into a WorkerResult."""
+
+    def __init__(
+        self, code: str, kind: FailureKind, *, retryable: bool = False, message: str = ""
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.kind = kind
+        self.retryable = retryable
+        self.message = message or code.replace(".", " ")
 
 
 class SemanticAuditJobExecutor:
@@ -1356,7 +1451,13 @@ class SemanticAuditJobExecutor:
         try:
             outcome = await self._auditor.audit(job)
         except _AuditError as error:
-            return _failed(job["id"], error.code, error.kind)
+            return _failed(
+                job["id"],
+                error.code,
+                error.kind,
+                retryable=error.retryable,
+                message=error.message,
+            )
         except ModelGatewayError as error:
             failure = error.as_failure()
             return WorkerResult(
@@ -1377,7 +1478,14 @@ class SemanticAuditJobExecutor:
         )
 
 
-def _failed(job_id: str, code: str, kind: FailureKind) -> WorkerResult:
+def _failed(
+    job_id: str,
+    code: str,
+    kind: FailureKind,
+    *,
+    retryable: bool = False,
+    message: str = "",
+) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
         job_id=job_id,
@@ -1387,8 +1495,8 @@ def _failed(job_id: str, code: str, kind: FailureKind) -> WorkerResult:
         failure=StructuredFailure(
             code=code,
             kind=kind,
-            message=code.replace(".", " "),
-            retryable=False,
+            message=message or code.replace(".", " "),
+            retryable=retryable,
             details={},
         ),
     )

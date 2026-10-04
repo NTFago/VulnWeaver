@@ -217,6 +217,144 @@ def test_paged_fallback_projects_findings_from_every_page(
     asyncio.run(scenario())
 
 
+def test_page_size_change_discards_checkpoint_and_reaudits_everything(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """RP-02: a resume under a different page size restarts, never miscounts.
+
+    The first attempt audits page 0 (of a 2-function page) and stops at the
+    deadline; a deployment then halves... doubles the page size. The saved
+    checkpoint no longer matches the paging configuration, so the resumed
+    attempt must discard it and re-audit the whole index — the aggregated
+    coverage stays truthful instead of marking unaudited functions complete.
+    """
+
+    class DeadlineAfterFirstPage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> float:
+            self.calls += 1
+            return 0.0 if self.calls <= 2 else 100.0
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, names = await seed_functions(database, 4)
+        model = PageScriptedModel([])
+        checkpoints = InMemoryCheckpointStore()
+        store = LocalContentAddressedStore(tmp_path)
+        first = SemanticAuditor(
+            database,
+            model,
+            store=store,
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+            monotonic=DeadlineAfterFirstPage(),
+        )
+        executor = SemanticAuditJobExecutor(database, first)
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await executor.execute(audit_job, asyncio.Event())
+            assert stopped["status"] is JobStatus.FAILED
+            assert stopped["failure"]["code"] == "semantic_audit.fallback_deadline"
+            assert len(model.pages) == 1
+
+            # The page size changed between attempts (deploy-time config edit).
+            resumed_model = PageScriptedModel([])
+            second = SemanticAuditor(
+                database,
+                resumed_model,
+                store=store,
+                fact_loader=StubFactLoader(),
+                checkpoint_store=checkpoints,
+                fallback_page_size=4,
+            )
+            resumed = await SemanticAuditJobExecutor(database, second).execute(
+                audit_job, asyncio.Event()
+            )
+            assert resumed["status"] is JobStatus.SUCCEEDED
+            # The stale checkpoint was discarded: every function is audited
+            # again under the new paging, in a single 4-function page.
+            assert len(resumed_model.pages) == 1
+            assert sorted(resumed_model.pages[0]) == sorted(names)
+            async with database.transaction() as repositories:
+                runs = await repositories.agent_runs.list_for_task(task_id)
+            report_refs = runs[-1]["result_refs"]
+            with store.open(report_refs[0]) as stream:
+                aggregate = json.load(stream)
+            coverage = aggregate["report"]["coverage"]
+            assert coverage["complete"] is True
+            assert coverage["pages"] == 1
+            assert coverage["audited_functions"] == 4
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_cross_page_duplicate_candidates_project_without_conflict(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """RP-03: the same issue on two pages yields page-scoped evidence rows.
+
+    Both fragments carry their own report reference, so the identical
+    candidate must not collide on its evidence id; each page's evidence links
+    to the one stable finding and the audit completes.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, names = await seed_functions(database, 4)
+        # The SAME finding (path/line/constraint) reported on both pages —
+        # the model re-reporting an issue whose function sits in another page.
+        outputs = [
+            {
+                "schema_version": "1.0.0",
+                "summary": "page 0",
+                "findings": [page_finding(names[0], f"src/{names[0]}.py")],
+            },
+            {
+                "schema_version": "1.0.0",
+                "summary": "page 1",
+                "findings": [page_finding(names[0], f"src/{names[0]}.py")],
+            },
+        ]
+        model = PageScriptedModel(outputs)
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            fallback_page_size=2,
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            result = await executor.execute(audit_job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED, result["failure"]
+            assert len(result["evidence_ids"]) == 2
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+                relations = await repositories.findings.list_evidence_relations(
+                    findings[0]["id"]
+                )
+                records = [
+                    await repositories.evidence.get(relation["evidence_id"])
+                    for relation in relations
+                ]
+            # One stable finding, two page-scoped evidence records, each with
+            # its own fragment digest.
+            assert len(findings) == 1
+            assert len(records) == 2
+            assert len({record["digest"] for record in records}) == 2
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
 def test_paged_fallback_resumes_after_deadline_stop(
     persistence_database_url: str, tmp_path: object
 ) -> None:
