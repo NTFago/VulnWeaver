@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -23,7 +23,7 @@ from vulnweaver_contracts import (
     SourceLocation,
 )
 from vulnweaver_model_gateway import ModelCallResult
-from vulnweaver_orchestrator import SemanticAuditJobExecutor, SemanticAuditor
+from vulnweaver_orchestrator import SemanticAuditJobExecutor, SemanticAuditor, semantic_audit
 from vulnweaver_orchestrator.checkpoints import InMemoryCheckpointStore
 from vulnweaver_persistence import Database, DatabaseSettings
 
@@ -552,3 +552,174 @@ class CorruptingCheckpointStore(InMemoryCheckpointStore):
             ]
             state = poisoned
         return await super().save(task_id, node, state, created_at=created_at)
+
+
+class UnwritableCheckpointStore(InMemoryCheckpointStore):
+    """A store whose writes always fail, the way an unhealthy database behaves."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.save_calls = 0
+
+    async def save(self, task_id: str, node: str, state, *, created_at: str):
+        self.save_calls += 1
+        raise RuntimeError("checkpoint store unavailable")
+
+
+class UnreadableCheckpointStore(InMemoryCheckpointStore):
+    """A store whose reads always fail while its writes may be fine."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.list_calls = 0
+
+    async def list(self, task_id: str):
+        self.list_calls += 1
+        raise RuntimeError("checkpoint store unavailable")
+
+
+def _deadline_after_first_page() -> object:
+    """Clock that exceeds the deadline right after the first page.
+
+    Call 1 initializes the attempt clock, call 2 is the first page's deadline
+    check, and call 3 (before page 1) reports an expired clock.
+    """
+
+    class DeadlineAfterFirstPage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> float:
+            self.calls += 1
+            return 0.0 if self.calls <= 2 else 100.0
+
+    return DeadlineAfterFirstPage()
+
+
+def test_deadline_stop_without_a_persisted_checkpoint_is_terminal(
+    persistence_database_url: str, tmp_path: object, monkeypatch: Any
+) -> None:
+    """A deadline stop that saved nothing must not promise a resumption.
+
+    Reporting it as the retryable `fallback_deadline` sent the next attempt back
+    to page 0: it re-projected every audited page under its own run_id, appending
+    a second set of immutable evidence rows, and spent another full deadline
+    before hitting the same wall — with `max_attempts` exhausted either way.
+    """
+    monkeypatch.setattr(semantic_audit, "_CHECKPOINT_SAVE_BACKOFF_SECONDS", 0.0)
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, _names = await seed_functions(database, 4)
+        model = PageScriptedModel([])
+        checkpoints = UnwritableCheckpointStore()
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+            monotonic=_deadline_after_first_page(),
+        )
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await SemanticAuditJobExecutor(database, auditor).execute(
+                audit_job, asyncio.Event()
+            )
+            assert stopped["status"] is JobStatus.FAILED
+            assert (
+                stopped["failure"]["code"]
+                == "semantic_audit.fallback_checkpoint_unavailable"
+            )
+            # The worker only re-queues a retryable failure whose kind is
+            # whitelisted; retryable=False settles this job terminal instead of
+            # looping the whole audit again.
+            assert stopped["failure"]["retryable"] is False
+            # Only the first page ran before the deadline stop.
+            assert len(model.pages) == 1
+            # A blip gets retried before the page is declared unresumable.
+            assert checkpoints.save_calls > 1
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_deadline_stop_with_a_persisted_checkpoint_stays_retryable(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """Control: a healthy checkpoint keeps the RP-01 resumable-stop contract."""
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, _names = await seed_functions(database, 4)
+        model = PageScriptedModel([])
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            checkpoint_store=InMemoryCheckpointStore(),
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+            monotonic=_deadline_after_first_page(),
+        )
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await SemanticAuditJobExecutor(database, auditor).execute(
+                audit_job, asyncio.Event()
+            )
+            assert stopped["status"] is JobStatus.FAILED
+            assert stopped["failure"]["code"] == "semantic_audit.fallback_deadline"
+            assert stopped["failure"]["retryable"] is True
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_unreadable_checkpoint_stops_before_any_model_call(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """An unreadable store is not an empty history.
+
+    Returning "no checkpoint" for a failed read silently restarts the audit at
+    page 0, re-projecting every page under a fresh run_id and discarding a
+    checkpoint that was still there. The attempt stops before spending a model
+    call, so the retry can re-read the saved page.
+    """
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, _names = await seed_functions(database, 4)
+        model = PageScriptedModel([])
+        checkpoints = UnreadableCheckpointStore()
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+        )
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await SemanticAuditJobExecutor(database, auditor).execute(
+                audit_job, asyncio.Event()
+            )
+            assert stopped["status"] is JobStatus.FAILED
+            assert (
+                stopped["failure"]["code"]
+                == "semantic_audit.fallback_checkpoint_unreadable"
+            )
+            assert stopped["failure"]["retryable"] is True
+            assert checkpoints.list_calls == 1
+            # Nothing was audited and nothing was projected: the stub records a
+            # page the moment the gateway is asked for it.
+            assert model.pages == []
+            assert stopped["evidence_ids"] == []
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())

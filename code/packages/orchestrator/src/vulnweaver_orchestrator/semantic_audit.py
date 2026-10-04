@@ -79,6 +79,10 @@ _FALLBACK_PAGE_SIZE = 64
 # deadline bounds the attempt; the checkpoint makes the next attempt resume).
 _FALLBACK_DEADLINE_SECONDS = 28_800.0
 _FALLBACK_CHECKPOINT_NODE = "semantic-audit-fallback"
+# A checkpoint write is retried a few times before the deadline stop declares
+# the page unresumable, so a momentary store blip does not cost the attempt.
+_CHECKPOINT_SAVE_ATTEMPTS = 3
+_CHECKPOINT_SAVE_BACKOFF_SECONDS = 0.5
 _AUDIT_TOOL = ToolIdentity(name="vulnweaver-semantic-audit", version="1.0.0", image_digest=None)
 
 
@@ -510,7 +514,24 @@ class SemanticAuditor:
             # The deadline bounds this attempt's work; the checkpoint hands the
             # remaining pages to the next attempt instead of truncating them.
             if self._monotonic() - start > self._fallback_deadline_seconds:
-                await self._save_fallback_checkpoint(task_id, run_id, state)
+                if not await self._save_fallback_checkpoint(task_id, run_id, state):
+                    # Without a checkpoint the next attempt restarts at page 0:
+                    # it re-projects every already-audited page under its own
+                    # run_id, appending a second set of immutable evidence rows,
+                    # and spends another full deadline before hitting the same
+                    # wall. Retrying cannot repair coverage, so this settles
+                    # terminal and names the real cause instead of promising a
+                    # resumption that cannot happen.
+                    raise _AuditError(
+                        "semantic_audit.fallback_checkpoint_unavailable",
+                        FailureKind.DEPENDENCY,
+                        retryable=False,
+                        message=(
+                            "paged fallback audit deadline reached but no "
+                            "checkpoint could be persisted; without one the next "
+                            "attempt would re-audit every page from the start"
+                        ),
+                    )
                 # RP-01: the stop is resumable by design — the failure must be
                 # retryable or the worker settles the job as terminal and the
                 # saved checkpoint is never consumed.
@@ -610,6 +631,10 @@ class SemanticAuditor:
         checkpoints from before the binding fields existed) is discarded and
         the audit restarts from page 0, so unaudited functions can never be
         counted as covered.
+
+        A store that cannot be read raises a retryable failure instead of
+        looking like an empty history: the two cases demand opposite actions,
+        and only one of them can be undone.
         """
 
         if self._checkpoints is None:
@@ -620,12 +645,28 @@ class SemanticAuditor:
                 for item in await self._checkpoints.list(task_id)
                 if item.node == _FALLBACK_CHECKPOINT_NODE
             ]
-        except Exception as error:  # a broken checkpoint must never block the audit
+        except Exception as error:
+            # A read failure is not the same as "no checkpoint": the saved page
+            # may well still be there. Reporting None here would silently restart
+            # the audit at page 0 and re-project every page under a fresh run_id,
+            # appending a second set of immutable evidence rows for the same
+            # findings while discarding a perfectly good checkpoint. Ending the
+            # attempt costs nothing — no model call has run yet — and the next
+            # one re-reads the page.
             LOGGER.warning(
                 "semantic_audit_checkpoint_load_failed",
                 extra={"task_id": task_id, "error": str(error)[:200]},
             )
-            return None
+            raise _AuditError(
+                "semantic_audit.fallback_checkpoint_unreadable",
+                FailureKind.DEPENDENCY,
+                retryable=True,
+                message=(
+                    "the paged fallback audit's checkpoint could not be read; the "
+                    "attempt stopped before auditing anything so the next one can "
+                    "re-read the saved page"
+                ),
+            ) from error
         for checkpoint in reversed(checkpoints):
             state = checkpoint.state
             if state.get("job_id") != job_id or state.get("completed"):
@@ -653,22 +694,40 @@ class SemanticAuditor:
 
     async def _save_fallback_checkpoint(
         self, task_id: str, run_id: str, state: _FallbackState
-    ) -> None:
+    ) -> bool:
+        """Persist one checkpoint and report whether it actually landed.
+
+        A failed write must never abort the audit in flight: every completed
+        page's evidence is already durable, so the failure is logged and handed
+        back rather than raised. The deadline stop is the one caller that has to
+        care — it promises the next attempt a resumable page and can only keep
+        that promise if the write happened. A short bounded retry gives a
+        momentary store blip a chance to clear before that promise is dropped.
+        """
         store = self._checkpoints
         if store is None:
-            return
-        try:
-            await store.save(
-                task_id,
-                _FALLBACK_CHECKPOINT_NODE,
-                state.document(run_id),
-                created_at=datetime.now(UTC).isoformat(),
-            )
-        except Exception as error:  # checkpointing must never kill the audit
-            LOGGER.warning(
-                "semantic_audit_checkpoint_save_failed",
-                extra={"task_id": task_id, "error": str(error)[:200]},
-            )
+            return False
+        for attempt in range(_CHECKPOINT_SAVE_ATTEMPTS):
+            try:
+                await store.save(
+                    task_id,
+                    _FALLBACK_CHECKPOINT_NODE,
+                    state.document(run_id),
+                    created_at=datetime.now(UTC).isoformat(),
+                )
+                return True
+            except Exception as error:  # checkpointing must never kill the audit
+                LOGGER.warning(
+                    "semantic_audit_checkpoint_save_failed",
+                    extra={
+                        "task_id": task_id,
+                        "attempt": attempt + 1,
+                        "error": str(error)[:200],
+                    },
+                )
+                if attempt + 1 < _CHECKPOINT_SAVE_ATTEMPTS:
+                    await asyncio.sleep(_CHECKPOINT_SAVE_BACKOFF_SECONDS)
+        return False
 
     async def _aggregate_fallback_report(
         self,
