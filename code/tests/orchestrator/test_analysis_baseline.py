@@ -153,6 +153,12 @@ def test_workspace_reports_the_pre_audit_analysis_baseline(
             assert binary["truncated_collections"] == ["functions"]
             # No source archive in this task: the source slot stays empty.
             assert baseline["source_index"] is None
+            # With no source version loaded there is no version a source read
+            # proof could be resolved against, so nothing is authorized (CR-06).
+            assert workspace._source_version_id == ""
+            assert not workspace.has_read_reported_code(
+                path="src/app.py", start_line=1, address=None
+            )
         finally:
             await database.dispose()
 

@@ -350,6 +350,8 @@ class AuditWorkspace:
         self.fact_loader = fact_loader or SourceReviewFactLoader(database, store)
         self._functions: list[AuditFunctionRef] = []
         self._functions_by_id: dict[str, AuditFunctionRef] = {}
+        # The version a source finding will be anchored to; see `load`.
+        self._source_version_id: str = ""
         self._version_kinds: dict[str, ArtifactKind] = {}
         self._versions: dict[str, ArtifactVersion] = {}
         self._files: dict[tuple[str, str], str | None] = {}
@@ -372,6 +374,15 @@ class AuditWorkspace:
                 kind = ArtifactKind(artifact["kind"])
                 self._version_kinds[version_id] = kind
                 self._versions[version_id] = version
+                # A source finding is anchored to the first source version in
+                # scope (`semantic_audit._auditable_functions` picks it the same
+                # way), so that is the version whose file a read proof has to
+                # name. Resolving the proof by position in `_functions` instead
+                # let one version's read authorize a report anchored to another
+                # (CR-06) -- `_function_sort_key` sorts by path and line but not
+                # by version, so ties fell back to scope order.
+                if kind in _SOURCE_KINDS:
+                    self._source_version_id = self._source_version_id or version_id
                 # The functions' own artifact_version_id is authoritative.
                 for function in await repositories.pair.list_functions(version_id):
                     ref = AuditFunctionRef(
@@ -776,7 +787,18 @@ class AuditWorkspace:
         return (ref.version_id, path, start_line) in self._read_source_lines
 
     def _resolve_source_ref(self, path: str, start_line: int) -> AuditFunctionRef | None:
+        """The indexed source function the reported location anchors to.
+
+        Two imported versions of one project can hold the same path with
+        overlapping line ranges, and only the version the finding actually
+        anchors to may authorize the report (CR-06), so the lookup is scoped to
+        that version rather than to whichever match comes first in the index.
+        """
+        if not self._source_version_id:
+            return None
         for ref in self._functions:
+            if ref.version_id != self._source_version_id:
+                continue
             source = ref.function["source_location"]
             if source is None or source["path"] != path:
                 continue
