@@ -78,6 +78,8 @@
       max_output_tokens: 0,
       thinking_mode: "off",
       thinking_budget_tokens: 0,
+      thinking_effort: null,
+      thinking_style: "standard",
     };
   }
 
@@ -116,6 +118,12 @@
   function submitModelDialog(): void {
     if (!modelDialog) return;
     const draft = { ...modelDialog.draft, model_id: modelDialog.draft.model_id.trim() };
+    if (draft.thinking_mode === "custom") draft.thinking_mode = "default";
+    if (draft.thinking_style === "kimi" && (draft.model_id === "kimi-k3" || draft.model_id.startsWith("kimi-k2.7-code"))) {
+      draft.thinking_mode = "default";
+    }
+    draft.thinking_budget_tokens = 0;
+    if (draft.thinking_mode === "off") draft.thinking_effort = null;
     if (!draft.model_id) return;
     const provider = productSettings.model_providers.find((p) => p.id === modelDialog!.providerId);
     if (!provider) return;
@@ -157,8 +165,10 @@
             display_name: model.note,
             context_window_tokens: model.context_window_tokens,
             max_output_tokens: model.max_output_tokens,
-            thinking_mode: "off",
+            thinking_mode: preset.id === "deepseek" || preset.id === "moonshot" ? "default" : "off",
             thinking_budget_tokens: 0,
+            thinking_effort: null,
+            thinking_style: preset.id === "deepseek" ? "deepseek" : preset.id === "moonshot" ? "kimi" : "standard",
           }))
         : [],
     };
@@ -240,7 +250,16 @@
       const existing = new Set(provider.models.map((m) => m.model_id));
       const additions = result.models
         .filter((modelId) => !existing.has(modelId))
-        .map((modelId) => ({ ...emptyModel(), model_id: modelId }));
+        .map((modelId) => {
+          const deepseek = provider.id.startsWith("deepseek");
+          const kimi = provider.id.startsWith("moonshot") && (modelId === "kimi-k3" || modelId === "kimi-k2.6" || modelId.startsWith("kimi-k2.7-code"));
+          return {
+            ...emptyModel(),
+            model_id: modelId,
+            thinking_mode: deepseek || kimi ? "default" as const : "off" as const,
+            thinking_style: deepseek ? "deepseek" as const : kimi ? "kimi" as const : "standard" as const,
+          };
+        });
       updateProvider(provider.id, "models", [...provider.models, ...additions]);
       probeNotes = {
         ...probeNotes,
@@ -522,9 +541,9 @@
                               </div>
                               <div class="model-tags">
                                 <span class="tag" data-tip="上下文窗口（Token）；0 表示交由供应商默认">上下文 {tokenLabel(model.context_window_tokens)}</span>
-                                <span class="tag" data-tip="单次回复输出上限（Token）；0 表示交由供应商默认">输出 {tokenLabel(model.max_output_tokens)}</span>
+                                {#if provider.api_format === "anthropic-messages"}<span class="tag" data-tip="Anthropic API 要求填写 max_tokens；此处使用模型物理输出能力">输出能力 {tokenLabel(model.max_output_tokens)}</span>{/if}
                                 {#if model.thinking_mode !== "off"}
-                                  <span class="tag accent" data-tip="扩展思考">思考{model.thinking_mode === "custom" ? ` ${Math.round((model.thinking_budget_tokens || 0) / 1024)}K` : ""}</span>
+                                  <span class="tag accent" data-tip="原生思考控制">思考{model.thinking_effort ? ` ${model.thinking_effort}` : ""}</span>
                                 {/if}
                               </div>
                               <div class="model-actions">
@@ -675,24 +694,35 @@
             <span class="tip-mark" data-tip="模型一次可处理的上下文容量，单位为 Token；网关据此自动裁剪超长输入。请勿超过模型的实际上限。0 表示交由供应商默认。">?</span>
           </span>
         </label>
-        <label class="dialog-field">最大输出 Tokens
-          <span class="tip-anchor">
-            <input class="mono" bind:value={modelDialog.draft.max_output_tokens} type="number" min="0" placeholder="0" />
-            <span class="tip-mark" data-tip="单次回复的输出上限，单位为 Token；决定 Anthropic max_tokens 缺省与上下文预留。0 表示交由供应商默认。">?</span>
-          </span>
-        </label>
       </div>
       <div class="dialog-cols">
         <label class="dialog-field">思考模式
           <select bind:value={modelDialog.draft.thinking_mode}>
-            <option value="off">关闭</option>
-            <option value="default">开启（供应商默认预算）</option>
-            <option value="custom">自定义预算</option>
+            {#if !(modelDialog.draft.thinking_style === "kimi" && (modelDialog.draft.model_id === "kimi-k3" || modelDialog.draft.model_id.startsWith("kimi-k2.7-code")))}
+              <option value="off">{modelDialog.draft.thinking_style === "deepseek" || modelDialog.draft.thinking_style === "kimi" ? "关闭思考" : "供应商默认（不发送参数）"}</option>
+            {/if}
+            <option value="default">启用供应商原生思考</option>
           </select>
         </label>
-        {#if modelDialog.draft.thinking_mode === "custom"}
-          <label class="dialog-field">思考预算（Token，≥1024）
-            <input class="mono" bind:value={modelDialog.draft.thinking_budget_tokens} type="number" min="1024" />
+        {#if modelDialog.draft.thinking_mode !== "off" && (modelDialog.draft.thinking_style !== "kimi" || modelDialog.draft.model_id === "kimi-k3")}
+          <label class="dialog-field">思考强度
+            <select bind:value={modelDialog.draft.thinking_effort}>
+              <option value={null}>供应商默认</option>
+              <option value="low">low</option>
+              {#if modelDialog.draft.thinking_style === "standard"}<option value="medium">medium</option>{/if}
+              <option value="high">high</option>
+              {#if modelDialog.draft.thinking_style === "standard"}<option value="xhigh">xhigh</option>{/if}
+              <option value="max">max</option>
+            </select>
+          </label>
+        {/if}
+        {#if productSettings.model_providers.find((p) => p.id === modelDialog?.providerId)?.api_format === "openai-chat"}
+          <label class="dialog-field">思考参数格式
+            <select bind:value={modelDialog.draft.thinking_style}>
+              <option value="standard">OpenAI reasoning_effort</option>
+              <option value="deepseek">DeepSeek thinking + reasoning_effort</option>
+              <option value="kimi">Kimi thinking / reasoning_effort</option>
+            </select>
           </label>
         {/if}
       </div>

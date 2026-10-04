@@ -103,6 +103,8 @@ export interface ProviderModelEntry {
   max_output_tokens?: number;
   thinking_mode?: "off" | "default" | "custom";
   thinking_budget_tokens?: number;
+  thinking_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+  thinking_style?: "standard" | "deepseek" | "kimi";
 }
 
 export interface ModelProviderEntry {

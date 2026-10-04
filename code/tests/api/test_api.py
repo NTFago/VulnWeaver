@@ -325,6 +325,8 @@ def test_product_settings_store_provider_registry_and_merge_keys(
                     "display_name": "",
                     "thinking_mode": "off",
                     "thinking_budget_tokens": 0,
+                    "thinking_effort": None,
+                    "thinking_style": "standard",
                 }
             ],
         }
@@ -471,8 +473,8 @@ def test_product_settings_tier_models_and_api_key_isolation(client: TestClient) 
     assert cleared.status_code == 200
     assert cleared.json()["tier_api_keys_configured"]["planning"] is False
 
-    # custom thinking below the 1024-token floor is rejected
-    invalid_budget = client.put(
+    # Historical budget values remain readable but impose no minimum or wire limit.
+    legacy_budget = client.put(
         "/api/settings",
         headers={"X-CSRF-Token": csrf},
         json={
@@ -490,7 +492,8 @@ def test_product_settings_tier_models_and_api_key_isolation(client: TestClient) 
             },
         },
     )
-    assert invalid_budget.status_code == 422
+    assert legacy_budget.status_code == 200
+    assert legacy_budget.json()["model_tiers"]["planning"]["thinking_budget_tokens"] == 512
 
     # a tier with base_url but no model name (or vice versa) is rejected
     incomplete = client.put(

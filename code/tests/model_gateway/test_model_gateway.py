@@ -143,7 +143,6 @@ async def test_success_uses_openai_shape_redacts_secrets_and_records_agent_run()
         output_contract="JsonObject",
         input_refs=["cas://source"],
         result_refs=["cas://result"],
-        max_output_tokens=321,
     )
 
     assert result.succeeded
@@ -153,7 +152,7 @@ async def test_success_uses_openai_shape_redacts_secrets_and_records_agent_run()
     assert result.agent_run.get("result_refs") == ["cas://result"]
     assert result.agent_run["token_usage"] == {"input_tokens": 4, "output_tokens": 3}
     assert "top-secret" not in str(transport.requests[0][2])
-    assert transport.requests[0][2]["max_tokens"] == 321
+    assert "max_tokens" not in transport.requests[0][2]
     assert "secret-key" not in str(result.agent_run)
     assert recorder.get("run:1") == result.agent_run
 
@@ -173,6 +172,7 @@ async def test_transient_failure_retries_and_preserves_token_usage() -> None:
     )
     assert result.succeeded
     assert len(transport.requests) == 2
+    assert result.agent_run["token_usage"] == {"input_tokens": 12, "output_tokens": 6}
     assert [item["decision"] for item in result.agent_run["decisions"]] == [
         "model_attempt",
         "model_attempt",
@@ -245,6 +245,35 @@ async def test_invalid_output_after_repair_is_structured_failure() -> None:
     assert result.agent_run["status"] is RunStatus.FAILED
     assert result.failure["kind"] == "validation"
     assert recorder.get("run:invalid")["failure"] == result.failure
+    assert result.agent_run["token_usage"] == {"input_tokens": 8, "output_tokens": 6}
+
+
+@pytest.mark.anyio
+async def test_missing_usage_is_marked_instead_of_presented_as_exact_zero() -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                200,
+                {
+                    "choices": [{"message": {"content": '{"ok": true}'}}],
+                },
+            )
+        ]
+    )
+    model_gateway, _ = gateway(transport)
+    result = await model_gateway.complete_structured(
+        tier=ModelTier.AUDIT,
+        task_id="task:usage-missing",
+        run_id="run:usage-missing",
+        messages=[{"role": "user", "content": "inspect"}],
+        output_contract="JsonObject",
+    )
+    assert result.succeeded
+    assert result.agent_run["token_usage"] == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "missing_usage_responses": 1,
+    }
 
 
 @pytest.mark.anyio
@@ -271,20 +300,20 @@ def test_redaction_policy_is_configurable_and_registry_is_immutable() -> None:
     run = cast(
         AgentRun,
         {
-        "schema_version": "1.0.0",
-        "id": "run:1",
-        "task_id": "task:1",
-        "status": "succeeded",
-        "model": "local/audit",
-        "prompt_hash": "sha256:" + "a" * 64,
-        "input_refs": [],
-        "decisions": [],
-        "token_usage": {"input_tokens": 0, "output_tokens": 0},
-        "failure": None,
-        "duration_ms": 0,
-        "result_refs": [],
-        "created_at": "2026-09-08T09:00:00Z",
-        "updated_at": "2026-09-08T09:00:00Z",
+            "schema_version": "1.0.0",
+            "id": "run:1",
+            "task_id": "task:1",
+            "status": "succeeded",
+            "model": "local/audit",
+            "prompt_hash": "sha256:" + "a" * 64,
+            "input_refs": [],
+            "decisions": [],
+            "token_usage": {"input_tokens": 0, "output_tokens": 0},
+            "failure": None,
+            "duration_ms": 0,
+            "result_refs": [],
+            "created_at": "2026-09-08T09:00:00Z",
+            "updated_at": "2026-09-08T09:00:00Z",
         },
     )
     recorder.append(run)

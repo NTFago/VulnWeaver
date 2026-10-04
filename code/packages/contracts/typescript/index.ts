@@ -213,6 +213,10 @@ export interface DecisionRecord {
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  reasoning_output_tokens?: number;
+  missing_usage_responses?: number;
 }
 
 export interface SourceLocation {
@@ -1094,6 +1098,8 @@ export interface ProviderModelEntry {
   max_output_tokens?: number;
   thinking_mode?: "off" | "default" | "custom";
   thinking_budget_tokens?: number;
+  thinking_effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
+  thinking_style?: "standard" | "deepseek" | "kimi";
 }
 
 export interface AgentModelBinding {

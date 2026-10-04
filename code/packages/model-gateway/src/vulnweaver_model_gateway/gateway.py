@@ -8,6 +8,7 @@ import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -36,6 +37,7 @@ from vulnweaver_model_gateway.errors import (
     ModelProtocolError,
     ModelTransportError,
 )
+from vulnweaver_model_gateway.protocols import adapter_for, response_object
 
 
 class ModelTier(StrEnum):
@@ -47,21 +49,30 @@ class ModelTier(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ThinkingConfig:
-    """Extended-thinking request for one endpoint.
-
-    ``mode="default"`` lets the provider choose its budget; ``mode="custom"``
-    pins an explicit token budget (Anthropic ``thinking.budget_tokens``; OpenAI
-    ``reasoning_effort`` is mapped from the budget).
-    """
+    """Native reasoning controls; legacy budgets are accepted but never sent."""
 
     mode: str = "off"
     budget_tokens: int | None = None
+    effort: str | None = None
+    style: str = "standard"
 
     def __post_init__(self) -> None:
         if self.mode not in {"off", "default", "custom"}:
             raise ValueError("thinking mode must be off, default or custom")
-        if self.mode == "custom" and (self.budget_tokens is None or self.budget_tokens < 1024):
-            raise ValueError("custom thinking requires a budget of at least 1024 tokens")
+        if self.budget_tokens is not None and self.budget_tokens < 0:
+            raise ValueError("legacy thinking budget must not be negative")
+        if self.effort is not None and self.effort not in {
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        }:
+            raise ValueError("unsupported reasoning effort")
+        if self.style not in {"standard", "deepseek", "kimi"}:
+            raise ValueError("unsupported thinking style")
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +86,9 @@ class ModelEndpoint:
     endpoint. The endpoint name is safe metadata and must not contain
     credentials.
 
-    ``max_output_tokens`` is the model's configured output ceiling (0 = let the
-    provider default decide). It shapes the Anthropic ``max_tokens`` default and
-    the context-window reserve; it is never a task-level quota.
+    ``max_output_tokens`` records the model's physical output capacity (0 = let
+    the provider default decide). It supplies the Anthropic ``max_tokens`` field
+    and the context-window reserve; it is never a task-level quota.
     """
 
     name: str
@@ -134,14 +145,29 @@ class ModelEndpoint:
         if self.context_window_tokens < 0:
             raise ValueError("context window must not be negative")
         if self.thinking is not None:
-            budget = self.thinking.budget_tokens
-            if (
-                self.thinking.mode == "custom"
-                and self.context_window_tokens
-                and budget
-                and budget >= self.context_window_tokens
-            ):
-                raise ValueError("thinking budget must stay below the context window")
+            if self.wire_protocol == "anthropic" and self.thinking.effort in {"none", "minimal"}:
+                raise ValueError("Anthropic effort must be low, medium, high, xhigh or max")
+            if self.thinking.style in {"deepseek", "kimi"} and self.wire_protocol != "openai":
+                raise ValueError("vendor thinking control requires OpenAI Chat")
+            if self.thinking.style in {"deepseek", "kimi"} and self.thinking.effort not in {
+                None,
+                "low",
+                "high",
+                "max",
+            }:
+                raise ValueError("vendor reasoning effort must be low, high or max")
+            if self.thinking.style == "kimi":
+                model_id = next(iter(self.models.values()))
+                if model_id not in {"kimi-k3", "kimi-k2.6"} and not model_id.startswith(
+                    "kimi-k2.7-code"
+                ):
+                    raise ValueError("Kimi thinking control is not verified for this model")
+                if model_id == "kimi-k3" and self.thinking.mode == "off":
+                    raise ValueError("Kimi K3 cannot disable thinking")
+                if model_id != "kimi-k3" and self.thinking.effort is not None:
+                    raise ValueError("Kimi K2.x does not support reasoning_effort")
+                if model_id.startswith("kimi-k2.7-code") and self.thinking.mode == "off":
+                    raise ValueError("Kimi K2.7 Code cannot disable thinking")
 
     @property
     def wire_protocol(self) -> str | None:
@@ -448,8 +474,8 @@ class ModelGateway:
         result_refs: Sequence[str] = (),
         max_output_tokens: int | None = None,
     ) -> ModelCallResult:
-        if max_output_tokens is not None and max_output_tokens < 1:
-            raise ValueError("model output token limit must be positive")
+        if max_output_tokens is not None:
+            raise ValueError("per-call output token limits are disabled")
         started_at = self._monotonic()
         created_at = _timestamp(self._clock())
         redacted_messages = self._redaction.redact_messages(messages)
@@ -569,6 +595,7 @@ class ModelGateway:
     ) -> _RequestOutcome:
         endpoint_errors: list[ModelGatewayError] = []
         all_decisions: list[tuple[str, str]] = []
+        all_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         endpoints = [route.primary]
         if route.fallback is not None:
             endpoints.append(route.fallback)
@@ -584,6 +611,7 @@ class ModelGateway:
                 )
             except ModelGatewayError as error:
                 endpoint_errors.append(error)
+                _add_usage(all_usage, cast(TokenUsage, error.attempt_usage))
                 all_decisions.extend(error.attempt_decisions)
                 all_decisions.append(
                     (
@@ -598,7 +626,7 @@ class ModelGateway:
                         model,
                         endpoint.name,
                         tuple(all_decisions),
-                        _zero_usage(),
+                        cast(TokenUsage, all_usage),
                         error,
                     )
                 all_decisions.append(
@@ -614,7 +642,7 @@ class ModelGateway:
                 model,
                 endpoint.name,
                 tuple(all_decisions) + outcome.decisions,
-                outcome.usage,
+                _sum_usage(all_usage, outcome.usage),
                 None,
             )
         error = (
@@ -626,7 +654,7 @@ class ModelGateway:
             "unknown",
             "unknown",
             tuple(all_decisions),
-            _zero_usage(),
+            cast(TokenUsage, all_usage),
             error,
         )
 
@@ -637,15 +665,10 @@ class ModelGateway:
         messages: Sequence[Mapping[str, str]],
         max_output_tokens: int | None,
     ) -> _RequestOutcome:
-        if endpoint.wire_protocol == "anthropic":
-            payload, url, headers = _anthropic_request(endpoint, model, messages, max_output_tokens)
-        elif endpoint.wire_protocol == "openai-responses":
-            payload, url, headers = _openai_responses_request(
-                endpoint, model, messages, max_output_tokens
-            )
-        else:
-            payload, url, headers = _openai_request(endpoint, model, messages, max_output_tokens)
+        adapter = adapter_for(endpoint.wire_protocol or "openai")
+        payload, url, headers = adapter.build_request(endpoint, model, messages, max_output_tokens)
         decisions: list[tuple[str, str]] = []
+        attempt_usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
         last_error: ModelGatewayError | None = None
         for attempt in range(endpoint.max_attempts):
             last_error = None
@@ -676,32 +699,29 @@ class ModelGateway:
                 del error
             if last_error is not None:
                 if not last_error.retryable:
-                    raise _mark_attempts(last_error, decisions)
+                    raise _mark_attempts(last_error, decisions, attempt_usage)
                 if attempt + 1 < endpoint.max_attempts:
                     await self._sleep_backoff(endpoint, attempt)
                     continue
-                raise _mark_attempts(last_error, decisions)
+                raise _mark_attempts(last_error, decisions, attempt_usage)
             if response is None:
                 error = ModelProtocolError("model transport returned no response")
-                raise _mark_attempts(error, decisions)
+                raise _mark_attempts(error, decisions, attempt_usage)
             if 200 <= response.status_code < 300:
                 try:
-                    body = _response_object(response.body)
-                    if endpoint.wire_protocol == "anthropic":
-                        content, usage = _extract_anthropic_response(body)
-                    elif endpoint.wire_protocol == "openai-responses":
-                        content, usage = _extract_openai_responses_response(body)
-                    else:
-                        content, usage = _extract_response(body)
+                    body = response_object(response.body)
+                    response_usage = adapter.parse_usage(body.get("usage"))
+                    _add_usage(attempt_usage, response_usage)
+                    content, _ = adapter.extract_response(body)
                 except ModelGatewayError as error:
-                    raise _mark_attempts(error, decisions) from error
+                    raise _mark_attempts(error, decisions, attempt_usage) from error
                 return _RequestOutcome(
                     body,
                     content,
                     model,
                     endpoint.name,
                     tuple(decisions),
-                    usage,
+                    cast(TokenUsage, attempt_usage),
                     None,
                 )
             retryable = (
@@ -709,24 +729,28 @@ class ModelGateway:
                 or response.status_code == 429
                 or response.status_code >= 500
             )
-            body_text = ""
             response_body = getattr(response, "body", None)
-            if isinstance(response_body, Mapping):
-                body_text = json.dumps(response_body, default=str)[:512]
+            if isinstance(response_body, Mapping) and "usage" in response_body:
+                # The HTTP status already reports failure; malformed accounting
+                # cannot turn it into a successful call.
+                with suppress(ModelProtocolError):
+                    _add_usage(
+                        attempt_usage,
+                        adapter.parse_usage(cast(Mapping[str, object], response_body)["usage"]),
+                    )
             last_error = ModelTransportError(
                 "model endpoint returned an unsuccessful status",
                 details={
                     "endpoint": endpoint.name,
                     "status_code": response.status_code,
-                    "response_body": body_text,
                 },
                 retryable=retryable,
             )
             if not retryable or attempt + 1 == endpoint.max_attempts:
-                raise _mark_attempts(last_error, decisions)
+                raise _mark_attempts(last_error, decisions, attempt_usage)
             await self._sleep_backoff(endpoint, attempt)
         error = last_error or ModelTransportError("model request failed")
-        raise _mark_attempts(error, decisions)
+        raise _mark_attempts(error, decisions, attempt_usage)
 
     async def _sleep_backoff(self, endpoint: ModelEndpoint, attempt: int) -> None:
         delay = min(30.0, endpoint.retry_backoff_seconds * (2**attempt))
@@ -735,9 +759,10 @@ class ModelGateway:
 
 
 def _mark_attempts(
-    error: ModelGatewayError, decisions: Sequence[tuple[str, str]]
+    error: ModelGatewayError, decisions: Sequence[tuple[str, str]], usage: Mapping[str, int]
 ) -> ModelGatewayError:
     error.attempt_decisions = tuple(decisions)
+    error.attempt_usage = dict(usage)
     return error
 
 
@@ -818,234 +843,6 @@ def _fit_context_window(
         ),
     )
     return messages_out, (decision,)
-
-
-def _response_object(value: object) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise ModelProtocolError("model response body must be a JSON object", retryable=True)
-    return cast(Mapping[str, object], value)
-
-
-def _reasoning_effort(endpoint: ModelEndpoint) -> str | None:
-    """Map a thinking config onto the OpenAI reasoning_effort vocabulary."""
-
-    thinking = endpoint.thinking
-    if thinking is None or thinking.mode == "off":
-        return None
-    if thinking.mode == "default":
-        return "medium"
-    budget = thinking.budget_tokens or 0
-    if budget <= 4096:
-        return "low"
-    if budget <= 16384:
-        return "medium"
-    return "high"
-
-
-def _anthropic_thinking(endpoint: ModelEndpoint) -> dict[str, object] | None:
-    thinking = endpoint.thinking
-    if thinking is None or thinking.mode == "off":
-        return None
-    if thinking.mode == "default":
-        return {"type": "enabled"}
-    return {"type": "enabled", "budget_tokens": thinking.budget_tokens}
-
-
-_JSON_INSTRUCTION = " Respond with a single JSON object and nothing else; no prose, no code fences."
-
-
-def _openai_request(
-    endpoint: ModelEndpoint,
-    model: str,
-    messages: Sequence[Mapping[str, str]],
-    max_output_tokens: int | None,
-) -> tuple[JsonObject, str, dict[str, str]]:
-    payload: JsonObject = {
-        "model": model,
-        "messages": [dict(message) for message in messages],
-        "response_format": {"type": "json_object"},
-    }
-    if max_output_tokens is not None:
-        payload["max_tokens"] = max_output_tokens
-    effort = _reasoning_effort(endpoint)
-    if effort is not None:
-        payload["reasoning_effort"] = effort
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if endpoint.api_key:
-        headers["Authorization"] = f"Bearer {endpoint.api_key}"
-    return payload, endpoint.chat_completions_url, headers
-
-
-def _anthropic_request(
-    endpoint: ModelEndpoint,
-    model: str,
-    messages: Sequence[Mapping[str, str]],
-    max_output_tokens: int | None,
-) -> tuple[JsonObject, str, dict[str, str]]:
-    """Build a ``/v1/messages`` payload from the neutral chat messages."""
-
-    system_parts = [
-        str(message["content"]) for message in messages if str(message.get("role", "")) == "system"
-    ]
-    chat_messages = [
-        {"role": str(message["role"]), "content": str(message["content"])}
-        for message in messages
-        if str(message.get("role", "")) != "system"
-    ]
-    if chat_messages and str(chat_messages[-1]["role"]) == "user":
-        chat_messages[-1]["content"] = str(chat_messages[-1]["content"]) + _JSON_INSTRUCTION
-    else:
-        system_parts.append(_JSON_INSTRUCTION.strip())
-    payload: dict[str, object] = {
-        "model": model,
-        "max_tokens": max_output_tokens
-        or endpoint.max_output_tokens
-        or (endpoint.context_window_tokens // 4 if endpoint.context_window_tokens else 4096),
-        "messages": chat_messages,
-    }
-    if system_parts:
-        payload["system"] = "\n\n".join(system_parts)
-    thinking = _anthropic_thinking(endpoint)
-    if thinking is not None:
-        payload["thinking"] = thinking
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-    }
-    if endpoint.api_key:
-        headers["x-api-key"] = endpoint.api_key
-    return cast(JsonObject, payload), endpoint.messages_url, headers
-
-
-def _openai_responses_request(
-    endpoint: ModelEndpoint,
-    model: str,
-    messages: Sequence[Mapping[str, str]],
-    max_output_tokens: int | None,
-) -> tuple[JsonObject, str, dict[str, str]]:
-    """Build a ``/responses`` payload from the neutral chat messages."""
-
-    system_parts = [
-        str(message["content"]) for message in messages if str(message.get("role", "")) == "system"
-    ]
-    input_items = [
-        {"role": str(message["role"]), "content": str(message["content"])}
-        for message in messages
-        if str(message.get("role", "")) != "system"
-    ]
-    payload: dict[str, object] = {
-        "model": model,
-        "input": input_items,
-        "text": {"format": {"type": "json_object"}},
-    }
-    if system_parts:
-        payload["instructions"] = "\n\n".join(system_parts)
-    output_limit = max_output_tokens or endpoint.max_output_tokens
-    if output_limit:
-        payload["max_output_tokens"] = output_limit
-    effort = _reasoning_effort(endpoint)
-    if effort is not None:
-        payload["reasoning"] = {"effort": effort}
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    if endpoint.api_key:
-        headers["Authorization"] = f"Bearer {endpoint.api_key}"
-    return cast(JsonObject, payload), endpoint.responses_url, headers
-
-
-def _extract_openai_responses_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
-    status = body.get("status")
-    if status == "incomplete":
-        raise ModelProtocolError(
-            "model response is incomplete (output budget exhausted before JSON completed)",
-            details={"status": "incomplete"},
-            retryable=False,
-        )
-    output_blocks = body.get("output")
-    if not isinstance(output_blocks, list) or not output_blocks:
-        raise ModelProtocolError("model response did not contain output", retryable=True)
-    parts: list[str] = []
-    for block in cast(list[object], output_blocks):
-        if not isinstance(block, Mapping):
-            continue
-        block_mapping = cast(Mapping[str, object], block)
-        if block_mapping.get("type") != "message":
-            # Reasoning and tool-call items carry no answer text; skip them.
-            continue
-        content_blocks = block_mapping.get("content")
-        if not isinstance(content_blocks, list):
-            continue
-        for content_block in cast(list[object], content_blocks):
-            if not isinstance(content_block, Mapping):
-                continue
-            content_mapping = cast(Mapping[str, object], content_block)
-            if content_mapping.get("type") == "output_text" and isinstance(
-                content_mapping.get("text"), str
-            ):
-                parts.append(str(content_mapping["text"]))
-    if not parts:
-        raise ModelProtocolError("model response contained no text output", retryable=True)
-    usage = _parse_usage(body.get("usage"))
-    return "".join(parts), usage
-
-
-def _extract_anthropic_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
-    content_blocks = body.get("content")
-    if not isinstance(content_blocks, list) or not content_blocks:
-        raise ModelProtocolError("model response did not contain content", retryable=True)
-    parts: list[str] = []
-    for block in cast(list[object], content_blocks):
-        if not isinstance(block, Mapping):
-            continue
-        block_mapping = cast(Mapping[str, object], block)
-        # Extended-thinking blocks carry reasoning, not answer text; skip them.
-        if block_mapping.get("type") == "text" and isinstance(block_mapping.get("text"), str):
-            parts.append(str(block_mapping["text"]))
-    if not parts:
-        raise ModelProtocolError("model response contained no text content", retryable=True)
-    usage_value = body.get("usage")
-    usage = _parse_usage(usage_value)
-    return "".join(parts), usage
-
-
-def _extract_response(body: Mapping[str, object]) -> tuple[str, TokenUsage]:
-    choices = body.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ModelProtocolError("model response did not contain choices", retryable=True)
-    choices_list = cast(list[object], choices)
-    choice = choices_list[0]
-    if not isinstance(choice, Mapping):
-        raise ModelProtocolError("model response choice is malformed", retryable=True)
-    choice_mapping = cast(Mapping[str, object], choice)
-    message_value = choice_mapping.get("message")
-    if not isinstance(message_value, Mapping):
-        raise ModelProtocolError("model response message content is malformed", retryable=True)
-    message = cast(Mapping[str, object], message_value)
-    content = message.get("content")
-    if not isinstance(content, str):
-        raise ModelProtocolError("model response message content is malformed", retryable=True)
-    usage_value = body.get("usage")
-    usage = _parse_usage(usage_value)
-    return content, usage
-
-
-def _parse_usage(value: object) -> TokenUsage:
-    if value is None:
-        return _zero_usage()
-    if not isinstance(value, Mapping):
-        raise ModelProtocolError("model response usage is malformed", retryable=True)
-    usage = cast(Mapping[str, object], value)
-    input_tokens = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-    output_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0))
-    if not _nonnegative_int(input_tokens) or not _nonnegative_int(output_tokens):
-        raise ModelProtocolError("model response token usage is malformed", retryable=True)
-    input_count = cast(int, input_tokens)
-    output_count = cast(int, output_tokens)
-    return {"input_tokens": input_count, "output_tokens": output_count}
-
-
-def _nonnegative_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _decode_and_validate(content: str, definition: str) -> JsonObject:
@@ -1182,8 +979,14 @@ def _decision_record(
 
 
 def _add_usage(target: dict[str, int], usage: TokenUsage) -> None:
-    target["input_tokens"] += usage["input_tokens"]
-    target["output_tokens"] += usage["output_tokens"]
+    for key, value in usage.items():
+        target[key] = target.get(key, 0) + cast(int, value)
+
+
+def _sum_usage(base: dict[str, int], addition: TokenUsage) -> TokenUsage:
+    result = dict(base)
+    _add_usage(result, addition)
+    return cast(TokenUsage, result)
 
 
 def _zero_usage() -> TokenUsage:

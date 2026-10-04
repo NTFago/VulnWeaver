@@ -272,10 +272,7 @@ class AgentLoop:
         plans: list[ActionPlan] = []
         steps: list[ExecutedStep] = list(resume.steps) if resume else []
         usage: TokenUsage = (
-            TokenUsage(
-                input_tokens=resume.usage["input_tokens"],
-                output_tokens=resume.usage["output_tokens"],
-            )
+            cast(TokenUsage, dict(resume.usage))
             if resume
             else TokenUsage(input_tokens=0, output_tokens=0)
         )
@@ -901,8 +898,8 @@ def _journal_summary(output: JsonObject, limit: int) -> str:
 
 
 def _add_usage(usage: TokenUsage, addition: TokenUsage) -> None:
-    usage["input_tokens"] += addition["input_tokens"]
-    usage["output_tokens"] += addition["output_tokens"]
+    for key, value in addition.items():
+        usage[key] = cast(int, usage.get(key, 0)) + cast(int, value)
 
 
 def _digest(value: str) -> str:

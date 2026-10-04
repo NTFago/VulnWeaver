@@ -127,19 +127,15 @@ def test_duplicate_provider_or_model_ids_rejected() -> None:
     with pytest.raises(ValueError, match="duplicate provider id"):
         ModelAccessConfig.from_settings(settings_with([provider(), provider()]))
     with pytest.raises(ValueError, match="twice"):
-        ModelAccessConfig.from_settings(
-            settings_with([provider(model_ids=("a", "a"))])
-        )
+        ModelAccessConfig.from_settings(settings_with([provider(model_ids=("a", "a"))]))
 
 
 def test_invalid_provider_id_rejected() -> None:
     with pytest.raises(Exception, match="provider id"):
-        ModelAccessConfig.from_settings(
-            settings_with([{**provider(), "id": "Bad ID!"}])
-        )
+        ModelAccessConfig.from_settings(settings_with([{**provider(), "id": "Bad ID!"}]))
 
 
-def test_custom_thinking_requires_budget() -> None:
+def test_legacy_custom_thinking_budget_is_not_forwarded() -> None:
     raw = provider()
     raw["models"] = [
         {
@@ -148,8 +144,13 @@ def test_custom_thinking_requires_budget() -> None:
             "thinking_budget_tokens": 512,
         }
     ]
-    with pytest.raises(ValueError, match="at least 1024"):
-        ModelAccessConfig.from_settings(settings_with([raw]))
+    config = ModelAccessConfig.from_settings(
+        settings_with([raw], {"audit": {"provider_id": "deepseek", "model_id": "reasoner"}})
+    )
+    endpoint = config.resolve_routes()["audit"].primary
+    assert endpoint.thinking is not None
+    assert endpoint.thinking.mode == "default"
+    assert endpoint.thinking.budget_tokens is None
 
 
 def test_malformed_stored_shapes_fail_loudly() -> None:

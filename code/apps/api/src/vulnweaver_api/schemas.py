@@ -106,7 +106,7 @@ class TierModelConfigModel(StrictModel):
 
 
 class ProviderModelEntryModel(StrictModel):
-    """One model in a provider's list; 0 limits mean "provider default"."""
+    """One model in a provider's list; 0 capacities mean "provider default"."""
 
     model_id: str = Field(min_length=1, max_length=256)
     display_name: str = Field(default="", max_length=256)
@@ -114,6 +114,10 @@ class ProviderModelEntryModel(StrictModel):
     max_output_tokens: int = Field(default=0, ge=0, le=10_000_000)
     thinking_mode: ThinkingMode = "off"
     thinking_budget_tokens: int = Field(default=0, ge=0, le=1_000_000)
+    thinking_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = (
+        None
+    )
+    thinking_style: Literal["standard", "deepseek", "kimi"] = "standard"
 
 
 class ModelProviderEntryModel(StrictModel):
@@ -208,9 +212,7 @@ class ProductSettingsBody(StrictModel):
     )
     provider_api_keys: dict[str, str] = Field(default_factory=dict)
     clear_provider_api_keys: list[str] = Field(default_factory=list)
-    agent_model_bindings: AgentModelBindingsModel = Field(
-        default_factory=AgentModelBindingsModel
-    )
+    agent_model_bindings: AgentModelBindingsModel = Field(default_factory=AgentModelBindingsModel)
 
 
 class ProductSettingsResponse(StrictModel):
