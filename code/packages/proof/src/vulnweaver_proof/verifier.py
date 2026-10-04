@@ -190,13 +190,21 @@ def behavior_is_verified(observation: VerificationObservation) -> bool:
 
 
 def sink_reach_is_verified(observation: VerificationObservation) -> bool:
-    """The crafted invocation demonstrably executed a control-plane sink (RA-01).
+    """Whether the crafted invocation reported a control-plane sink (RA-01).
 
     The target-worker profiles C calls around the bound invocation and exits
     20 when a control-plane sink-lexicon function fired; the supervisor records
     per-run ``sink_fired`` from that exit code. Reach is claimed only when the
-    crafted run and both replays fired — interpreter-emitted events the target
-    code cannot forge, unlike AST listings or target stdout.
+    crafted run and both replays fired.
+
+    This is a DIAGNOSTIC marker, not a trustworthy observation. The target runs
+    in the same interpreter as the profiler, so it can forge the exit status
+    (`import os; os._exit(20)`) and it can blind the profiler
+    (`sys.setprofile(None)`) to hide a real call. It also says nothing about
+    whether the crafted input reached the sink. RG-01..03 therefore removed the
+    derivation of injection/auth confirmation facts from these markers and left
+    them as diagnostics only; re-enabling that derivation needs an observation
+    channel the target cannot forge (see ADR-036 and the crash-oracle proposal).
     """
 
     if not behavior_is_verified(observation):
