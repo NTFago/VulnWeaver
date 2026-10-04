@@ -5,12 +5,13 @@
   "description": "Evidence-driven agentic vulnerability discovery",
   "packageManager": "pnpm@11.10.0",
   "scripts": {
-    "check": "pnpm run check:python && pnpm run check:typescript",
+    "check": "node scripts/check.mjs",
     "check:python": "pnpm run check:ruff && pnpm run check:pyright && pnpm run check:pytest",
     "check:ruff": "uv run --no-sync ruff check .",
     "check:pyright": "pyright",
-    "check:pytest": "uv run --no-sync pytest -n 4 --cov --cov-report=term-missing --cov-fail-under=80",
-    "check:typescript": "pnpm run lint && pnpm run typecheck && pnpm run test",
+    "check:pytest": "uv run --no-sync pytest -n 4 --durations=20 --cov --cov-report=term-missing --cov-fail-under=80",
+    "check:contracts": "uv run --no-sync python packages/contracts/scripts/generate_contracts.py --check",
+    "check:typescript": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm --filter @vulnweaver/web run build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test"

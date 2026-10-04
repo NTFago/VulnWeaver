@@ -66,8 +66,11 @@ Dispatcher。当前公共后端包包括 `contracts`、`domain`、`persistence`�
 pnpm run check
 ```
 
-门禁依次执行 Ruff、Pyright、pytest 与 TypeScript 检查；MVP 阶段总体分支覆盖率阈值为
-80%。日常迭代可只运行受影响模块的测试与静态检查，`pnpm run check` 保留给里程碑、合并和
-CI，并使用 PostgreSQL 16 与 Redis 7 执行关键真实集成测试。
+完整门禁并行执行 Ruff、Pyright、pytest、生成契约漂移检查和 TypeScript 检查（含 Web
+生产构建）。各检查的完整输出带名称前缀，末尾列出各自耗时和结果；任一失败时命令返回非零，
+其他检查仍会完成，便于一次收集问题。入口会把当前工作区的 Python `src` 目录置于
+`PYTHONPATH` 前端，避免开发容器里的旧 wheel 造成假通过。MVP 阶段总体分支覆盖率阈值为
+80%。日常迭代可只运行受影响模块的测试与静态检查，`pnpm run check` 保留给里程碑、合并和 CI，并使用 PostgreSQL 16
+与 Redis 7 执行关键真实集成测试。
 
 开发容器不挂载 Docker Socket，也不得用于直接运行未知样本、Poc 或利用脚本。

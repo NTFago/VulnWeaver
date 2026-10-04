@@ -147,7 +147,9 @@ source_pkgs = [
     "vulnweaver_model_gateway",
     "vulnweaver_pair",
     "vulnweaver_orchestrator",
+    "vulnweaver_proof",
     "vulnweaver_queue",
+    "vulnweaver_reporting",
     "vulnweaver_source_analysis",
     "vulnweaver_sandbox_runner",
     "vulnweaver_fuzzing",
@@ -155,6 +157,8 @@ source_pkgs = [
     "vulnweaver_worker",
 ]
 omit = [
+    # Generated type declarations execute at import time and inflate coverage.
+    "*/vulnweaver_contracts/generated.py",
     "*/vulnweaver_api/main.py",
     "*/vulnweaver_analysis_worker/main.py",
     "*/vulnweaver_dispatcher/main.py",
