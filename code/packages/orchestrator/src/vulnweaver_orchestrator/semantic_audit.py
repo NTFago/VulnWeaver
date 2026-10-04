@@ -600,15 +600,27 @@ class SemanticAuditor:
         state: _FallbackState,
         entries: list[tuple[str, PairFunction]],
     ) -> tuple[str, str]:
-        """Merge the per-page fragments into the run's durable audit report."""
+        """Merge the per-page fragments into the run's durable audit report.
+
+        RA-04: fragments are stored as ``{run_id, task_id, report}`` wrappers,
+        and every stored fragment must come back byte-identical (digest
+        re-verified) before its findings enter the aggregate. A missing,
+        unreadable, or digest-mismatched page fails the audit instead of
+        silently producing a "complete" report that lost findings.
+        """
         findings: list[JsonObject] = []
-        for object_ref, _digest in state.report_refs:
-            fragment = await self._read_document(object_ref)
+        for object_ref, expected_digest in state.report_refs:
+            fragment = await self._read_report_fragment(object_ref, expected_digest)
             if fragment is None:
-                continue
+                raise _AuditError(
+                    "semantic_audit.fallback_fragment_missing", FailureKind.INTERNAL
+                )
             page_findings = fragment.get("findings")
-            if isinstance(page_findings, list):
-                findings.extend(item for item in page_findings if isinstance(item, dict))
+            if not isinstance(page_findings, list):
+                raise _AuditError(
+                    "semantic_audit.fallback_fragment_invalid", FailureKind.INTERNAL
+                )
+            findings.extend(item for item in page_findings if isinstance(item, dict))
         audited_pages = len(state.report_refs)
         expected_pages = math.ceil(len(entries) / self._fallback_page_size)
         coverage: JsonObject = {
@@ -629,13 +641,30 @@ class SemanticAuditor:
         }
         return await self._store_report(run_id, task_id, aggregate)
 
-    async def _read_document(self, object_ref: str) -> JsonObject | None:
+    async def _read_report_fragment(
+        self, object_ref: str, expected_digest: str
+    ) -> JsonObject | None:
+        """Read one stored page fragment's inner report, digest re-verified."""
+
         try:
             with self._store.open(object_ref) as stream:
-                loaded = json.load(stream)
-        except (ArtifactStoreError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+                raw = stream.read(8 * 1024 * 1024 + 1)
+        except (ArtifactStoreError, OSError):
             return None
-        return cast(JsonObject, loaded) if isinstance(loaded, dict) else None
+        if len(raw) > 8 * 1024 * 1024:
+            return None
+        digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+        if digest != expected_digest:
+            return None
+        try:
+            loaded = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        document = cast(JsonObject, loaded)
+        report_value = document.get("report")
+        return cast(JsonObject, report_value) if isinstance(report_value, dict) else None
 
     async def _pair_scope(self, task_id: str) -> _PairScope:
         """Cheap version scoping: which versions hold functions, without loading.

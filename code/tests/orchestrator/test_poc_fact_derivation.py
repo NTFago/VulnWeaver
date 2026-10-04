@@ -71,20 +71,28 @@ def test_injection_markers_derive_source_to_sink_and_protection_facts() -> None:
     )
 
 
-def test_auth_markers_derive_behavior_difference_and_reachable_path() -> None:
+def test_auth_markers_derive_no_confirmation_facts() -> None:
+    """RA-02: a behavior difference proves input-dependence, not the invariant.
+
+    No auth fact (constraint_analysis, behavior_difference, reachable_path)
+    derives from differential evidence until an executable constraint
+    criterion is evaluated by the control plane; the finding stays candidate.
+    """
+
     evidence = _fact(
         evidence_type=EvidenceType.POC_VERIFICATION_RESULT,
         replay_facts={
             "reproducible": True,
             "markers": {
                 "behavior_difference": "admin endpoint returns 200 without a session cookie",
+                "constraint_digest": "sha256:" + "3" * 64,
             },
         },
     )
     derived = derive_established_facts(
         _context(FindingCategory.AUTH_OR_BUSINESS_LOGIC, [evidence])
     )
-    assert derived == frozenset({"minimal_reproduction", "behavior_difference", "reachable_path"})
+    assert derived == frozenset({"minimal_reproduction"})
 
 
 def test_markers_without_sink_pair_do_not_derive_source_to_sink() -> None:

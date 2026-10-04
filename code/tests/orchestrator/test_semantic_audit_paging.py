@@ -278,3 +278,139 @@ def test_paged_fallback_resumes_after_deadline_stop(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_resumed_aggregate_carries_every_page_finding(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """RA-04: the final report merges the nested findings of every fragment."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, names = await seed_functions(database, 4)
+        outputs = [
+            {
+                "schema_version": "1.0.0",
+                "summary": "page 0",
+                "findings": [page_finding(names[0], f"src/{names[0]}.py")],
+            },
+            {
+                "schema_version": "1.0.0",
+                "summary": "page 1",
+                "findings": [page_finding(names[2], f"src/{names[2]}.py")],
+            },
+        ]
+        store = LocalContentAddressedStore(tmp_path)
+        model = PageScriptedModel(outputs)
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=store,
+            fact_loader=StubFactLoader(),
+            fallback_page_size=2,
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            result = await executor.execute(audit_job, asyncio.Event())
+            assert result["status"] is JobStatus.SUCCEEDED
+            async with database.transaction() as repositories:
+                runs = await repositories.agent_runs.list_for_task(task_id)
+            report_refs = runs[0]["result_refs"]
+            assert report_refs
+            with store.open(report_refs[0]) as stream:
+                aggregate = json.load(stream)
+            titles = {
+                finding["title"] for finding in aggregate["report"]["findings"]
+            }
+            # Both page findings survive into the durable aggregate; the page
+            # fragments nest their findings under "report" (RA-04).
+            assert titles == {f"issue in {names[0]}", f"issue in {names[2]}"}
+            assert aggregate["report"]["coverage"]["complete"] is True
+            assert aggregate["report"]["coverage"]["pages"] == 2
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_corrupted_page_fragment_fails_the_audit_instead_of_losing_findings(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """RA-04: a digest-mismatched fragment fails the audit, never a silent skip.
+
+    The first attempt runs page 0, saves a checkpoint whose fragment digest
+    was poisoned, and stops at the deadline; the resumed attempt loads that
+    poisoned state, and aggregation must fail hard instead of producing a
+    "complete" report that silently dropped the page's findings.
+    """
+
+    class DeadlineAfterFirstPage:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __call__(self) -> float:
+            self.calls += 1
+            return 0.0 if self.calls <= 2 else 100.0
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        task_id, _version_id, _names = await seed_functions(database, 4)
+        store = LocalContentAddressedStore(tmp_path)
+        model = PageScriptedModel([])
+        checkpoints = CorruptingCheckpointStore(store)
+        first = SemanticAuditor(
+            database,
+            model,
+            store=store,
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+            fallback_deadline_seconds=50.0,
+            monotonic=DeadlineAfterFirstPage(),
+        )
+        executor = SemanticAuditJobExecutor(database, first)
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await executor.execute(audit_job, asyncio.Event())
+            assert stopped["status"] is JobStatus.FAILED
+            assert stopped["failure"]["code"] == "semantic_audit.fallback_deadline"
+
+            resumed = SemanticAuditor(
+                database,
+                PageScriptedModel([]),
+                store=store,
+                fact_loader=StubFactLoader(),
+                checkpoint_store=checkpoints,
+                fallback_page_size=2,
+            )
+            result = await SemanticAuditJobExecutor(database, resumed).execute(
+                audit_job, asyncio.Event()
+            )
+            assert result["status"] is JobStatus.FAILED
+            assert result["failure"] is not None
+            assert (
+                result["failure"]["code"] == "semantic_audit.fallback_fragment_missing"
+            )
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+class CorruptingCheckpointStore(InMemoryCheckpointStore):
+    """Saves fallback checkpoints with a wrong fragment digest."""
+
+    def __init__(self, store: LocalContentAddressedStore) -> None:
+        super().__init__()
+        self._store = store
+
+    async def save(self, task_id: str, node: str, state, *, created_at: str):
+        if node == "semantic-audit-fallback":
+            poisoned = dict(state)
+            poisoned["report_refs"] = [
+                {"object_ref": item["object_ref"], "digest": "sha256:" + "0" * 64}
+                for item in state["report_refs"]
+            ]
+            state = poisoned
+        return await super().save(task_id, node, state, created_at=created_at)

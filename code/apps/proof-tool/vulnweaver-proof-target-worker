@@ -12,7 +12,31 @@ from pathlib import Path
 TARGET_EXCEPTION_EXIT_CODE = 10
 WORKER_ERROR_EXIT_CODE = 11
 CALLABLE_NOT_FOUND_EXIT_CODE = 12
+# Completed *and* a control-plane sink-lexicon C call fired during the
+# invocation (RA-01). The entrypoint reads this from the exit status; the
+# supervisor records it per run. It is a "completed" exit, never a crash.
+SINK_FIRED_EXIT_CODE = 20
 MAX_RETURN_CHARS = 2048
+
+# Control-plane sink lexicon observed via sys.setprofile "c_call" events. The
+# interpreter emits these for C functions, so the trusted target code cannot
+# forge them; a Python-level sink wrapper (yaml.load, subprocess without
+# shell) does not appear here — the AST enumeration stays the diagnostic for
+# those and never substitutes for this reach observation. Keep in sync with
+# the lexicon documented in vulnweaver_proof.protection_analysis.
+SINK_LEXICON = frozenset(
+    {"eval", "exec", "compile", "__import__", "loads", "system", "popen"}
+)
+
+
+def _sink_profiler(sinks: list[str]):
+    def profiler(frame, event, arg):
+        if event == "c_call" and getattr(arg, "__name__", "") in SINK_LEXICON:
+            name = arg.__name__
+            if name not in sinks:
+                sinks.append(name)
+
+    return profiler
 
 
 def _nested_code_objects(code: types.CodeType) -> set[types.CodeType]:
@@ -86,8 +110,17 @@ def _run(target_path: Path, input_path: Path, invocation_path: Path, digest: str
         if target_callable.__code__ not in module_functions:
             return CALLABLE_NOT_FOUND_EXIT_CODE
         target_codes = _nested_code_objects(target_callable.__code__)
+        fired_sinks: list[str] = []
+        profiler = _sink_profiler(fired_sinks)
         try:
-            result = target_callable(*call_prefix, value)
+            # Profile only the bound invocation: module import (exec above) is
+            # not part of the reach claim, and the profiler events are
+            # interpreter-generated so the target cannot forge them.
+            sys.setprofile(profiler)
+            try:
+                result = target_callable(*call_prefix, value)
+            finally:
+                sys.setprofile(None)
         except BaseException as error:
             traceback = error.__traceback__
             while traceback is not None:
@@ -109,7 +142,9 @@ def _run(target_path: Path, input_path: Path, invocation_path: Path, digest: str
             # stdout is best-effort: a broken stream must not turn a clean
             # return into a fake target exception.
             pass
-        return 0
+        # The reach fact rides the exit status: a channel the supervisor reads
+        # from process state, which target code cannot rewrite after exit.
+        return SINK_FIRED_EXIT_CODE if fired_sinks else 0
     except BaseException:
         return WORKER_ERROR_EXIT_CODE
 

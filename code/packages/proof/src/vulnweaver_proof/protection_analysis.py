@@ -1,17 +1,21 @@
 """Deterministic protection enumeration over the digest-bound target (CR-04).
 
 The injection ``FindingPolicy`` requires a ``protection_analysis`` fact. This
-module is its independent source: a pure-AST enumerator, owned by the control
-plane, that walks the bound callable and its module-local callees in the exact
-source bytes the sandbox executed and lists the protection-relevant constructs
-it sees — dangerous sinks, input validation, exception guards, sanitizers and
-safe alternatives.
+module is a control-plane AST enumerator that walks the bound callable and its
+module-local callees in the exact source bytes the sandbox executed and lists
+the protection-relevant constructs it sees — dangerous sinks, input
+validation, exception guards, sanitizers and safe alternatives.
 
-It is deliberately *not* a taint analysis and not a completeness claim: the
-lexicon below is a bounded v1, the enumeration is advisory, and interpreting
-the result stays with the reviewer. What it establishes mechanically is that a
-typed protection enumeration ran against the registered sample and produced a
-stable, reproducible result — which is exactly what the policy fact means.
+Role boundary (RA-01): this enumeration is a *diagnostic*. It lists calls that
+exist in the source, not calls that executed, and it can therefore never prove
+that input reached a sink. The reach fact comes solely from the interpreter-
+level sink-fire observation (target-worker C-call profiling, exit 20); the
+worker attaches this listing to injection evidence only alongside that
+machine-verified reach, and the review gate maps it to ``protection_analysis``
+only in that combination.
+
+The result is deterministic for identical bytes, and a scan that cannot
+resolve the bound callable claims nothing.
 """
 
 from __future__ import annotations

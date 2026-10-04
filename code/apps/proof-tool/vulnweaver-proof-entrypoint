@@ -37,6 +37,9 @@ MAX_OBSERVED_OUTPUT_BYTES = 64 * 1024
 RUN_TIMEOUT_SECONDS = 30
 REPLAY_COUNT = 2
 TARGET_EXCEPTION_EXIT_CODE = 10
+# The target-worker's "completed with a control-plane sink-lexicon C call
+# fired" exit (RA-01). Completed, never a crash; recorded per run.
+TARGET_SINK_FIRED_EXIT_CODE = 20
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$")
 
@@ -205,7 +208,7 @@ def _write_member(directory: Path, name: str, content: bytes, mode: int) -> Path
 
 class _Run:
     __slots__ = ("role", "input_name", "exit_code", "signal", "duration_millis",
-                 "target_frames", "timed_out", "output_digest")
+                 "target_frames", "timed_out", "output_digest", "sink_fired")
 
     def __init__(self, role: str, input_name: str) -> None:
         self.role = role
@@ -216,6 +219,7 @@ class _Run:
         self.target_frames = False
         self.timed_out = False
         self.output_digest: str | None = None
+        self.sink_fired = False
 
     def record(self) -> dict[str, object]:
         return {
@@ -227,11 +231,14 @@ class _Run:
             "target_frames": self.target_frames,
             "timed_out": self.timed_out,
             "output_digest": self.output_digest,
+            "sink_fired": self.sink_fired,
         }
 
     @property
     def crashed(self) -> bool:
-        return self.exit_code is not None and self.exit_code != 0
+        # Exit 20 is a completed run that executed a control-plane sink; it is
+        # never a crash and never attributes a target exception.
+        return self.exit_code is not None and self.exit_code not in (0, TARGET_SINK_FIRED_EXIT_CODE)
 
     @property
     def attributed(self) -> bool:
@@ -239,7 +246,7 @@ class _Run:
 
     @property
     def completed(self) -> bool:
-        return self.exit_code == 0 and not self.timed_out
+        return self.exit_code in (0, TARGET_SINK_FIRED_EXIT_CODE) and not self.timed_out
 
 
 def _run_invocation(
@@ -314,6 +321,11 @@ def _run_invocation(
                 _kill_process_group(process)
             if run.exit_code == TARGET_EXCEPTION_EXIT_CODE:
                 run.target_frames = True
+            elif run.exit_code == TARGET_SINK_FIRED_EXIT_CODE:
+                # Interpreter-level sink-fire observation (RA-01): the worker
+                # profiles control-plane lexicon C calls around the bound
+                # invocation and encodes the reach fact in its exit status.
+                run.sink_fired = True
             elif run.exit_code is not None and run.exit_code < 0:
                 run.signal = -run.exit_code
             if run.completed:

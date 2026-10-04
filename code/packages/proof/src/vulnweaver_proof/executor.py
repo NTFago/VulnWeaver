@@ -67,6 +67,7 @@ from .protection_analysis import scan_target_protections
 from .validation import ScriptRefOwnershipError, ensure_script_ref_belongs_to_project
 from .verifier import (
     REPORT_FILE_NAME,
+    SINK_FIRED_EXIT_CODE,
     ObservationError,
     behavior_is_verified,
     differential_evidence_from_observation,
@@ -380,11 +381,24 @@ class ProofJobExecutor:
             entry = cast(JsonObject, entry_value)
             if str(entry.get("cwe_id")) != str(finding["cwe_id"]):
                 continue
+            # RA-03: a match must pin the exact entry — source findings match
+            # only on an exact path+line pair, binary findings only when both
+            # sides carry an address. A missing field on either side never
+            # compares equal to a missing field on the finding.
+            entry_line = entry.get("start_line")
             same_line = (
-                entry.get("path") == location.get("path")
-                and entry.get("start_line") == location.get("start_line")
+                entry.get("path") is not None
+                and entry.get("path") == location.get("path")
+                and isinstance(entry_line, int)
+                and entry_line == location.get("start_line")
             )
-            same_address = entry.get("address") == location.get("virtual_address")
+            entry_address = entry.get("address")
+            finding_address = location.get("virtual_address")
+            same_address = (
+                isinstance(entry_address, int)
+                and isinstance(finding_address, int)
+                and entry_address == finding_address
+            )
             if not (same_line or same_address):
                 continue
             constraint = entry.get("constraint")
@@ -891,7 +905,7 @@ def _observation_runs_match_bundle(
                 run
                 for run in runs
                 if run["role"] == "trigger"
-                and run["exit_code"] == 0
+                and run["exit_code"] in (0, SINK_FIRED_EXIT_CODE)
                 and not run["timed_out"]
             ),
             None,

@@ -745,6 +745,7 @@ export interface VerificationRun {
   target_frames: boolean;
   timed_out: boolean;
   output_digest?: Sha256Digest | null;
+  sink_fired?: boolean;
 }
 
 export interface ObservedBehavior {

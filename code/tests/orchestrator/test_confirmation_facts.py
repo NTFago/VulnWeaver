@@ -249,15 +249,15 @@ def test_a_crash_alone_does_not_confirm_an_injection_finding(
     asyncio.run(scenario())
 
 
-def test_bound_differential_poc_confirms_an_auth_finding(
+def test_auth_differential_evidence_does_not_confirm_even_when_bound(
     persistence_database_url: str,
 ) -> None:
-    """CR-04: a constraint-bound behavior difference plus strong evidence confirms.
+    """RA-02: a behavior difference never proves a constraint was violated.
 
-    The strong record is the proof worker's own ``POC_VERIFICATION_RESULT`` —
-    its markers come from the trusted entrypoint's validated observation, and
-    the ``constraint_digest`` marker binds the probe to the registered
-    invariant. The model review proposes; this evidence chain establishes.
+    The bound ``constraint_digest`` marker is provenance (the probe targeted
+    the registered invariant), not a violation check. Until an executable
+    constraint criterion exists, no auth fact derives from differential
+    evidence and the finding stays a candidate.
     """
 
     async def scenario() -> None:
@@ -288,11 +288,10 @@ def test_bound_differential_poc_confirms_an_auth_finding(
                 ),
             )
             result = await gate.submit(_review(finding_id))
+            assert result.persisted is False
             assert result.decision is not None
-            assert result.decision.allowed is True, result.decision.reason_codes
-            async with database.transaction() as repositories:
-                stored = await repositories.findings.get(finding_id)
-            assert stored["status"] is FindingStatus.CONFIRMED
+            assert "missing_fact:constraint_analysis" in result.decision.reason_codes
+            assert "missing_fact:behavior_difference" in result.decision.reason_codes
         finally:
             await database.dispose()
 

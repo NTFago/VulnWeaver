@@ -34,9 +34,11 @@ from vulnweaver_proof import (
     load_execution_bundle_manifest,
 )
 from vulnweaver_proof.verifier import (
+    behavior_is_verified,
     differential_evidence_from_observation,
     observation_is_consistent,
     parse_observation,
+    sink_reach_is_verified,
 )
 
 from tests.persistence.factories import artifact, artifact_version, task
@@ -66,6 +68,7 @@ def _behavior_observation(
     differed: bool = True,
     replay_consistent: bool = True,
     forged_digests: bool = False,
+    sink_fired: bool = True,
 ) -> dict[str, object]:
     crafted = CRAFTED_DIGEST
     runs = [
@@ -73,11 +76,13 @@ def _behavior_observation(
             "role": "control", "input_name": "0000", "exit_code": 0, "signal": None,
             "duration_millis": 3, "target_frames": False, "timed_out": False,
             "output_digest": CONTROL_DIGEST,
+            "sink_fired": False,
         },
         {
             "role": "trigger", "input_name": "0000", "exit_code": 0, "signal": None,
             "duration_millis": 8, "target_frames": False, "timed_out": False,
             "output_digest": crafted,
+            "sink_fired": sink_fired,
         },
     ]
     runs.extend(
@@ -85,6 +90,7 @@ def _behavior_observation(
             "role": "replay", "input_name": "0000", "exit_code": 0, "signal": None,
             "duration_millis": 7, "target_frames": False, "timed_out": False,
             "output_digest": crafted if replay_consistent else CONTROL_DIGEST,
+            "sink_fired": sink_fired,
         }
         for _ in range(2)
     )
@@ -111,8 +117,8 @@ def _behavior_observation(
         "replay_runs": 2,
         "untrusted_claims": None,
         "observed_behavior": {
-            # Forged: the claimed crafted digest differs from what the trigger
-            # run itself recorded, so the claim cannot follow from the runs.
+            # RA-05: the supervisor recomputes both booleans from the run
+            # digests, so a forged claim cannot manufacture a difference.
             "crafted_output_digest": CONTROL_DIGEST if forged_digests else crafted,
             "control_output_digest": CONTROL_DIGEST,
             "differed": differed,
@@ -124,9 +130,47 @@ def _behavior_observation(
     }
 
 
+def test_identical_digests_with_differed_claim_is_rejected() -> None:
+    """RA-05: the difference is recomputed from run digests, never trusted."""
+
+    observation = _behavior_observation(
+        "finding:t", constraint_digest=None, forged_digests=True
+    )
+    parsed = parse_observation(observation)
+    assert observation_is_consistent(parsed) is False
+    assert behavior_is_verified(parsed) is False
+
+
 def test_consistent_verified_behavior_observation_passes_checks() -> None:
     observation = parse_observation(_behavior_observation("finding:t", constraint_digest=None))
     assert observation_is_consistent(observation) is True
+    assert behavior_is_verified(observation) is True
+    assert sink_reach_is_verified(observation) is True
+
+
+def test_behavior_without_sink_fire_claims_no_reach() -> None:
+    """RA-01: reach requires the interpreter-level observation, not difference."""
+
+    observation = parse_observation(
+        _behavior_observation("finding:t", constraint_digest=None, sink_fired=False)
+    )
+    assert behavior_is_verified(observation) is True
+    assert sink_reach_is_verified(observation) is False
+    evidence = differential_evidence_from_observation(
+        observation,
+        evidence_id="evidence:diff",
+        finding_category="injection",
+        finding_constraint_digest=None,
+        bundle_ref="cas://bundle",
+        bundle_digest="sha256:" + "7" * 64,
+        created_at=TIMESTAMP,
+        protections_observed=["dangerous_sink:eval@parse:2"],
+    )
+    assert evidence is not None
+    markers = evidence["replay_recipe"]["markers"]
+    assert "sink_reached" not in markers
+    # The AST listing never rides without machine-verified reach.
+    assert "protections_observed" not in markers
 
 
 def test_forged_behavior_digest_is_inconsistent() -> None:

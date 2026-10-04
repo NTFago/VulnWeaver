@@ -838,6 +838,7 @@ class VerificationRun(TypedDict):
     target_frames: bool
     timed_out: bool
     output_digest: NotRequired[Sha256Digest | None]
+    sink_fired: NotRequired[bool]
 
 class ObservedBehavior(TypedDict):
     crafted_output_digest: Sha256Digest

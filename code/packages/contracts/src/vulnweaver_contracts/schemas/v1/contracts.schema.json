@@ -1146,7 +1146,8 @@
         "duration_millis": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "target_frames": {"type": "boolean"},
         "timed_out": {"type": "boolean"},
-        "output_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]}
+        "output_digest": {"anyOf": [{"$ref": "#/$defs/Sha256Digest"}, {"type": "null"}]},
+        "sink_fired": {"type": "boolean"}
       }
     },
     "ObservedBehavior": {

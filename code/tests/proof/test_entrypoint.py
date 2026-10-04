@@ -38,13 +38,14 @@ def _bundle(
     *,
     target_source: str | None = None,
     crafted_input: str = CRAFTED,
+    control_input: str = CONTROL,
 ) -> str:
     target = FIXTURES / "nested_config_parser.py"
     target_content = target.read_text(encoding="utf-8") if target_source is None else target_source
     target_ref = _put(store, target_content)
     driver_ref = _put(store, driver)
     crafted_ref = _put(store, crafted_input)
-    control_ref = _put(store, CONTROL)
+    control_ref = _put(store, control_input)
     bundle = build_execution_bundle(
         store,
         bundle_id="execution-bundle:entrypoint-test",
@@ -77,10 +78,16 @@ def _execute(
     *,
     target_source: str | None = None,
     crafted_input: str = CRAFTED,
+    control_input: str = CONTROL,
 ) -> tuple[int, dict[str, Any]]:
     store = LocalContentAddressedStore(cast(Any, tmp_path / "store"))
     object_ref = _bundle(
-        tmp_path, store, driver, target_source=target_source, crafted_input=crafted_input
+        tmp_path,
+        store,
+        driver,
+        target_source=target_source,
+        crafted_input=crafted_input,
+        control_input=control_input,
     )
     staged = _stage(tmp_path, store, object_ref)
     output = tmp_path / "output"

@@ -126,6 +126,12 @@ def _derived_poc_facts(
     if not isinstance(markers, dict):
         return derived
     if category is FindingCategory.INJECTION:
+        # RA-01: the worker writes ``sink_reached`` only from the interpreter-
+        # level sink-fire observation (target-worker exit 20, recorded by the
+        # supervisor per run) — a stable output difference alone never claims
+        # reach. ``protections_observed`` is the control-plane AST enumeration;
+        # it rides only with a machine-verified reach and names the protection
+        # analysis performed against the live sample.
         source = markers.get("source")
         sink = markers.get("sink")
         if (
@@ -137,18 +143,14 @@ def _derived_poc_facts(
         ):
             derived.add("source_to_sink_path")
         protections = markers.get("protections_observed")
-        if isinstance(protections, list) and protections:
+        if markers.get("sink_reached") is True and isinstance(protections, list) and protections:
             derived.add("protection_analysis")
-    elif category is FindingCategory.AUTH_OR_BUSINESS_LOGIC:
-        difference = markers.get("behavior_difference")
-        if isinstance(difference, str) and difference:
-            derived.update({"behavior_difference", "reachable_path"})
-        # CR-04: the proof worker binds the differential probe to the finding's
-        # registered constraint by digest before writing this evidence, so a
-        # digest marker means the registered invariant was the probed one.
-        constraint_digest = markers.get("constraint_digest")
-        if isinstance(constraint_digest, str) and constraint_digest.startswith("sha256:"):
-            derived.add("constraint_analysis")
+    # RA-02: auth/business-logic facts derive from nothing here. A differential
+    # output proves input-dependent behavior, not that the registered security
+    # constraint was violated; the constraint digest in the markers is
+    # provenance binding, not a violation check. Auth findings stay candidates
+    # until an executable constraint criterion exists (see
+    # code/docs/oracle-proposal-2026-10-04.md).
     return derived
 
 

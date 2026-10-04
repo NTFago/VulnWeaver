@@ -29,6 +29,10 @@ from vulnweaver_contracts import (
 REPORT_FILE_NAME = "execution-report.json"
 MIN_REPLAY_RUNS = 2
 _TIMEOUT_REASONS = frozenset({"driver_timeout", "replay_timeout", "target_timeout"})
+# The target-worker exits 20 when the invocation completed and a control-plane
+# sink-lexicon C call fired during it (RA-01). It is a "completed" exit code,
+# never a crash.
+SINK_FIRED_EXIT_CODE = 20
 
 
 class ObservationError(ValueError):
@@ -134,7 +138,8 @@ def observation_is_consistent(observation: VerificationObservation) -> bool:
 
 
 def _run_completed(run: Mapping[str, object]) -> bool:
-    return run["exit_code"] == 0 and not bool(run["timed_out"])
+    # Exit 20 means "completed and the control-plane sink lexicon fired".
+    return run["exit_code"] in (0, SINK_FIRED_EXIT_CODE) and not bool(run["timed_out"])
 
 
 def _behavior_matches_runs(
@@ -143,19 +148,28 @@ def _behavior_matches_runs(
     control: Sequence[Mapping[str, object]],
     replay: Sequence[Mapping[str, object]],
 ) -> bool:
-    """The claimed behavior must equal the digests the runs themselves recorded."""
+    """Recompute the difference from the runs; the report booleans are ignored.
+
+    RA-05: an observation could legally claim ``differed=true`` while every
+    digest is identical. The verdict must follow only from what the runs
+    themselves recorded: the crafted digest exists, differs from the control
+    digest, and every replay reproduces the crafted digest exactly.
+    """
 
     crafted = behavior_trigger.get("output_digest")
     control_digest = next(
         (run.get("output_digest") for run in control if _run_completed(run)), None
     )
     replay_digests = {run.get("output_digest") for run in replay}
+    if not isinstance(crafted, str) or not isinstance(control_digest, str):
+        return False
+    differed = crafted != control_digest
+    replay_consistent = replay_digests == {crafted}
     return (
-        isinstance(crafted, str)
-        and isinstance(control_digest, str)
+        differed
+        and replay_consistent
         and behavior.get("crafted_output_digest") == crafted
         and behavior.get("control_output_digest") == control_digest
-        and replay_digests == {crafted}
     )
 
 
@@ -175,9 +189,40 @@ def behavior_is_verified(observation: VerificationObservation) -> bool:
     )
 
 
+def sink_reach_is_verified(observation: VerificationObservation) -> bool:
+    """The crafted invocation demonstrably executed a control-plane sink (RA-01).
+
+    The target-worker profiles C calls around the bound invocation and exits
+    20 when a control-plane sink-lexicon function fired; the supervisor records
+    per-run ``sink_fired`` from that exit code. Reach is claimed only when the
+    crafted run and both replays fired — interpreter-emitted events the target
+    code cannot forge, unlike AST listings or target stdout.
+    """
+
+    if not behavior_is_verified(observation):
+        return False
+    crafted = next(
+        (
+            run
+            for run in observation["runs"]
+            if run["role"] == "trigger" and _run_completed(run)
+        ),
+        None,
+    )
+    replays = [run for run in observation["runs"] if run["role"] == "replay"]
+    return (
+        crafted is not None
+        and bool(crafted.get("sink_fired"))
+        and len(replays) == MIN_REPLAY_RUNS
+        and all(bool(run.get("sink_fired")) for run in replays)
+    )
+
+
 def _run_crashed(run: Mapping[str, object]) -> bool:
     exit_code = run["exit_code"]
-    return (exit_code is not None and exit_code != 0) or run["signal"] is not None
+    return (
+        exit_code is not None and exit_code not in (0, SINK_FIRED_EXIT_CODE)
+    ) or run["signal"] is not None
 
 
 def _run_attributed(run: Mapping[str, object]) -> bool:
@@ -280,13 +325,15 @@ def differential_evidence_from_observation(
 ) -> Evidence | None:
     """STRONG record of a supervisor-verified output difference (CR-04).
 
-    The markers below are not model claims and not target self-reports: every
-    value is derived from the trusted entrypoint's own observation after the
-    worker validated it against the bundle. ``constraint_digest`` binds the
-    probe to the constraint registered on the finding; when the observation
-    carries no matching digest the auth fact is withheld. For injection,
-    ``protections_observed`` carries the deterministic control-plane protection
-    enumeration over the digest-bound target source.
+    Markers are written only from machine facts: the trusted entrypoint's
+    validated observation and the worker's own recomputation. For injection,
+    ``sink_reached`` is claimed exclusively when ``sink_reach_is_verified``
+    holds (RA-01) — the interpreter-level sink-fire observation — and the AST
+    protection enumeration rides along strictly as a diagnostic, never as
+    reach proof. ``constraint_digest`` remains honest provenance binding the
+    probe to the constraint registered on the finding; it does not imply the
+    constraint was violated (RA-02: no auth fact derives from it until an
+    executable constraint criterion exists).
     """
 
     if not behavior_is_verified(observation):
@@ -316,12 +363,16 @@ def differential_evidence_from_observation(
         }
     elif category == "injection":
         markers = {
-            "sink_reached": True,
             "source": "crafted_input",
-            "sink": f"target_callable@{observation['target_binding']['digest']}",
+            "sink": f"control_plane_sink_lexicon@{observation['target_binding']['digest']}",
         }
-        if protections_observed:
-            markers["protections_observed"] = cast(JsonValue, protections_observed)
+        # RA-01: reach is a machine fact from interpreter-level observation.
+        # Without it the evidence documents the behavior difference only and
+        # derives no sink fact.
+        if sink_reach_is_verified(observation):
+            markers["sink_reached"] = True
+            if protections_observed:
+                markers["protections_observed"] = cast(JsonValue, protections_observed)
     else:
         # Differential output says nothing about memory corruption or
         # static-only findings; no record is honest there.
