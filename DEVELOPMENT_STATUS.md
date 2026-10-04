@@ -6,7 +6,9 @@
 
 ## 当前焦点
 
-2026-10-04 最新分支只读审计（`feat/realworld-acceptance-samples @ bce0a24`）：发现 CR-04 的注入和鉴权证据映射仍可把普通输入差分提升为确认条件；另有源文件约束匹配错误、分页汇总报告丢失 findings、观测一致性校验接受相同摘要却声称差分。详见下方“本轮审计待修复”。本轮仅运行定向测试与无害契约级复现，未修改程序代码或部署。
+2026-10-04 审计修复轮（分支 `feat/realworld-acceptance-samples @ 3902c4e`）：用户复审发现的 RA-01～RA-05 已全部修复并部署。核心语义变化：①注入 reach 不再由输出差异推断——target-worker 以 `sys.setprofile` 观测控制面 sink 词典的 C 调用并在触发时以退出码 20 结束（解释器事件不可伪造），entrypoint 逐 run 记录 `sink_fired`，worker 仅在 crafted+replays 全触发时写 `sink_reached`，AST 保护枚举降级为诊断；②鉴权确认事实派生整体移除（行为差分≠约束违反），Finding 保持候选，解封依赖 oracle 提案 §5 的可执行约束判据；③约束提取严格 path/line/address 匹配；④分页汇总逐片段重验摘要并读嵌套 report，损坏即硬失败；⑤行为判定从运行摘要重算差分，相同摘要+`differed=true` 被拒。全量 Python 门禁 **753 passed / 4 skipped**、Ruff/Pyright/contracts/TypeScript 通过；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收 **3 passed**。
+
+2026-10-04 最新分支只读审计（`feat/realworld-acceptance-samples @ bce0a24`）：发现 CR-04 的注入和鉴权证据映射仍可把普通输入差分提升为确认条件；另有源文件约束匹配错误、分页汇总报告丢失 findings、观测一致性校验接受相同摘要却声称差分。详见下方"本轮审计待修复"。本轮仅运行定向测试与无害契约级复现，未修改程序代码或部署。
 
 2026-10-04 已完成 `main @ f5bc37e` 部署。针对 `2757f35` 的复核发现 bundle 精确成员检查漏掉 manifest，以及目标代码和报告器共进程可伪造 observation；现已修复为入口严格要求 manifest、目标每轮在一次性子进程运行并设 30 秒超时、worker 依据 CAS bundle manifest 交叉核对 observation。同期修复 callable 来源校验、报告自洽与 bundle 全字段核对、PoC/evidence 原子幂等写入、TIMEOUT/ENVIRONMENT 重试，以及 agentic Finding 报告必填 constraint。
 
@@ -24,9 +26,9 @@
 |---|---|---|
 | CR-01、CR-02 / P0 | 已完成（P0 范围） | 执行输入与元数据分离为 bundle 成员并逐成员摘要校验；原目标以只读成员绑定（TargetBinding：artifact/version/digest）；`SandboxStatus` 成功不再产生任何漏洞结论，结论仅由可信入口的 `VerificationObservation` 决定。真实 Runner 正反例验收通过（`tests/proof/test_target_bound_runner.py`，opt-in）。C/C++ 目标构建绑定转 P1。 |
 | CR-03 / P1 | 已完成 | 生成的受限调用描述与 ExecutionBundle 均为独立 DERIVED 工件（bundle 父版本指向原样本版本）。数据库回归确认原样本 `current_version_id` 不变。 |
-| CR-04 / P1 | 待修复 | 先前实现了差分观测、约束摘要和 AST 枚举，但本轮复核发现这些事实不能证明约束被违反或危险 sink 实际被触达；确认门禁仍可能误判。独立崩溃/利用 oracle 的立项评估已完成，见 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)。修复边界见下方审计清单。 |
+| CR-04 / P1 | 注入已闭环；鉴权待可执行约束判据 | ①注入——reach 由解释器级 sink 触发观测证明（target-worker C 调用画像，exit 20，逐 run `sink_fired`），worker 仅在 crafted+replays 全触发时写 `sink_reached`，AST 枚举降级为诊断并仅在验证 reach 随行，gate 派生 `source_to_sink_path`+`protection_analysis`（RA-01 修复，回归 `tests/proof/test_sink_reach_and_matching.py`）；②鉴权——RA-02 修复：差分证据不派生任何鉴权确认事实（行为差分≠约束违反），Finding 保持候选，解封依赖 oracle 提案 §5 可执行约束判据立项；③独立崩溃/利用 oracle 立项评估已完成（[`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md)）。 |
 | CR-05 / P1 | 已完成 | 必填 constraint + `_issue_identity` 归一指纹（NFKC/空白/大小写）进入 evidence 身份；同任务 CWE+精确位置稳定去重；同函数不同源码行回归通过；新增同函数双地址（二进制）回归通过。 |
-| CR-06 / P1 | 待修复（分页汇总） | 回退审计已按 64 函数/页投影并 checkpoint 续跑，8h deadline 兜底，消除 256 函数截断；但本轮发现最终汇总报告丢失分页 findings（RA-04），coverage 误标 complete。源码搜索与跨版本读取证明的修复仍有效。 |
+| CR-06 / P1 | 已完成 | 回退审计分页化（64 函数/页）+ 逐页投影与 checkpoint 续跑，8h deadline 兜底（TIMEOUT 可重试），消除 256 函数截断；汇总报告逐片段重验 CAS 摘要并合并嵌套 findings，缺失/篡改即硬失败（RA-04 修复）。源码搜索按唯一文件计数（此前已修）；finding-report 读取证明键为 `(version_id, path, line)`，跨版本同路径读取不再互相授权（回归 `tests/orchestrator/test_code_audit.py`）。 |
 | CR-07 / P1 | 已完成（本轮量化+优化） | 基准：2000 函数图 neighborhood depth1 402ms→**54ms**，6000 函数 **110ms**（`code/scripts/benchmark_pair_neighborhood.py`）。邻域下推递归 CTE，只取到达子图；审计入口以 `has_functions` 探针替代全量装载，agent 成功路径零重复装载、回退路径单次装载。`pair.neighborhood` 全图入 Python 的旧实现已移除；`agent_runs.save_progress` 写放大与 ProjectView N+1 仍是候选项（见下一步 8）。 |
 | CR-08 / P2 | 已完成 | 聚合 merge 逐集合记录 offered/retained/limit/截断原因（去重不计截断），strings 提取报告 offered；覆盖信息进入 `BinaryAnalysisResult.coverage`、规划 facts `coverage_incomplete`、agent `artifact_facts` summary 与 `analysis_baseline.truncated_collections`；imports 独立 `max_imports`（默认不变）。超限样本回归见 `tests/binary_analysis/test_coverage.py`。 |
 | CR-09–11 / P0 | 已修复、Runner 验收并部署 | 目标调用移入每轮隔离子进程，supervisor 独立写报告；bundle/observation 绑定 Finding 与目标版本，入口和 worker 交叉核对摘要。Runner 正反例 3 passed，镜像重建且应用容器已重启。 |
@@ -94,6 +96,7 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 | 日期 | 验证 | 结果 |
 |---|---|---|
+| 2026-10-04 | 分支（`3902c4e`）RA-01~05 修复门禁与栈内部署 | `pnpm run check:python`：**753 passed / 4 skipped**（修复过程一轮 752+1 失败系旧鉴权派生测试未同步 RA-02 语义，已更新）；Ruff、Pyright 0 errors、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、`/health/ready` ready、Web 200；真实 Runner 定向验收 **3 passed**。新增回归：sink 触发/清洁目标 entrypoint 正反例、相同摘要 forged 观测拒绝、无 sink 触发不写 sink_reached、多 Finding 约束提取、损坏片段硬失败、续跑聚合计数。 |
 | 2026-10-04 | 分支（`708a4f4`）CR-04 收尾门禁与栈内部署 | `pnpm run check:python`：**742 passed / 4 skipped**（上一轮曾出现 1 项 worker 并行偶发 error，隔离/目录级/全量复跑均通过确认为偶发）；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests 通过。重建 proof-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web 镜像并重启；migrate exit 0（0024）、宿主机 `/health/ready` 返回 ready、Web 200；真实 Runner 定向验收 **3 passed**。注入全链确认回归 `test_injection_with_protection_enumeration_confirms` 通过。 |
 | 2026-10-04 | 分支 `feat/realworld-acceptance-samples`（`92bb0d7`）CR-04~08 修复门禁与栈内部署 | `pnpm run check:python`：**735 passed / 4 skipped**，覆盖率 **81.79%**；Ruff、Pyright、contracts `--check`、web lint/typecheck/18 tests、`vite build` 通过。4 项跳过为 3 个需 Runner 配置的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**（`SANDBOX_RUNNER_URL`/`SANDBOX_RUNNER_TOKEN` 取自栈 `.env`）。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate exit 0（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` ready、Web 200（web 容器需 `--force-recreate` 刷新 nginx 上游缓存，见经验教训）。 |
 | 2026-10-04 | main `f5bc37e` 修复门禁与本地部署 | `pnpm run check:python`：**711 passed / 4 skipped**，覆盖率 **81.69%**；Ruff、Pyright、contracts `--check` 通过。跳过项为 3 个需 Runner 环境的测试和 1 个 Docker runtime opt-in；重启后的真实 Runner 定向验收 **3 passed**。重建 proof-tool/fuzz-tool/api/dispatcher/orchestrator/analysis-worker/sandbox-runner/web/binary-tools 镜像并重建应用栈容器；migrate 成功（版本 0024）、PostgreSQL/Redis healthy、API `/health/ready` 返回 ready、Web 返回 200、analysis-worker/dispatcher/orchestrator 正常启动。 |
@@ -108,25 +111,23 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 更早的门禁记录（T45–T55，2026-09-11 至 2026-10-01）与 T46–T52 各轮 E2E 细节见 Git 提交与 `code/docs/progress/`。
 
-## 本轮审计待修复（2026-10-04，分支 `bce0a24`）
+## 本轮审计待修复（2026-10-04，分支 `bce0a24`）——已全部修复（`3902c4e`）
 
-| 编号 | 优先级 | 代码证据与接手动作 |
+| 编号 | 优先级 / 状态 | 原始发现与修复 |
 |---|---|---|
-| RA-01 | P0 | `proof/verifier.py` 的注入差分证据对任何稳定输出差异写入 `sink_reached=True`；`proof/protection_analysis.py` 只枚举 AST 中的调用，连未执行的 sink 也会列出，且成功扫描始终给出 `callable_resolved`。`orchestrator/reviews.py` 因此可派生全部注入确认事实。应由独立观测证明输入确实到达指定 sink，AST 清单只保留为诊断。 |
-| RA-02 | P0 | 鉴权差分证据仅对模型报告的约束文本做 SHA-256 回显，未检验输出与约束的违反关系；普通输入差异即可派生 `constraint_analysis`、`behavior_difference`、`reachable_path`。应明确可执行的约束判据并由控制面校验预期与实际行为。 |
-| RA-03 | P1 | `proof/executor.py::_constraint_from_report` 在条目和 Finding 都没有地址时，把 `None == None` 当作地址匹配；同 CWE 报告会错取第一条约束。源文件匹配必须只用确切 path/line，二进制地址匹配须两侧都有地址，并补多 Finding 回归。 |
-| RA-04 | P1 | `semantic_audit.py::_aggregate_fallback_report` 从 `_read_document` 得到的是 `{run_id, task_id, report}` 包装对象，却直接读取顶层 `findings`；所有分页 findings 从最终报告消失，但 coverage 仍标记 complete。应读取 `fragment["report"]["findings"]`，并对片段缺失或摘要不符失败，而非静默跳过。 |
-| RA-05 | P1 | `proof/verifier.py::_behavior_matches_runs` 核对字段与运行摘要一致，却未验证 crafted 摘要确实不同于 control；构造相同摘要并声明 `differed=true` 的合法 Schema 观测通过 `behavior_is_verified`。应重算差分与 replay_consistent，不信任报告布尔值。 |
+| RA-01 | P0 / 已修复 | 原发现：注入差分证据对任何稳定输出差异写 `sink_reached=True`，AST 枚举连未执行的 sink 也列出。修复：target-worker 在绑定调用期间以 `sys.setprofile` 观测控制面 sink 词典的 C 调用（解释器事件，目标代码不可伪造），触发则以退出码 20 结束；entrypoint 逐 run 记录 `sink_fired`（完成语义、非崩溃，契约 `VerificationRun.sink_fired` 可选字段）；worker 仅在 crafted+两次 replay 全部触发时写 `sink_reached`（`sink_reach_is_verified`）；AST 枚举降级为诊断，仅在机器验证 reach 随行，gate 仅在该组合派生 `protection_analysis`。回归：`tests/proof/test_sink_reach_and_matching.py`、`tests/proof/test_differential_verification.py::test_behavior_without_sink_fire_claims_no_reach`。 |
+| RA-02 | P0 / 已修复（鉴权降级为候选） | 原发现：约束文本 SHA-256 回显不检验违反关系，普通输入差异即派生鉴权确认事实。修复：删除 `_derived_poc_facts` 鉴权分支——`constraint_analysis`/`behavior_difference`/`reachable_path` 不再从差分证据派生，鉴权 Finding 回到候选；`constraint_digest` marker 保留为诚实溯源。可执行约束判据方向（断言 DSL/不变量探针）记入 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) §5，解封需另行走 ADR 提案。回归：`test_auth_markers_derive_no_confirmation_facts`、gate 拒绝测试。 |
+| RA-03 | P1 / 已修复 | 原发现：`_constraint_from_report` 把 `None == None` 当地址匹配，同 CWE 报告错取第一条约束。修复：源条目仅按确切 path+line 匹配，二进制条目须两侧都有地址才比较；缺字段永不相等。回归：`test_constraint_extraction_requires_exact_location`、`..._ignores_partial_location_matches`、`..._matches_binary_address_on_both_sides`。 |
+| RA-04 | P1 / 已修复 | 原发现：分页汇总读包装对象顶层 `findings`，分页 findings 全部丢失而 coverage 仍标 complete。修复：汇总读取 `fragment["report"]`，逐片段重验 CAS 摘要，缺失/不可读/摘要不符即 `semantic_audit.fallback_fragment_missing` 硬失败。回归：`test_resumed_aggregate_carries_every_page_finding`、`test_corrupted_page_fragment_fails_the_audit_instead_of_losing_findings`。 |
+| RA-05 | P1 / 已修复 | 原发现：相同摘要 + `differed=true` 的合法 Schema 观测可通过行为验证。修复：`_behavior_matches_runs` 从运行摘要重算差分与 replay 一致性，报告布尔值仅作入口自检、不作为判据；相同摘要观测现被拒。回归：`test_identical_digests_with_differed_claim_is_rejected`。 |
 
-验证：Linux dev 容器 `uv run --no-sync pytest -q tests/orchestrator/test_semantic_audit_paging.py tests/proof/test_differential_verification.py tests/proof/test_protection_analysis.py` 为 18 passed。无害契约级复现得到 `same_digest_behavior_verified=True`、`unexecuted_sink_enumerated=True`、错取 `first rule`（期望 `second rule`）、汇总报告 `aggregated_findings=[]` 且 `coverage_complete=True`。未运行全量门禁、真实模型链或真实 Runner；审计无程序代码变更。
+审计原始证据（无害契约级复现）与首轮 18 passed 定向记录见 Git 历史（`78ce0f2`）。
 
 ## 下一步
 
-先修 RA-01/RA-02 的确认门禁误判，再修 RA-03～RA-05 并补对应负例；随后在 Linux dev 容器跑定向测试、契约检查与完整门禁，最后用真实 Runner 验证注入/鉴权正反例。修复前不要将当前 CR-04 实现视为可确认真实漏洞的充分判据。
-
 **下一步：真实项目闭环与 oracle P0.5 提案**
 
-1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。
+1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。鉴权类解封依赖 §5 的可执行约束判据立项。
 2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计；完成后 R3 目标绑定动态轨可执行。
 3. **审查清单回归观察**：用真实模型在栈内走一次 candidate → 差分/异常 observation → 模型 re-review → confirmed（鉴权与注入教学样本各一次），确认 `POC_VERIFICATION_RESULT` 标记与复核提示词兼容；复跑拉格朗 18MB PE 核对 CR-08 覆盖计数与 CR-07 审计耗时变化。
 
