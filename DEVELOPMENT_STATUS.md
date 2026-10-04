@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 分页语义审计续审（`feat/realworld-acceptance-samples @ 9251e79`，只读产品代码）：发现 RP-01/P1：截止超时被标 `retryable=False`，Worker 不会消费已保存断点；RP-02/P1：断点未绑定页大小/索引身份，变更页大小后可能把未审计函数汇总为 `complete=true`；RP-03/P2：跨页重复候选生成相同证据 ID、不同片段引用，触发 `EntityConflict` 中断审计。详见 [`code/docs/code-review-2026-10-04-paged-audit.md`](code/docs/code-review-2026-10-04-paged-audit.md)。Linux `dev` 容器定向分页测试 **5 passed**；该测试未覆盖 Worker 结算、断点配置变化或跨页重复候选。本轮未修改产品代码或部署，未跑全量门禁。
+
 2026-10-04 RG 修复轮（分支 `feat/realworld-acceptance-samples @ add7676`）：复审重开的 RG-01～03 已修复并部署。①RG-01/02：确认链诚实降级——`reviews.py` 不再从差分 POC 证据派生任何注入/鉴权确认事实（同进程 sink 观测可被 `os._exit(20)` 伪造或 `sys.setprofile(None)` 致盲，且 sink 触发≠输入传播），`sink_reached`/`protections_observed` 仅作诊断，注入/鉴权 Finding 保持候选；ADR-036 记录"同进程解释器内无法构造目标不可伪造观测通道"的结论与解除条件（P0.5 crash oracle 走 OS wait status、传播判据见 oracle 提案 §5）。②RG-03：AST 保护扫描按完整限定路径解析（镜像运行时的模块全局→类属性语义），同名歧义/条件分支重复定义/别名赋值一律拒绝扫描；`callable_resolved` 锚点记录完整路径。③新增 opt-in Runner 负例（`tests/proof/test_target_bound_injection_negatives.py`）：exit-20 伪装与常量 sink 两例固定"伪造可落地、确认不可达"，profiler 致盲固定保守方向（无 reach 声明）。新并行门禁完整输出：**757 passed / 7 skipped、覆盖率 81.05%、177.5s**，Ruff/Pyright/contracts/TypeScript/Web 构建通过；重建 7 个镜像并重启，migrate exit 0、API ready、Web 200；真实 Runner 验收（含 3 个新负例）**6 passed**。共享 CAS 卷在 runner 建新目录后需再次 `chmod -R a+rwX`（已记入经验教训）。
 
 2026-10-04 本轮复审（分支 `feat/realworld-acceptance-samples`）：**注入确认链重新标为待修复**（已由上段修复）。RG-01/P0：目标代码与 `sys.setprofile` 同进程，能用 `os._exit(20)` 伪装父进程信任的 sink 退出码，或关闭 profiler 漏报；RG-02/P0：真实 sink 调用与输入差分也不证明 crafted 输入进入 sink；RG-03/P1：AST 按短名选函数，可能把另一个类的同名方法当成执行目标扫描，非空 anchor 条件无法发现错位。详见 [`code/docs/code-review-2026-10-04-gates.md`](code/docs/code-review-2026-10-04-gates.md)。本轮只改质量门禁：并行且保留完整带来源日志，补 contracts 漂移/Web 构建，强制测当前源码，覆盖率补 `proof`/`reporting` 并排除生成声明。Linux dev 容器完整门禁 **753 passed / 4 skipped，覆盖率 81.18%，190.7 秒**；Ruff、Pyright、contracts、TypeScript/Web 构建均通过。未修改产品确认逻辑、未部署；在 RG-01～03 消除前不把注入 Finding 的既有证据链视为可信闭环。
@@ -132,7 +134,9 @@ T46–T51（脱壳工具链 ADR-028、审计检查点 ADR-029、调查记忆 ADR
 
 ## 下一步
 
-**下一步：可信判据立项与真实项目闭环（RG-01～03 已关闭）**
+**下一步：先修复分页审计 RP-01～03，再推进可信判据与真实项目闭环（RG-01～03 已关闭）**
+
+0. **分页审计恢复与覆盖修复**：先补 Worker 结算级截止超时重试、页大小变化及跨页重复候选负例，再修复 RP-01～03；定向重跑分页/Worker/持久化测试与静态检查，确认 `coverage.complete` 只在实际全页审核后成立。
 
 1. **oracle P0.5（按 [`code/docs/oracle-proposal-2026-10-04.md`](code/docs/oracle-proposal-2026-10-04.md) 评审后立项）**：`VerificationRun.crash_kind` 契约扩展、entrypoint faulthandler/信号捕获、worker 观测事实映射与正反例——解释器信号经 OS wait status 传递，`os._exit` 无法伪造信号死亡，是当前架构内首个目标不可伪造的观测通道；完成后内存破坏类在含 C 扩展目标上具备 `repeatable_crash` 判据。注入确认事实的恢复依赖输入传播判据提案；鉴权类解封依赖 §5 的可执行约束判据。
 2. **P1 最小真实项目闭环**：固定 1–3 个获授权开源解析器项目构建（BuildProfile、完整 TargetSnapshot、原目标链接验证），复用原 fuzz target；接入已知复现与源码盲发现 adapter。sanitizer 崩溃 oracle 随该轨一并设计。
