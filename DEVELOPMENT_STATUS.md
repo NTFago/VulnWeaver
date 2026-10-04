@@ -6,6 +6,8 @@
 
 ## 当前焦点
 
+2026-10-04 `feat/realworld-acceptance-samples` 已快进合并至 `main @ 40b81ce` 并推送；远程功能分支保留。合并时保留 RC-01、CR-06 与 `extract_strings` 性能回归为已知待修项。
+
 2026-10-04 稳定性缺陷修复轮（`feat/realworld-acceptance-samples @ a81b6b0`，已提交并部署）。对 `/code-review`（high 档，dedup 未 verify）在 `git diff main...HEAD` 上的 6 条发现逐条独立核实后，只修其中真正影响运行的 3 项——**并发现 review 漏报的 P0**。
 
 ①**P0（review 漏报）沙箱二进制事实链在本分支被改崩**：CR-08 把 `extract_strings` 返回类型从 `tuple[BinaryString, ...]` 换成 `StringExtraction`（`headers.py:118`），但 `code/apps/binary-tools/vulnweaver-binary-entrypoint:253` 仍是 `list(extract_strings(...))`。`StringExtraction` 是 frozen/slots dataclass、无 `__iter__`，构造 facts 文档即抛 `TypeError`，`main()` 把它转成 exit 1 → 配置了 sandbox 时（`analysis-worker/main.py:370` 走 `BinaryFactsAdapter`）**二进制导入主路径 100% 失败**。该 entrypoint 在本分支未被改动，属于改了返回类型未同步消费者；`tests/binary_analysis/` 此前从未执行过这个脚本，所以没拦住。修复：`list(extract_strings(...).strings)`。
