@@ -17,10 +17,12 @@ from uuid import uuid4
 from vulnweaver_artifact_store import LocalContentAddressedStore
 from vulnweaver_contracts import (
     AgentRun,
+    FailureKind,
     JobStatus,
     PairFunction,
     RunStatus,
     SourceLocation,
+    StructuredFailure,
 )
 from vulnweaver_model_gateway import ModelCallResult
 from vulnweaver_orchestrator import SemanticAuditJobExecutor, SemanticAuditor, semantic_audit
@@ -723,3 +725,124 @@ def test_unreadable_checkpoint_stops_before_any_model_call(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+class SaveFailsOnceCheckpointStore(InMemoryCheckpointStore):
+    """The first checkpoint write fails outright; later writes succeed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failures_remaining = 1
+
+    async def save(self, task_id: str, node: str, state, *, created_at: str):
+        if self.failures_remaining > 0:
+            self.failures_remaining -= 1
+            raise RuntimeError("checkpoint store unavailable")
+        return await super().save(task_id, node, state, created_at=created_at)
+
+
+class TransportFailsOnSecondPage:
+    """Succeeds on page 0, then reports a retryable transport failure."""
+
+    def __init__(self) -> None:
+        self.pages: list[list[str]] = []
+
+    async def complete_structured(self, **kwargs: object) -> ModelCallResult:
+        messages = cast(list[dict[str, str]], kwargs["messages"])
+        payload = json.loads(messages[1]["content"])
+        page_index = int(payload["page"]["index"])
+        self.pages.append(
+            [str(item["name"]) for item in payload["functions"] if isinstance(item, dict)]
+        )
+        run = cast(
+            AgentRun,
+            {
+                "schema_version": "1.0.0",
+                "id": "agent-run:stale-checkpoint",
+                "task_id": "task:stale-checkpoint",
+                "status": RunStatus.SUCCEEDED,
+                "model": "audit/test-model",
+                "prompt_hash": "sha256:" + "a" * 64,
+                "input_refs": [],
+                "decisions": [],
+                "token_usage": {"input_tokens": 10, "output_tokens": 10},
+                "failure": None,
+                "created_at": TIMESTAMP,
+                "updated_at": TIMESTAMP,
+            },
+        )
+        if page_index == 1:
+            failure = StructuredFailure(
+                code="model_transport_error",
+                kind=FailureKind.DEPENDENCY,
+                message="model request failed",
+                retryable=True,
+                details={},
+            )
+            failed_run = dict(run)
+            failed_run["status"] = RunStatus.FAILED
+            failed_run["failure"] = failure
+            return ModelCallResult(None, cast(AgentRun, failed_run), failure, "endpoint-1")
+        return ModelCallResult(report_none(), run, None, "endpoint-1")  # type: ignore[arg-type]
+
+
+def _stale_checkpoint_scenario(
+    database_url: str, store_root: object, *, fail_first_write: bool
+) -> bool:
+    """Run the scenario and report whether the failure stayed retryable."""
+
+    async def scenario() -> bool:
+        database = Database(DatabaseSettings(database_url))
+        task_id, _version_id, _names = await seed_functions(database, 6)
+        model = TransportFailsOnSecondPage()
+        checkpoints = (
+            SaveFailsOnceCheckpointStore() if fail_first_write else InMemoryCheckpointStore()
+        )
+        auditor = SemanticAuditor(
+            database,
+            model,
+            store=LocalContentAddressedStore(store_root),  # type: ignore[arg-type]
+            fact_loader=StubFactLoader(),
+            checkpoint_store=checkpoints,
+            fallback_page_size=2,
+        )
+        audit_job = semantic_job(f"job:audit:{uuid4().hex}", task_id)
+        try:
+            stopped = await SemanticAuditJobExecutor(database, auditor).execute(
+                audit_job, asyncio.Event()
+            )
+            assert stopped["status"] is JobStatus.FAILED
+            # The gateway's own code survives for diagnosis either way.
+            assert stopped["failure"]["code"] == "model_transport_error"
+            return bool(stopped["failure"]["retryable"])
+        finally:
+            await database.dispose()
+
+    return asyncio.run(scenario())
+
+
+def test_page_checkpoint_failure_makes_a_later_transport_failure_terminal(
+    persistence_database_url: str, tmp_path: object, monkeypatch: Any
+) -> None:
+    """RC-01: a retryable failure is only resumable while the checkpoint is current.
+
+    Page 0's checkpoint write fails, so the newest stored checkpoint does not
+    cover page 0. Page 1 then hits a retryable transport failure: retrying would
+    re-audit page 0 under a new run_id and append a second set of immutable
+    evidence rows for findings that already have one, and would keep doing so
+    for every page the stale checkpoint is missing. Settle terminal instead.
+    """
+    monkeypatch.setattr(semantic_audit, "_CHECKPOINT_SAVE_ATTEMPTS", 1)
+    monkeypatch.setattr(semantic_audit, "_CHECKPOINT_SAVE_BACKOFF_SECONDS", 0.0)
+    assert _stale_checkpoint_scenario(
+        persistence_database_url, tmp_path, fail_first_write=True
+    ) is False
+
+
+def test_current_checkpoint_keeps_a_later_transport_failure_retryable(
+    persistence_database_url: str, tmp_path: object
+) -> None:
+    """Control: RF-01 resume is unchanged when the checkpoint is current."""
+    assert _stale_checkpoint_scenario(
+        persistence_database_url, tmp_path, fail_first_write=False
+    ) is True

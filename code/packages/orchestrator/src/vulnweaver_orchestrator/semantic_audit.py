@@ -509,6 +509,12 @@ class SemanticAuditor:
                 index_digest=index_digest,
             )
         run: dict[str, object] | None = None
+        # Whether the persisted checkpoint still covers every page projected by
+        # this attempt (RC-01). A retryable failure is only genuinely resumable
+        # while it does; otherwise the next attempt re-projects the pages the
+        # stale checkpoint no longer accounts for, appending a second set of
+        # immutable evidence rows for findings that already have one.
+        checkpoint_current = True
         start = self._monotonic()
         for page_index in range(state.next_page, page_count):
             # The deadline bounds this attempt's work; the checkpoint hands the
@@ -569,11 +575,30 @@ class SemanticAuditor:
                 # later page must stay retryable, or the worker settles the
                 # job as terminal and the saved checkpoint — with every
                 # completed page — is never consumed by the next attempt.
+                #
+                # RC-01: that holds only while the checkpoint really does carry
+                # every completed page. If a page's write failed, the newest
+                # stored checkpoint stops short of the pages projected since,
+                # and a retry would re-project them under its own run_id —
+                # duplicate model calls and a second set of immutable evidence
+                # rows. Keep the gateway's code and kind for diagnosis, but
+                # settle terminal rather than promise a resumption the
+                # checkpoint cannot serve.
+                resumable = bool(failure["retryable"]) and checkpoint_current
                 raise _AuditError(
                     str(failure["code"]),
                     failure["kind"],
-                    retryable=bool(failure["retryable"]),
-                    message=str(failure["message"]),
+                    retryable=resumable,
+                    message=(
+                        str(failure["message"])
+                        if resumable
+                        else (
+                            f"{failure['message']} — not retryable: the paged "
+                            "fallback audit's checkpoint no longer covers every "
+                            "completed page, so a retry would re-audit and "
+                            "re-project them"
+                        )
+                    ),
                 )
             fragment_ref, fragment_digest = await self._store_report(
                 f"{run_id}-p{page_index}", task_id, report
@@ -597,7 +622,12 @@ class SemanticAuditor:
             state.record_page(
                 fragment_ref, fragment_digest, page_finding_ids, page_evidence_ids, page_dropped
             )
-            await self._save_fallback_checkpoint(task_id, run_id, state)
+            # The state document is cumulative, so a successful write always
+            # covers every page projected so far and a failed one leaves the
+            # newest stored checkpoint behind by at least this page (RC-01).
+            checkpoint_current = await self._save_fallback_checkpoint(
+                task_id, run_id, state
+            )
         report_ref, _report_digest = await self._aggregate_fallback_report(
             run_id, task_id, state
         )
