@@ -10,6 +10,7 @@ dependencies = [
     "vulnweaver-model-gateway",
     "vulnweaver-persistence",
     "vulnweaver-sandbox-runner",
+    "vulnweaver-source-analysis",
     "vulnweaver-tool-runtime",
     "httpx>=0.28,<1",
 ]

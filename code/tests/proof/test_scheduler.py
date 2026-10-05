@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 from vulnweaver_contracts import (
+    ArtifactKind,
     Finding,
     FindingCategory,
     FindingStatus,
@@ -74,6 +75,7 @@ async def _seed(database_url: str) -> None:
                 "artifact:proof-owned",
                 project_id=OWNER_PROJECT,
                 current_version_id=OWNED_VERSION,
+                kind=ArtifactKind.DERIVED,
             )
         )
         await repositories.artifacts.add_version(
@@ -86,6 +88,7 @@ async def _seed(database_url: str) -> None:
                 "artifact:proof-foreign",
                 project_id=OTHER_PROJECT,
                 current_version_id=FOREIGN_VERSION,
+                kind=ArtifactKind.DERIVED,
             )
         )
         await repositories.artifacts.add_version(

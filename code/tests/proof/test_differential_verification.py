@@ -42,6 +42,7 @@ from vulnweaver_proof.verifier import (
 )
 
 from tests.persistence.factories import artifact, artifact_version, task
+from tests.proof.archive_bytes import archive_bytes
 from tests.proof.test_auto_poc import (
     TIMESTAMP,
     FakePocModel,
@@ -334,7 +335,10 @@ async def _seed_auth_finding(
     task_id = f"task:{suffix}"
     version = dict(artifact_version(version_id, artifact_id=f"artifact:{suffix}"))
     target = store.put_stream(
-        io.BytesIO(b"def parse(value):\n    return value\n"), max_bytes=1024 * 1024
+        io.BytesIO(
+            archive_bytes(("auth.py", b"def parse(value):\n    return value\n"))
+        ),
+        max_bytes=1024 * 1024,
     )
     version["digest"] = target.digest
     version["object_ref"] = target.object_ref
@@ -442,7 +446,10 @@ async def _seed_injection_finding(
     task_id = f"task:{suffix}"
     version = dict(artifact_version(version_id, artifact_id=f"artifact:{suffix}"))
     target = store.put_stream(
-        io.BytesIO(b"def parse(value):\n    return eval(value)\n"), max_bytes=1024 * 1024
+        io.BytesIO(
+            archive_bytes(("app.py", b"def parse(value):\n    return eval(value)\n"))
+        ),
+        max_bytes=1024 * 1024,
     )
     version["digest"] = target.digest
     version["object_ref"] = target.object_ref

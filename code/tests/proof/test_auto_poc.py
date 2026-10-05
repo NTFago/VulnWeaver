@@ -36,6 +36,7 @@ from vulnweaver_proof import (
 )
 
 from tests.persistence.factories import artifact, artifact_version, job, project, task
+from tests.proof.archive_bytes import archive_bytes
 
 IMAGE_DIGEST = "sha256:" + "a" * 64
 TIMESTAMP = "2026-09-10T08:00:00Z"
@@ -242,7 +243,8 @@ async def _seed_finding(
     version = dict(artifact_version(version_id, artifact_id=f"artifact:{suffix}"))
     if store is not None and target_text is not None:
         stored = store.put_stream(
-            io.BytesIO(target_text.encode("utf-8")), max_bytes=1024 * 1024
+            io.BytesIO(archive_bytes(("nested_config_parser.py", target_text))),
+            max_bytes=1024 * 1024,
         )
         version["digest"] = stored.digest
         version["object_ref"] = stored.object_ref

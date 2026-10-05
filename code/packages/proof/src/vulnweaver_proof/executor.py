@@ -53,6 +53,7 @@ from .auto_exploit import (
     AutoExploitError,
     ExploitScriptGenerator,
     GeneratedExploit,
+    resolve_target_member,
     stable_id,
 )
 from .bundle import (
@@ -151,7 +152,7 @@ class ProofJobExecutor:
             async with self._database.transaction() as repositories:
                 finding = await repositories.findings.get(request["finding_id"])
                 expected_target_binding, _, _ = await self._target_binding(
-                    repositories, finding
+                    repositories, finding, job
                 )
                 finding_status = finding["status"]
                 task = await repositories.tasks.get(finding["task_id"])
@@ -407,13 +408,16 @@ class ProofJobExecutor:
         return None
 
     async def _target_binding(
-        self, repositories: Repositories, finding: Finding
+        self, repositories: Repositories, finding: Finding, job: Job
     ) -> tuple[TargetBinding, str, Artifact]:
-        """Resolve the exact sample version the finding is anchored to."""
+        """Resolve the exact sample version the finding is bound to.
 
-        version = await repositories.artifacts.get_version(
-            finding["location"]["artifact_version_id"]
-        )
+        Archive-anchored findings bind to the extracted source-member version
+        (registered by resolve_target_member), so the bundle's target member
+        is the driver-callable source instead of the raw archive bytes.
+        """
+
+        _, version = await resolve_target_member(repositories, self._store, finding, job)
         artifact = await repositories.artifacts.get(version["artifact_id"])
         binding = cast(
             TargetBinding,
@@ -437,7 +441,9 @@ class ProofJobExecutor:
         if self._store is None:
             raise AutoExploitError("proof.store_unavailable", FailureKind.DEPENDENCY)
         async with self._database.transaction() as repositories:
-            binding, target_ref, artifact = await self._target_binding(repositories, finding)
+            binding, target_ref, artifact = await self._target_binding(
+                repositories, finding, job
+            )
             constraint_digest = await self._finding_constraint_digest(repositories, finding)
         bundle = await asyncio.to_thread(
             build_execution_bundle,
