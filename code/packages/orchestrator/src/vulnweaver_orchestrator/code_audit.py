@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
@@ -171,6 +171,10 @@ class CodeAuditOutcome:
     # "the audit looked and found nothing".
     completed: bool = True
     fallback_code: str | None = None
+    # Service-side record of what the tools actually showed the agent this
+    # attempt (functions whose code was returned, lines read, search hits).
+    # Every number comes from tool execution, never from model claims.
+    coverage: JsonObject = field(default_factory=lambda: cast(JsonObject, {}))
 
     @property
     def investigation(self) -> list[JsonObject]:
@@ -331,6 +335,8 @@ class CodeAuditAgent:
         )
         result = await loop.run(request)
         fallback: StructuredFailure | None = result.fallback
+        coverage = dict(workspace.read_coverage())
+        coverage["indexed_functions"] = workspace.function_count
         return CodeAuditOutcome(
             run=result.agent_run,
             findings=tuple(executor.reported),
@@ -338,6 +344,7 @@ class CodeAuditAgent:
             degraded=result.status is AgentLoopStatus.DEGRADED,
             completed=result.status is AgentLoopStatus.COMPLETED,
             fallback_code=str(fallback["code"]) if fallback is not None else None,
+            coverage=coverage,
         )
 
     async def _load_resume_checkpoint(self, task_id: str, job_id: str) -> JsonObject | None:

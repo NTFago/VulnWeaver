@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -66,6 +68,18 @@ _MAX_SEARCH_LIMIT = 100
 _MAX_SEARCH_FILES = 200
 _MAX_TEXT_CHARS = 16_384
 _MAX_SOURCE_PATTERN_CHARS = 256
+# Model-supplied regexes are matched against whole source lines, and one
+# minified bundle line can be hundreds of thousands of characters. Matching
+# only a bounded prefix of each line keeps even quadratic patterns
+# (``.*x.*y``) to milliseconds; matches that straddle the clip window on such
+# lines are not found -- the honest cost of never letting a search stall a
+# worker.
+_MAX_SEARCH_LINE_CHARS = 4_096
+# Wall-clock budget for one code-search call, enforced cooperatively between
+# files/lines inside the scan thread and once more from the event loop, so a
+# pathological pattern can never block the worker's loop even if the screen
+# below misses a backtracking shape.
+_SEARCH_DEADLINE_SECONDS = 30.0
 _MAX_NEIGHBORHOOD_DEPTH = 3
 _MAX_FACTS_ITEMS = 100
 _MAX_REPORTED_FINDINGS = 32
@@ -86,6 +100,8 @@ _MAX_SANDBOX_COMMANDS = 8
 _MAX_SANDBOX_COMMAND_CHARS = 3600
 
 _ALL_KINDS = [kind.value for kind in (*SOURCE_KINDS, *BINARY_KINDS)]
+
+LOGGER = logging.getLogger("vulnweaver.audit_tools")
 
 
 def _spec(
@@ -358,6 +374,7 @@ class ReportedFinding:
 class AuditWorkspaceLimits:
     max_search_files: int = _MAX_SEARCH_FILES
     max_text_chars: int = _MAX_TEXT_CHARS
+    search_seconds: float = _SEARCH_DEADLINE_SECONDS
 
 
 class AuditWorkspace:
@@ -387,8 +404,14 @@ class AuditWorkspace:
         self._files: dict[tuple[str, str], str | None] = {}
         self._documents: dict[str, JsonObject | None] = {}
         self._reader: SourceExcerptReader | None = None
+        # Lines whose code the agent actually read through code-function-read.
+        # This is the only set that authorizes a finding report (CR-06).
         self._read_source_lines: set[tuple[str, str, int]] = set()
         self._read_binary_functions: set[str] = set()
+        # Search hits are leads, not reads: they are recorded separately so a
+        # one-line match can never stand in for having read the reported code.
+        self._search_hit_lines: set[tuple[str, str, int]] = set()
+        self._functions_read: set[str] = set()
 
     async def load(self) -> None:
         """Index the task's artifact versions and every function they hold."""
@@ -483,6 +506,10 @@ class AuditWorkspace:
         binary_only: bool,
         limit: int,
     ) -> JsonObject:
+        if name_pattern is not None:
+            rejection = _unsafe_pattern_reason(name_pattern)
+            if rejection is not None:
+                return _failed("function_list.pattern_unsafe", rejection)
         matcher = _compile(name_pattern)
         selected: list[JsonObject] = []
         total = 0
@@ -520,6 +547,7 @@ class AuditWorkspace:
         function = ref.function
         code, code_kind, truncated, read_start, read_end = await self._function_code(ref)
         if code:
+            self._functions_read.add(function["id"])
             source = function["source_location"]
             if source is not None and code_kind == "source" and read_start is not None:
                 self._read_source_lines.update(
@@ -546,6 +574,13 @@ class AuditWorkspace:
         matcher = _compile(pattern)
         if matcher is None:
             return {"matches": [], "reason_code": "search_pattern_invalid"}
+        rejection = _unsafe_pattern_reason(pattern)
+        if rejection is not None:
+            return {
+                "matches": [],
+                "reason_code": "search_pattern_unsafe",
+                "detail": rejection,
+            }
         if scope == "binary_strings":
             return await self._search_binary_strings(matcher, limit)
         return await self._search_source(matcher, limit)
@@ -778,32 +813,28 @@ class AuditWorkspace:
         return excerpt.text, "source", excerpt.truncated, excerpt.start_line, excerpt.end_line
 
     async def _search_source(self, matcher: re.Pattern[str], limit: int) -> JsonObject:
-        matches: list[JsonObject] = []
-        scanned = 0
         files = dict.fromkeys(
             (ref.version_id, ref.function["source_location"]["path"])
             for ref in self._functions
             if ref.function["source_location"] is not None
         )
-        for version_id, path in files:
-            if scanned >= self.limits.max_search_files or len(matches) >= limit:
-                break
-            text = await self._read_file(version_id, path)
-            if text is None:
-                continue
-            scanned += 1
-            for number, line in enumerate(text.splitlines(), start=1):
-                if len(matches) >= limit:
-                    break
-                if matcher.search(line) is not None:
-                    self._read_source_lines.add((version_id, path, number))
-                    matches.append(
-                        cast(
-                            JsonObject,
-                            {"path": path, "line": number, "text": line.strip()[:512]},
-                        )
-                    )
-        return cast(
+        deadline = time.monotonic() + self.limits.search_seconds
+        # The scan runs off the event loop and watches the deadline between
+        # lines, so the worker stays responsive no matter what the pattern and
+        # the corpus do to each other. wait_for is the backstop for a single
+        # match call that outlives the cooperative checks.
+        try:
+            scanned, matches, timed_out = await asyncio.wait_for(
+                asyncio.to_thread(self._scan_source_sync, matcher, limit, files, deadline),
+                self.limits.search_seconds + 5.0,
+            )
+        except TimeoutError:
+            LOGGER.warning(
+                "code_search_deadline_exceeded",
+                extra={"task_id": self.task_id, "scope": "source"},
+            )
+            scanned, matches, timed_out = 0, [], True
+        result: JsonObject = cast(
             JsonObject,
             {
                 "scope": "source",
@@ -811,6 +842,76 @@ class AuditWorkspace:
                 "files_scanned": scanned,
                 "files_unscanned": max(0, len(files) - scanned),
                 "matches": matches,
+            },
+        )
+        if timed_out:
+            result["reason_code"] = "search_deadline_exceeded"
+        return result
+
+    def _scan_source_sync(
+        self,
+        matcher: re.Pattern[str],
+        limit: int,
+        files: dict[tuple[str, str], None],
+        deadline: float,
+    ) -> tuple[int, list[JsonObject], bool]:
+        """Line-by-line source scan, cooperative about the search deadline.
+
+        Runs inside a worker thread: file reads are synchronous here, and every
+        matched line is clipped to ``_MAX_SEARCH_LINE_CHARS`` so a long line
+        cannot turn a quadratic pattern into a stall.
+        """
+
+        matches: list[JsonObject] = []
+        scanned = 0
+        timed_out = False
+        for version_id, path in files:
+            if scanned >= self.limits.max_search_files or len(matches) >= limit:
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
+                break
+            text = self._read_file_sync(version_id, path)
+            if text is None:
+                continue
+            scanned += 1
+            stop = False
+            for number, line in enumerate(text.splitlines(), start=1):
+                if len(matches) >= limit:
+                    stop = True
+                    break
+                if time.monotonic() > deadline:
+                    timed_out = True
+                    stop = True
+                    break
+                if matcher.search(line[:_MAX_SEARCH_LINE_CHARS]) is not None:
+                    # A hit is a lead: it is recorded for coverage but never
+                    # authorizes a finding report the way a read does.
+                    self._search_hit_lines.add((version_id, path, number))
+                    matches.append(
+                        cast(
+                            JsonObject,
+                            {"path": path, "line": number, "text": line.strip()[:512]},
+                        )
+                    )
+            if stop:
+                break
+        return scanned, matches, timed_out
+
+    def read_coverage(self) -> JsonObject:
+        """Service-side record of what this workspace actually let the agent see.
+
+        Every number comes from tool execution, not from model claims, so the
+        audit report can carry coverage that survives review.
+        """
+
+        return cast(
+            JsonObject,
+            {
+                "functions_read": len(self._functions_read),
+                "source_lines_read": len(self._read_source_lines),
+                "binary_functions_read": len(self._read_binary_functions),
+                "search_hit_lines": len(self._search_hit_lines),
             },
         )
 
@@ -860,14 +961,19 @@ class AuditWorkspace:
                 "reason_code": "binary_facts_unavailable",
             }
         matches: list[JsonObject] = []
+        timed_out = False
+        deadline = time.monotonic() + self.limits.search_seconds
         for item in _as_list(document.get("strings")):
             if len(matches) >= limit:
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
                 break
             if not isinstance(item, Mapping):
                 continue
             entry = cast(Mapping[str, object], item)
             value = entry.get("value")
-            if not isinstance(value, str) or matcher.search(value) is None:
+            if not isinstance(value, str) or matcher.search(value[:_MAX_SEARCH_LINE_CHARS]) is None:
                 continue
             matches.append(
                 cast(
@@ -879,9 +985,12 @@ class AuditWorkspace:
                     },
                 )
             )
-        return cast(JsonObject, {"scope": "binary_strings", "matches": matches})
+        result: JsonObject = cast(JsonObject, {"scope": "binary_strings", "matches": matches})
+        if timed_out:
+            result["reason_code"] = "search_deadline_exceeded"
+        return result
 
-    async def _read_file(self, version_id: str, path: str) -> str | None:
+    def _read_file_sync(self, version_id: str, path: str) -> str | None:
         key = (version_id, path)
         if key in self._files:
             return self._files[key]
@@ -894,7 +1003,7 @@ class AuditWorkspace:
             reader = SourceExcerptReader(self.store)
             self._reader = reader
         try:
-            text = await asyncio.to_thread(reader.read_file, version, path)
+            text = reader.read_file(version, path)
         except (SourceImportError, ArtifactStoreError, OSError):
             self._files[key] = None
             return None
@@ -1249,6 +1358,129 @@ def _compile(pattern: str | None) -> re.Pattern[str] | None:
         return re.compile(pattern)
     except re.error:
         return None
+
+
+# The pattern screen below rejects model-supplied regexes that carry the known
+# exponential-backtracking shapes. ``re`` has no match timeout, so the pattern
+# language itself is restricted before any text is seen; the line clip and the
+# scan deadline bound whatever polynomial cost slips through. The screen is
+# deliberately narrower than the set of safe regexes -- a rejected pattern
+# comes back as a structured tool result the model can rewrite from, usually
+# with a literal run, a character class or bounded repetition.
+# Tuple, not string: the membership tests compare single-char slices that can
+# be empty, and "" in "<any string>" is vacuously True.
+_QUANTIFIER_CHARS = ("*", "+", "?", "{")
+
+
+def _unsafe_pattern_reason(pattern: str) -> str | None:
+    """A reason code when the pattern may backtrack catastrophically, else None.
+
+    Rejected shapes:
+    - a quantified group whose body itself quantifies, alternates, nests a
+      group or asserts (``(a+)+``, ``(a|aa)+``, ``(?:a*b)+``, ``(?=(a+))+``):
+      an ambiguous body under a quantified group is the classic exponential
+      blowup. Exact repetition (``(?:[a-f]{2})+``) stays allowed: its chunking
+      is deterministic, so an outer repeat cannot re-split what the body
+      already fixed;
+    - backreferences (``\\1``, ``(?P=name)``): their interaction with repeats
+      is not analyzable cheaply and the search tool has no use for them;
+    - more than two unbounded quantifiers on atoms that can span a whole line
+      (``.*``-style or negated classes): each extra one multiplies the worst
+      case across every start position.
+    """
+
+    # Per open group: does the body quantify, alternate, or nest a group?
+    stack: list[dict[str, bool]] = []
+    wildcard_quantifiers = 0
+    in_class = False
+    class_negated = False
+    last_atom_spans_line = False
+    index = 0
+    length = len(pattern)
+    while index < length:
+        ch = pattern[index]
+        if ch == "\\":
+            if not in_class and pattern[index + 1 : index + 2].isdigit():
+                return "backreference"
+            last_atom_spans_line = False
+            index += 2
+            continue
+        if in_class:
+            if ch == "]":
+                in_class = False
+                last_atom_spans_line = class_negated
+            index += 1
+            continue
+        if ch == "[":
+            in_class = True
+            class_negated = pattern[index + 1 : index + 2] == "^"
+            index += 1
+            continue
+        if ch == "(":
+            if pattern.startswith("(?P=", index):
+                return "backreference"
+            flags: dict[str, bool] = {
+                "quantifier": False,
+                "alternation": False,
+                "nested": False,
+            }
+            if pattern[index + 1 : index + 2] == "?":
+                # An assertion group is an ambiguous body by itself, so any
+                # quantifier directly on it is refused. The `?` of the group
+                # extension itself is syntax, never a body quantifier.
+                two = pattern[index + 2 : index + 3]
+                three = pattern[index + 3 : index + 4]
+                if two in ("=", "!") or (two == "<" and three in ("=", "!")):
+                    flags["quantifier"] = True
+                index += 2
+            else:
+                index += 1
+            for outer in stack:
+                outer["nested"] = True
+            stack.append(flags)
+            last_atom_spans_line = False
+            continue
+        if ch == ")":
+            if stack:
+                flags = stack.pop()
+                nxt = pattern[index + 1 : index + 2]
+                if nxt in _QUANTIFIER_CHARS and (
+                    flags["quantifier"] or flags["alternation"] or flags["nested"]
+                ):
+                    return "quantified_ambiguous_group"
+            last_atom_spans_line = False
+            index += 1
+            continue
+        if ch == "|":
+            if stack:
+                stack[-1]["alternation"] = True
+            last_atom_spans_line = False
+            index += 1
+            continue
+        if ch in _QUANTIFIER_CHARS:
+            exact_repeat = ch == "{" and _is_exact_repeat(pattern, index)
+            if not exact_repeat:
+                if stack:
+                    stack[-1]["quantifier"] = True
+                if ch != "?" and last_atom_spans_line:
+                    wildcard_quantifiers += 1
+                    if wildcard_quantifiers > 2:
+                        return "too_many_line_spanning_wildcards"
+            last_atom_spans_line = False
+            index += 1
+            continue
+        last_atom_spans_line = ch == "."
+        index += 1
+    return None
+
+
+def _is_exact_repeat(pattern: str, index: int) -> bool:
+    """True for an exact bounded repetition like ``{3}`` (no comma range)."""
+
+    cursor = index + 1
+    while cursor < len(pattern) and pattern[cursor].isdigit():
+        cursor += 1
+    return cursor > index + 1 and pattern[cursor : cursor + 1] == "}"
 
 
 def _optional_str(arguments: Mapping[str, JsonValue], key: str) -> str | None:

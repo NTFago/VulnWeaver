@@ -60,6 +60,7 @@ from vulnweaver_model_gateway import ModelCallResult, ModelGatewayError, ModelTi
 from vulnweaver_pair import build_call_path_steps, pseudocode_text
 from vulnweaver_persistence import Database, EntityConflict, Repositories
 
+from vulnweaver_orchestrator.audit_tools import FUNCTION_READ_TOOL
 from vulnweaver_orchestrator.checkpoints import CheckpointStore
 from vulnweaver_orchestrator.code_audit import CodeAuditAgent, CodeAuditOutcome
 from vulnweaver_orchestrator.investigation_memory import (
@@ -435,6 +436,19 @@ class SemanticAuditor:
             await self._persist_run(dict(outcome.run))
             return None
         investigation = outcome.investigation
+        if outcome.completed and not _agent_read_any_code(outcome):
+            # A completed loop that never read a function's code is the model
+            # declaring victory without looking. Settling it would record a
+            # clean scan the service cannot substantiate (and the NO_FINDINGS
+            # gate only checks that this job finished). The fixed paged
+            # pipeline below still delivers real coverage, so fall back
+            # instead of projecting an empty report.
+            LOGGER.warning(
+                "semantic_audit_agent_read_no_code",
+                extra={"task_id": job["task_id"], "run_id": run_id},
+            )
+            await self._persist_run(dict(outcome.run))
+            return None
         report = cast(
             JsonObject,
             {
@@ -444,6 +458,9 @@ class SemanticAuditor:
                     f"step(s) and reported {len(outcome.findings)} candidate(s)."
                 ),
                 "findings": [finding.as_document() for finding in outcome.findings],
+                # What the tools verifiably showed the agent this attempt; a
+                # reviewer can compare it against the model's own claims.
+                "coverage": outcome.coverage,
             },
         )
         report_ref, report_digest = await self._store_report(
@@ -1188,6 +1205,24 @@ def _run_from_response(
     run["id"] = run_id
     run["task_id"] = task_id
     return run
+
+
+def _agent_read_any_code(outcome: CodeAuditOutcome) -> bool:
+    """Whether the investigation verifiably looked at code, in this attempt or a resumed one.
+
+    The primary witness is this attempt's workspace coverage, counted by the
+    tools themselves. A resumed attempt replays prior steps without re-reading
+    their code, so a successful function-read step from the checkpoint also
+    counts -- the bar is that some attempt of this investigation read code,
+    never that the model merely said it is finished.
+    """
+
+    functions_read = outcome.coverage.get("functions_read")
+    if isinstance(functions_read, int) and not isinstance(functions_read, bool):
+        return functions_read > 0
+    return any(
+        step.succeeded and step.tool_name == FUNCTION_READ_TOOL for step in outcome.steps
+    )
 
 
 def _resumed_run(

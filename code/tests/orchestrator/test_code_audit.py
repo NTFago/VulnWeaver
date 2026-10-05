@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 from vulnweaver_artifact_store import LocalContentAddressedStore
@@ -157,7 +157,9 @@ def source_function(identifier: str, version_id: str, path: str) -> PairFunction
     )
 
 
-def test_source_search_counts_unique_files_before_applying_file_budget() -> None:
+def test_source_search_counts_files_but_a_hit_is_not_a_read() -> None:
+    """A search hit is a lead: it never stands in for reading the code."""
+
     async def scenario() -> None:
         workspace = AuditWorkspace(
             cast(Database, None), cast(Any, None), "task:test",
@@ -184,7 +186,7 @@ def test_source_search_counts_unique_files_before_applying_file_budget() -> None
         unread = await reporter.execute(report_call)
         assert unread["reason_code"] == "finding_report.code_not_read"
         assert reporter.reported == []
-        with patch.object(workspace, "_read_file", new_callable=AsyncMock) as reader:
+        with patch.object(workspace, "_read_file_sync") as reader:
             reader.side_effect = lambda version, path: {
                 "a.py": "no match\n", "b.py": "needle\n"
             }[path]
@@ -193,8 +195,121 @@ def test_source_search_counts_unique_files_before_applying_file_budget() -> None
         assert result["files_scanned"] == 2
         assert result["files_unscanned"] == 0
         assert result["matches"][0]["path"] == "b.py"
-        assert reader.await_count == 2
-        assert (await reporter.execute(report_call))["recorded"] is True
+        assert "reason_code" not in result
+        assert reader.call_count == 2
+        # The hit is on record as a lead -- and only as a lead: the report at
+        # the very line the search found is still refused, because search hits
+        # and code reads authorize different things.
+        coverage = workspace.read_coverage()
+        assert coverage["search_hit_lines"] == 1
+        assert coverage["functions_read"] == 0
+        assert (await reporter.execute(report_call))["reason_code"] == (
+            "finding_report.code_not_read"
+        )
+        assert reporter.reported == []
+
+    asyncio.run(scenario())
+
+
+def test_model_supplied_patterns_are_screened_before_matching() -> None:
+    """The classic exponential-backtracking shapes never reach ``re``."""
+
+    from vulnweaver_orchestrator.audit_tools import _unsafe_pattern_reason
+
+    for pattern in [
+        "(a+)+",
+        "(a+)+$",
+        "(a|aa)+$",
+        r"(\w+\s*)*$",
+        r"(?:a*b)+",
+        "(?=(a+))+",
+        r"(?:a|b)+c",
+        r".*.*.*x",
+        "(a+)?",
+        r"(a{1,2})+",
+        r"[^x]*[^x]*[^x]*y",
+    ]:
+        assert _unsafe_pattern_reason(pattern) is not None, pattern
+    for pattern in [
+        r"needle",
+        r"^def\s+\w+\(.*\):",
+        r"(foo|bar)",
+        r"(?:ab)+",
+        r"(?:[a-f]{2})+",
+        r"\d{4}-\d{2}",
+        r".*x.*y",
+        r"[a-z]+_[a-z]+",
+        r"https?://[^\s]+",
+        r"(eval|exec)_call",
+        r"sha256:[0-9a-f]{64}",
+        r"(?:critical|dangerous)",
+    ]:
+        assert _unsafe_pattern_reason(pattern) is None, pattern
+
+
+def test_code_search_rejects_unsafe_patterns_and_respects_its_deadline() -> None:
+    async def scenario() -> None:
+        workspace = AuditWorkspace(
+            cast(Database, None), cast(Any, None), "task:test",
+            limits=AuditWorkspaceLimits(search_seconds=0.0),
+        )
+        workspace._functions = [
+            AuditFunctionRef("version:test", source_function("function:a", "version:test", "a.py")),
+        ]
+        workspace._source_version_id = "version:test"
+
+        unsafe = await workspace.search(pattern="(a+)+", scope="source", limit=10)
+        assert unsafe["matches"] == []
+        assert unsafe["reason_code"] == "search_pattern_unsafe"
+
+        invalid = await workspace.search(pattern="([", scope="source", limit=10)
+        assert invalid["reason_code"] == "search_pattern_invalid"
+
+        bad_list = await AuditStepExecutor(workspace).execute(
+            ScheduledToolCall(
+                step_id="list",
+                tool=ToolRegistry(AUDIT_TOOLS).resolve("code-function-list", "1.0.0"),
+                input_refs=(),
+                task_id="task:test",
+                plan_id="plan:test",
+                arguments={"name_pattern": "(a+)+"},
+            )
+        )
+        assert bad_list["failed"] is True
+        assert bad_list["reason_code"] == "function_list.pattern_unsafe"
+
+        # A zero deadline stops the scan before the first file and says so
+        # instead of pretending the corpus was empty.
+        with patch.object(workspace, "_read_file_sync") as reader:
+            reader.side_effect = lambda version, path: "needle\n"
+            timed_out = await workspace.search(pattern="needle", scope="source", limit=10)
+        assert timed_out["matches"] == []
+        assert timed_out["reason_code"] == "search_deadline_exceeded"
+        assert reader.call_count == 0
+
+    asyncio.run(scenario())
+
+
+def test_long_lines_are_clipped_before_matching() -> None:
+    """A bounded prefix per line keeps quadratic patterns to milliseconds."""
+
+    async def scenario() -> None:
+        workspace = AuditWorkspace(cast(Database, None), cast(Any, None), "task:test")
+        workspace._functions = [
+            AuditFunctionRef("version:test", source_function("function:a", "version:test", "a.py")),
+        ]
+        workspace._source_version_id = "version:test"
+        with patch.object(workspace, "_read_file_sync") as reader:
+            reader.side_effect = lambda version, path: "a" * 5000 + "needle\n"
+            beyond = await workspace.search(pattern="needle", scope="source", limit=10)
+        assert beyond["matches"] == [], "a match past the clip window is not found"
+        with patch.object(workspace, "_read_file_sync") as reader:
+            reader.side_effect = lambda version, path: "needle\n"
+            within = await workspace.search(pattern="needle", scope="source", limit=10)
+        assert within["matches"][0]["line"] == 1
+        coverage = workspace.read_coverage()
+        assert coverage["search_hit_lines"] == 1
+        assert coverage["functions_read"] == 0
 
     asyncio.run(scenario())
 
@@ -788,6 +903,10 @@ def test_static_leads_are_leads_and_never_become_findings_by_themselves(
             assert outcome.degraded is False
             assert outcome.findings == ()
             assert [item["tool"] for item in outcome.investigation] == ["static-leads@1.0.0"]
+            # The outcome carries service-side coverage: the tools counted one
+            # indexed function and zero code reads for this lead-only look.
+            assert outcome.coverage["functions_read"] == 0
+            assert outcome.coverage["indexed_functions"] == 1
 
             async with database.transaction() as repositories:
                 findings = await repositories.findings.list_for_task(task_id)
@@ -994,6 +1113,90 @@ def test_an_audit_that_stops_early_never_reports_no_findings(
             assert len(runs) == 1
             assert runs[0]["status"] == "failed"
             assert runs[0]["failure"]["code"] == "loop_planning_round_budget_exhausted"
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_a_completed_but_unread_audit_falls_back_to_the_paged_pipeline(
+    persistence_database_url: str, tmp_path: Any
+) -> None:
+    """An agent that "finishes" without reading any code cannot end the audit.
+
+    An empty first proposal completes the loop, but with no function ever
+    opened there is nothing to substantiate a clean scan -- and the NO_FINDINGS
+    gate only checks that the audit job finished. The auditor therefore falls
+    back to the fixed paged pipeline, which delivers real coverage.
+    """
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(persistence_database_url))
+        real_path = "src/app.py"
+        suffix, version_id = await seed(
+            database,
+            lambda vid: [source_function(f"pair-fn:{uuid4().hex}", vid, real_path)],
+        )
+        async with database.transaction() as repositories:
+            functions = await repositories.pair.list_functions(version_id)
+        function_version = functions[0]["artifact_version_id"]
+
+        lazy = ScriptedPlanner(
+            [
+                proposal(
+                    [step("static-leads", {}, step_id="s1", refs=[function_version])],
+                    "glance at the leads",
+                )
+            ]
+        )
+        single_shot = ScriptedPlanner(
+            [
+                {
+                    "schema_version": "1.0.0",
+                    "summary": "fixed prompt",
+                    "findings": [
+                        {
+                            "cwe_id": "CWE-95",
+                            "title": "eval on request data",
+                            "severity": "high",
+                            "path": real_path,
+                            "start_line": 2,
+                            "rationale": "fixed-prompt finding",
+                            "constraint": "untrusted request data must not reach eval",
+                        }
+                    ],
+                }
+            ]
+        )
+        auditor = SemanticAuditor(
+            database,
+            single_shot,
+            store=LocalContentAddressedStore(tmp_path),
+            fact_loader=StubFactLoader(),
+            agent=CodeAuditAgent(
+                database,
+                lazy,
+                LocalContentAddressedStore(tmp_path),
+                fact_loader=StubFactLoader(),
+            ),
+        )
+        executor = SemanticAuditJobExecutor(database, auditor)
+        task_id = f"task:{suffix}"
+        try:
+            result = await executor.execute(
+                audit_job(f"job:audit:{suffix}", task_id), asyncio.Event()
+            )
+            assert result["status"] == "succeeded"
+            async with database.transaction() as repositories:
+                findings = await repositories.findings.list_for_task(task_id)
+                runs = await repositories.agent_runs.list_for_task(task_id)
+            # The recorded finding came from the fixed pipeline, not from the
+            # agent that never read anything.
+            assert len(findings) == 1
+            assert findings[0]["cwe_id"] == "CWE-95"
+            # The lazy agent's run is kept for the trail; the paged pipeline's
+            # run is the one that settled the job.
+            assert len(runs) == 2
         finally:
             await database.dispose()
 
