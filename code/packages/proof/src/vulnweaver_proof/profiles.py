@@ -22,6 +22,11 @@ from vulnweaver_sandbox_runner import SandboxCommandProfile
 PROOF_TOOL_NAME = "proof-tool"
 PROOF_TOOL_VERSION = "1.0.0"
 
+# ADR-038: the audit agent's sandbox command tool shares the proof image and
+# the Sandbox Runner client library, so its identity lives beside the client.
+AGENT_SANDBOX_TOOL_NAME = "agent-sandbox"
+AGENT_SANDBOX_TOOL_VERSION = "1.0.0"
+
 
 def proof_tool_spec(image_digest: str, resource_limits: ResourceBudget) -> ToolSpec:
     spec = cast(

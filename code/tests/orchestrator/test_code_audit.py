@@ -368,7 +368,7 @@ def audit_job(identifier: str, task_id: str) -> Job:
 
 def test_audit_tools_register_and_enforce_read_only_boundaries() -> None:
     registry = ToolRegistry(AUDIT_TOOLS)
-    assert len(registry) == 9
+    assert len(registry) == 10
     for spec in registry.snapshot():
         validate_contract("ToolSpec", cast(Any, spec))
         assert spec["approval_required"] is False

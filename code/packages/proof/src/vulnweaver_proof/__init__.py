@@ -21,7 +21,12 @@ from vulnweaver_proof.executor import (
     ProofJobExecutor,
     ProofRun,
 )
-from vulnweaver_proof.profiles import proof_command_profile, proof_tool_spec
+from vulnweaver_proof.profiles import (
+    AGENT_SANDBOX_TOOL_NAME,
+    AGENT_SANDBOX_TOOL_VERSION,
+    proof_command_profile,
+    proof_tool_spec,
+)
 from vulnweaver_proof.protection_analysis import ProtectionScan, scan_target_protections
 from vulnweaver_proof.scheduler import ProofJobScheduler
 from vulnweaver_proof.validation import (
@@ -43,6 +48,8 @@ from vulnweaver_proof.verifier import (
 )
 
 __all__ = [
+    "AGENT_SANDBOX_TOOL_NAME",
+    "AGENT_SANDBOX_TOOL_VERSION",
     "AutoExploitError",
     "AutoExploitScheduler",
     "ExecutionBundleError",

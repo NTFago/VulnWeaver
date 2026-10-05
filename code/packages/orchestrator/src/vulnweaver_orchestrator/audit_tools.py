@@ -58,6 +58,7 @@ ARTIFACT_FACTS_TOOL = "artifact-facts"
 STATIC_LEADS_TOOL = "static-leads"
 CRITICAL_LOGIC_TOOL = "critical-logic"
 SYMBOLIC_EXECUTE_TOOL = "symbolic-execute"
+SANDBOX_COMMAND_TOOL = "sandbox-command"
 FINDING_REPORT_TOOL = "finding-report"
 
 _MAX_LIST_LIMIT = 200
@@ -76,6 +77,13 @@ _MAX_STATIC_LEADS = 200
 # Runner. Both limits are enforced here, not in the model's plan.
 _MAX_SYMBOLIC_ADDRESSES = 16
 _MAX_SYMBOLIC_RUNS = 2
+# Agent-planned sandbox commands (ADR-038): bounded per attempt, anchored to an
+# indexed artifact version, and observed read-only. The audit wall-clock
+# deadline and the runner's request timeout remain the other stops.
+_MAX_SANDBOX_COMMANDS = 8
+# Mirrors the runner profile's bound: the trusted "cd /work && " prefix must
+# keep the combined shell operand under the runtime's 4096-char argv element.
+_MAX_SANDBOX_COMMAND_CHARS = 3600
 
 _ALL_KINDS = [kind.value for kind in (*SOURCE_KINDS, *BINARY_KINDS)]
 
@@ -209,6 +217,24 @@ AUDIT_TOOLS: tuple[JsonObject, ...] = (
     ),
     _spec(STATIC_LEADS_TOOL, _object({})),
     _spec(CRITICAL_LOGIC_TOOL, _object({})),
+    _spec(
+        SANDBOX_COMMAND_TOOL,
+        _object(
+            {
+                "artifact_version_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                },
+                "command": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": _MAX_SANDBOX_COMMAND_CHARS,
+                },
+            },
+            ("artifact_version_id", "command"),
+        ),
+    ),
     _spec(
         SYMBOLIC_EXECUTE_TOOL,
         _object(
@@ -441,6 +467,11 @@ class AuditWorkspace:
 
     def version_kind(self, version_id: str) -> ArtifactKind:
         return self._version_kinds.get(version_id, ArtifactKind.DERIVED)
+
+    def has_version(self, version_id: str) -> bool:
+        """True when the task's immutable index actually holds this version."""
+
+        return version_id in self._versions
 
     # -- tools -------------------------------------------------------------
 
@@ -912,6 +943,14 @@ class SymbolicRunner(Protocol):
     ) -> JsonObject: ...
 
 
+class SandboxCommandRunner(Protocol):
+    """Worker-backed agent command execution inside the Sandbox Runner (ADR-038)."""
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, command: str
+    ) -> JsonObject: ...
+
+
 class AuditStepExecutor:
     """Run one approved plan step against the workspace and bound its output."""
 
@@ -920,13 +959,16 @@ class AuditStepExecutor:
         workspace: AuditWorkspace,
         *,
         symbolic_runner: SymbolicRunner | None = None,
+        command_runner: SandboxCommandRunner | None = None,
         dynamic_verification_enabled: bool = False,
     ) -> None:
         self.workspace = workspace
         self.reported: list[ReportedFinding] = []
         self.symbolic_runner = symbolic_runner
+        self.command_runner = command_runner
         self.dynamic_verification_enabled = dynamic_verification_enabled
         self.symbolic_runs = 0
+        self.sandbox_commands = 0
 
     async def execute(self, call: ScheduledToolCall) -> JsonObject:
         name = call.tool["name"]
@@ -964,6 +1006,8 @@ class AuditStepExecutor:
                 return await self.workspace.critical_logic()
             if name == SYMBOLIC_EXECUTE_TOOL:
                 return await self._symbolic(call)
+            if name == SANDBOX_COMMAND_TOOL:
+                return await self._sandbox_command(call)
             if name == FINDING_REPORT_TOOL:
                 return self._report(call)
         except (ArtifactStoreError, OSError, KeyError, ValueError) as error:
@@ -1030,6 +1074,56 @@ class AuditStepExecutor:
                 "runs": self.symbolic_runs,
                 "dropped_addresses": dropped,
                 "observations": observations,
+            },
+        )
+
+    async def _sandbox_command(self, call: ScheduledToolCall) -> JsonObject:
+        """Run one agent-planned command inside the Sandbox Runner (ADR-038).
+
+        Every gate is enforced here, not in the model's plan: the deployment
+        must expose the runner, the project must have opted into dynamic
+        validation, the run budget is capped per attempt, and the command may
+        only anchor on an artifact version this task indexed. The command text
+        is untrusted input to a registered sandbox tool; the observation it
+        produces is diagnostic and never confirms a finding.
+        """
+
+        if self.command_runner is None:
+            return _failed(
+                "sandbox_command.no_runner_configured", "no sandbox runner is configured"
+            )
+        if not self.dynamic_verification_enabled:
+            return _failed(
+                "sandbox_command.dynamic_verification_disabled",
+                "the project has not enabled dynamic validation",
+            )
+        if self.sandbox_commands >= _MAX_SANDBOX_COMMANDS:
+            return _failed("sandbox_command.budget_exhausted", str(_MAX_SANDBOX_COMMANDS))
+        version_id = _optional_str(call.arguments, "artifact_version_id")
+        command = _optional_str(call.arguments, "command")
+        if not version_id or not command:
+            return _failed(
+                "sandbox_command.arguments_required",
+                "artifact_version_id and command are required",
+            )
+        if not self.workspace.has_version(version_id):
+            return _failed(
+                "sandbox_command.unanchored_version",
+                "the artifact version is not part of this task's index",
+            )
+        self.sandbox_commands += 1
+        observation = await self.command_runner(
+            version_id=version_id,
+            artifact_kind=self.workspace.version_kind(version_id),
+            command=command,
+        )
+        return cast(
+            JsonObject,
+            {
+                "executed": True,
+                "commands": self.sandbox_commands,
+                "artifact_version_id": version_id,
+                "observation": observation,
             },
         )
 
@@ -1190,6 +1284,7 @@ __all__ = [
     "FUNCTION_LIST_TOOL",
     "FUNCTION_READ_TOOL",
     "IN_PROCESS_DIGEST",
+    "SANDBOX_COMMAND_TOOL",
     "STATIC_LEADS_TOOL",
     "SYMBOLIC_EXECUTE_TOOL",
     "AuditFunctionRef",
@@ -1197,5 +1292,6 @@ __all__ = [
     "AuditWorkspace",
     "AuditWorkspaceLimits",
     "ReportedFinding",
+    "SandboxCommandRunner",
     "SymbolicRunner",
 ]
