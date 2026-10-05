@@ -26,6 +26,7 @@ from vulnweaver_orchestrator.audit_tools import (
     AuditWorkspace,
     AuditWorkspaceLimits,
     ReportedFinding,
+    SandboxCommandRunner,
     SymbolicRunner,
 )
 from vulnweaver_orchestrator.checkpoints import (
@@ -129,6 +130,7 @@ __all__ = [
     "CodeAuditAgent",
     "CodeAuditOutcome",
     "ReportedFinding",
+    "SandboxCommandRunner",
     "SymbolicRunner",
     "audit_run_id",
     "AuditBaseline",

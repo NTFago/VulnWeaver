@@ -8,6 +8,7 @@ import logging
 import os
 import signal
 import sys
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import FrameType
@@ -27,6 +28,8 @@ from vulnweaver_contracts import (
     JsonObject,
     JsonValue,
     ResourceBudget,
+    SandboxRequest,
+    SchemaVersion,
     Task,
     ToolIdentity,
 )
@@ -65,6 +68,7 @@ from vulnweaver_orchestrator import (
     ReversePlanningAgent,
     ReviewJobExecutor,
     ReviewJobScheduler,
+    SandboxCommandRunner,
     SemanticAuditJobExecutor,
     SemanticAuditor,
     SemanticAuditScheduler,
@@ -75,6 +79,8 @@ from vulnweaver_orchestrator import (
 from vulnweaver_pair import BinaryPairImporter, SourcePairImporter
 from vulnweaver_persistence import Database, DatabaseSettings, Repositories
 from vulnweaver_proof import (
+    AGENT_SANDBOX_TOOL_NAME,
+    AGENT_SANDBOX_TOOL_VERSION,
     AutoExploitScheduler,
     ExploitScriptGenerator,
     PocVerificationScheduler,
@@ -173,6 +179,24 @@ async def _run() -> None:
 
         config = resolve_deployment_config(settings, os.environ)
         binary_sandbox, binary_digest = await _binary_sandbox(config)
+        # ADR-038: the audit agent's sandbox command tool addresses the same
+        # runner; its digest is whatever the runner registered for the tool.
+        agent_command_digest = (
+            await binary_sandbox.tool_digest(AGENT_SANDBOX_TOOL_NAME, AGENT_SANDBOX_TOOL_VERSION)
+            if binary_sandbox is not None
+            else None
+        )
+        command_runner = (
+            _AgentSandboxRunner(
+                database,
+                store,
+                binary_sandbox,
+                agent_command_digest,
+                timeout_seconds=_agent_command_timeout(config),
+            )
+            if binary_sandbox is not None and agent_command_digest
+            else None
+        )
         symbolic_runner = (
             _SymbolicVerificationRunner(
                 database, store, binary_sandbox, binary_digest, limits=_binary_limits(config)
@@ -186,6 +210,7 @@ async def _run() -> None:
             store,
             settings,
             symbolic_runner=symbolic_runner,
+            command_runner=command_runner,
             audit_deadline_seconds=config.audit_deadline_seconds,
             fuzz_dispatcher=fuzz_dispatch_holder,
         )
@@ -396,6 +421,94 @@ class _SymbolicVerificationRunner:
         )
 
 
+class _AgentSandboxRunner:
+    """Run one agent-planned command inside the Sandbox Runner (ADR-038).
+
+    The audit agent plans the command and anchors it on an indexed artifact
+    version; the audit step executor has already enforced the project opt-in
+    and the per-attempt run cap. This runner only resolves the version's CAS
+    reference, addresses the registered agent-sandbox tool with the digest the
+    runner advertises, and reads the captured stdout/stderr back bounded — the
+    observation is diagnostic data for the agent, never a confirmation fact.
+    """
+
+    def __init__(
+        self,
+        database: Database,
+        store: LocalContentAddressedStore,
+        sandbox: SandboxRunnerClient,
+        image_digest: str,
+        *,
+        timeout_seconds: int = 600,
+        stdout_bytes: int = 4000,
+        stderr_bytes: int = 2000,
+    ) -> None:
+        self._database = database
+        self._store = store
+        self._sandbox = sandbox
+        self._image_digest = image_digest
+        self._timeout_seconds = timeout_seconds
+        self._stdout_bytes = stdout_bytes
+        self._stderr_bytes = stderr_bytes
+
+    async def __call__(
+        self, *, version_id: str, artifact_kind: ArtifactKind, command: str
+    ) -> JsonObject:
+        request = SandboxRequest(
+            schema_version=SchemaVersion.VALUE_1_0_0,
+            id=f"agent-sandbox:{uuid.uuid4().hex}",
+            tool_name=AGENT_SANDBOX_TOOL_NAME,
+            tool_version=AGENT_SANDBOX_TOOL_VERSION,
+            image_digest=self._image_digest,
+            artifact_kind=artifact_kind,
+            input_ref=await self._version_ref(version_id),
+            arguments={"command": command},
+            output_file_names=[],
+            resource_budget=cast(
+                ResourceBudget,
+                {
+                    "max_model_tokens": 0,
+                    "cpu_millis": 4000,
+                    "memory_bytes": 1024 * 1024 * 1024,
+                    "disk_bytes": 1024 * 1024 * 1024,
+                    "max_tool_concurrency": 1,
+                    "max_dynamic_runs": 1,
+                    "timeout_seconds": self._timeout_seconds,
+                },
+            ),
+            timeout_seconds=self._timeout_seconds,
+        )
+        result = await self._sandbox.run(request, asyncio.Event())
+        observation = cast(
+            JsonObject,
+            {
+                "status": str(result["status"]),
+                "exit_code": result["exit_code"],
+                "stdout": self._read_bounded(result["stdout_ref"], self._stdout_bytes),
+                "stderr": self._read_bounded(result["stderr_ref"], self._stderr_bytes),
+            },
+        )
+        failure = result["failure"]
+        if failure is not None:
+            observation["failure_code"] = str(failure["code"])
+        return observation
+
+    async def _version_ref(self, version_id: str) -> str:
+        async with self._database.transaction() as repositories:
+            version = await repositories.artifacts.get_version(version_id)
+        return str(version["object_ref"])
+
+    def _read_bounded(self, ref: str | None, cap_bytes: int) -> str | None:
+        if not ref:
+            return None
+        try:
+            with self._store.open(ref) as stream:
+                data = stream.read(cap_bytes)
+        except OSError:
+            return None
+        return data.decode("utf-8", errors="replace")
+
+
 class _ReversePlanningHook:
     """Bridge the orchestrator planning agent to the binary executor hook."""
 
@@ -455,6 +568,7 @@ def _model_executors(
     product_settings: dict[str, object],
     *,
     symbolic_runner: object | None = None,
+    command_runner: object | None = None,
     audit_deadline_seconds: int | None = None,
     fuzz_dispatcher: object | None = None,
 ) -> tuple[ReviewJobExecutor, SemanticAuditJobExecutor | None, ModelGateway | None]:
@@ -537,6 +651,7 @@ def _model_executors(
             # takeover continues the audit instead of restarting it (ADR-029).
             checkpoint_store=PostgresCheckpointStore(database),
             symbolic_runner=cast(SymbolicRunner | None, symbolic_runner),
+            command_runner=cast(SandboxCommandRunner | None, command_runner),
             budget=_agent_loop_budget(audit_deadline_seconds),
         ),
     )
@@ -729,6 +844,21 @@ def _poc_scheduler(
         # Candidate-stage PoC verification shares the resolved proof image gate.
         return None
     return PocVerificationScheduler(database, image_digest=image_digest)
+
+
+def _agent_command_timeout(config: ResolvedDeploymentConfig) -> int:
+    """Per-command sandbox stop for agent-planned commands (ADR-038).
+
+    An operational stop, not a quota: a hung command still ends the request,
+    and the audit's wall-clock deadline bounds the whole investigation.
+    """
+
+    raw = os.environ.get("AGENT_SANDBOX_TIMEOUT_SECONDS", "").strip()
+    try:
+        value = int(raw) if raw else 600
+    except ValueError:
+        return 600
+    return max(1, min(3600, value))
 
 
 def _auto_exploit_scheduler(

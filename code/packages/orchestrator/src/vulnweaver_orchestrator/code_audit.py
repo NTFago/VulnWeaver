@@ -60,6 +60,7 @@ from vulnweaver_orchestrator.audit_tools import (
     AuditWorkspace,
     AuditWorkspaceLimits,
     ReportedFinding,
+    SandboxCommandRunner,
     SymbolicRunner,
 )
 from vulnweaver_orchestrator.checkpoints import CheckpointStore
@@ -107,6 +108,19 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "behaviour you cannot settle by reading: it runs in the sandbox, at most "
     "twice per audit, only when the project enabled dynamic validation, and its "
     "result is an observation to reason about — never a finding on its own.\n\n"
+    "Sandbox commands. sandbox-command runs one shell command for you inside a "
+    "disposable, network-disabled sandbox: use it to extract the sample, exercise "
+    "a parser, decode an obfuscation chain, or diff crafted against control "
+    "input when reading alone cannot settle the question. Anchor it on the "
+    "indexed artifact version you are investigating; the sample mounts read-only "
+    "at /input/input.bin, /work is your writable work directory, there is no "
+    "network, stdout/stderr come back bounded, and the whole command must fit "
+    "one line (write longer scripts to /work first, then execute them). Only "
+    "the project's dynamic-validation opt-in opens this tool and each audit has "
+    "a small per-attempt run budget — spend commands on experiments whose "
+    "outcome will change what you report. Everything you observe is diagnostic "
+    "evidence for your reasoning; it never confirms a finding by itself and "
+    "never authorizes an exploit.\n\n"
     "Reporting discipline. Report a candidate with finding-report as soon as the "
     "code you have read substantiates it; findings saved for the end are findings "
     "lost to a deadline. Choose the most specific applicable CWE, and make the "
@@ -210,6 +224,7 @@ class CodeAuditAgent:
         limits: AuditWorkspaceLimits | None = None,
         fact_loader: SourceReviewFactLoader | None = None,
         symbolic_runner: SymbolicRunner | None = None,
+        command_runner: SandboxCommandRunner | None = None,
         dynamic_verification_enabled: bool = False,
         checkpoint_store: CheckpointStore | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -220,6 +235,7 @@ class CodeAuditAgent:
         self._store = store
         self._sink = sink
         self._symbolic_runner = symbolic_runner
+        self._command_runner = command_runner
         self._dynamic_verification_enabled = dynamic_verification_enabled
         self._checkpoints = checkpoint_store
         # No planning-round cap: the investigation ends when the model reports
@@ -261,6 +277,7 @@ class CodeAuditAgent:
         executor = AuditStepExecutor(
             workspace,
             symbolic_runner=self._symbolic_runner,
+            command_runner=self._command_runner,
             dynamic_verification_enabled=(
                 self._dynamic_verification_enabled or await self._project_opt_in(task_id)
             ),

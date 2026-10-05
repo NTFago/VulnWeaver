@@ -35,6 +35,11 @@ from vulnweaver_sandbox_runner import (
 )
 from vulnweaver_tool_runtime import ToolRegistry, ToolSpecLoader
 
+from vulnweaver_sandbox_runner_service.agent_sandbox import (
+    agent_sandbox_command_profile,
+    agent_sandbox_tool_spec,
+)
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -177,6 +182,12 @@ def _build_runner_state(config: ResolvedDeploymentConfig | None) -> _RunnerState
     if proof_digest:
         registry.register(proof_tool_spec(proof_digest, _resource_budget(config)))
         profiles.append(proof_command_profile(proof_ref, proof_digest))
+        # ADR-038: the agent sandbox command tool shares the pinned proof image;
+        # one more trusted profile, no new image.
+        registry.register(
+            agent_sandbox_tool_spec(proof_digest, _agent_sandbox_resource_budget(config))
+        )
+        profiles.append(agent_sandbox_command_profile(proof_ref, proof_digest))
     if fuzz_digest:
         registry.register(afl_casr_tool_spec(fuzz_digest, _fuzz_resource_budget(config)))
         profiles.append(afl_casr_command_profile(fuzz_ref, fuzz_digest))
@@ -207,6 +218,19 @@ def _resource_budget(config: ResolvedDeploymentConfig | None) -> ResourceBudget:
         "max_tool_concurrency": 1,
         "max_dynamic_runs": 1,
         "timeout_seconds": _budget_value(config, "proof", "timeout_seconds") or 120,
+    }
+
+
+def _agent_sandbox_resource_budget(config: ResolvedDeploymentConfig | None) -> ResourceBudget:
+    # Inert bookkeeping (ADR-025); the request timeout is the operational stop.
+    return {
+        "max_model_tokens": 0,
+        "cpu_millis": 4000,
+        "memory_bytes": 1024 * 1024 * 1024,
+        "disk_bytes": 1024 * 1024 * 1024,
+        "max_tool_concurrency": 1,
+        "max_dynamic_runs": 1,
+        "timeout_seconds": _budget_value(config, "proof", "timeout_seconds") or 600,
     }
 
 
