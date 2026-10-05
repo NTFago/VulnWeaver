@@ -5,8 +5,9 @@ artifact version the task imported; binary functions are keyed to the image
 the analysis actually read -- the unpacked one when the input was packed --
 which is the parent of the binary-import Job's ``binary-analysis-result``
 output and therefore absent from ``task.artifact_version_ids``.  Every audit
-entry point must resolve this same scope, or packed samples silently audit
-zero functions.
+entry point and the API workbench must resolve this same scope, or packed
+samples silently audit zero functions and the workbench shows a different
+world than the auditor anchored against.
 """
 
 from __future__ import annotations
@@ -51,9 +52,11 @@ def choose_pair_scope(
 async def pair_version_scope(repositories: Repositories, task: Task) -> list[str]:
     """Task artifact versions plus the versions binary analysis actually read.
 
-    Mirrors the API workbench's ``_pair_scopes``: the derived analysis version
-    is recovered from the binary-import Job's ``binary-analysis-result`` output
-    via its ``parent_version_id``.
+    The single scope resolution for every consumer: the audit entry points and
+    the API workbench. The derived analysis version is recovered from the
+    binary-import Job's ``binary-analysis-result`` output via its
+    ``parent_version_id``; the sorted result fixes the traversal order so the
+    workbench and the auditor cannot drift onto different version sets.
     """
 
     resolved = list(task["artifact_version_ids"])
