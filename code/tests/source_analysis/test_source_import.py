@@ -400,6 +400,71 @@ def test_indexer_marks_binary_unsupported_and_too_large_files(tmp_path: Path) ->
     assert limited_statuses["large.py"] == "too_large"
 
 
+def test_source_executor_fails_loudly_on_archive_without_source_files(
+    tmp_path: Path,
+) -> None:
+    """A binary-only release upload must fail the import, not the audit.
+
+    A 7-Zip Linux release tarball (ELF binaries plus HTML manual) uploaded as
+    source_archive once cascaded into a silent zero-function audit that
+    reported a misleading "no findings" (2026-10-05).
+    """
+
+    store = LocalContentAddressedStore(tmp_path / "artifacts")
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, content in (
+            ("7zz", bytes([0x7F]) + b"ELF" + bytes(64)),
+            ("7zzs", bytes([0x7F]) + b"ELF" + bytes(64)),
+            ("readme.txt", b"7-Zip reference release"),
+            ("MANUAL/index.htm", b"<html><body>manual</body></html>"),
+        ):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    payload = buffer.getvalue()
+    stored = store.put_stream(io.BytesIO(payload), max_bytes=len(payload))
+    job = cast(
+        Job,
+        {
+            "schema_version": SchemaVersion.VALUE_1_0_0,
+            "id": "job:t12-nosource",
+            "task_id": "task:t12-nosource",
+            "kind": JobKind.IMPORT,
+            "tool": {
+                "name": "source-import",
+                "version": "1.0.0",
+                "image_digest": "sha256:" + "1" * 64,
+            },
+            "arguments": {"artifact_version_id": "artifact-version:t12-nosource"},
+            "input_refs": [stored.object_ref],
+            "status": JobStatus.RUNNING,
+            "idempotency_key": "job:t12-nosource-key",
+            "resource_budget": budget(),
+            "retry_policy": {
+                "max_attempts": 2,
+                "backoff_seconds": 1.0,
+                "retryable_failure_kinds": [],
+            },
+            "attempt": 1,
+            "lease": None,
+            "failure": None,
+            "created_at": "2026-09-08T10:00:00Z",
+            "updated_at": "2026-09-08T10:00:00Z",
+        },
+    )
+    executor = SourceImportExecutor(cast(Database, object()), store, scratch_root=tmp_path)
+    result = asyncio.run(executor.execute(job, asyncio.Event()))
+    assert result["status"] is JobStatus.FAILED
+    assert result["failure"] is not None
+    assert result["failure"]["code"] == "source_import.no_supported_source_files"
+    assert result["failure"]["kind"].value == "validation"
+    assert result["failure"]["retryable"] is False
+    statuses = result["failure"]["details"]["file_statuses"]
+    assert statuses == {"binary": 2, "unsupported": 2}
+    assert result["failure"]["details"]["files"] == 4
+
+
 def test_source_executor_returns_actionable_archive_failure(tmp_path: Path) -> None:
     store = LocalContentAddressedStore(tmp_path / "artifacts")
     payload = b"not an archive"

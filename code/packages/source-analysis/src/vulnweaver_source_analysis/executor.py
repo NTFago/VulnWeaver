@@ -202,6 +202,21 @@ class SourceImportExecutor:
             )
             if cancellation.is_set():
                 return _cancelled_result(job["id"])
+            if not result["capability_profile"]["languages"]:
+                # An archive that yields no supported source file cannot become
+                # a meaningful audit. Failing here beats cascading into a
+                # silent zero-function audit that reports a misleading
+                # "no findings" (observed with a binary-only release upload,
+                # 2026-10-05).
+                statuses: dict[str, int] = {}
+                for record in result["files"]:
+                    status = str(record["parse_status"])
+                    statuses[status] = statuses.get(status, 0) + 1
+                raise SourceImportError(
+                    "no_supported_source_files",
+                    "source archive contained no supported source files",
+                    details={"files": summary.files, "file_statuses": statuses},
+                )
             derived_version_id = _derived_identifier("artifact-version", job["id"])
             derived_artifact_id = _derived_identifier("artifact", job["id"])
             index_object_ref = await self._publish_index(
