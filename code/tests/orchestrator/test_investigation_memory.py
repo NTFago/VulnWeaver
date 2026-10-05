@@ -117,16 +117,37 @@ def test_memory_write_and_latest_round_trip(
 
 
 class _ContextCapturingPlanner:
-    """Finish immediately, but record the messages the loop sent."""
+    """Read one function, then finish, recording the messages the loop sent."""
 
-    def __init__(self) -> None:
+    def __init__(self, function_id: str, refs: list[str]) -> None:
         self.captured: list[str] = []
+        self._function_id = function_id
+        self._refs = refs
 
     async def complete_structured(self, **kwargs: object) -> ModelCallResult:
         messages = cast(list[dict[str, str]], kwargs["messages"])
         self.captured.append(json.dumps(messages, ensure_ascii=False))
+        if self._function_id:
+            output: dict[str, object] = {
+                "schema_version": "1.0.0",
+                "steps": [
+                    {
+                        "step_id": "read",
+                        "tool_name": "code-function-read",
+                        "tool_version": "1.0.0",
+                        "input_refs": list(self._refs),
+                        "arguments": {"function_id": self._function_id},
+                        "expected_output_types": ["json"],
+                        "reason": "ground the audit in code",
+                    }
+                ],
+                "rationale": "read the function before concluding",
+            }
+            self._function_id = ""
+        else:
+            output = {"schema_version": "1.0.0", "steps": [], "rationale": "nothing to do"}
         return ModelCallResult(
-            {"schema_version": "1.0.0", "steps": [], "rationale": "nothing to do"},
+            output,
             _run_stub(),
             None,
             "endpoint-memory",
@@ -154,7 +175,11 @@ def test_prior_memory_reaches_the_next_audit_context(
     persistence_database_url: str, tmp_path: Any
 ) -> None:
     async def scenario() -> None:
-        from tests.orchestrator.test_code_audit import seed, source_function
+        from tests.orchestrator.test_code_audit import (
+            StubFactLoader,
+            seed,
+            source_function,
+        )
 
         database = Database(DatabaseSettings(persistence_database_url))
         store = LocalContentAddressedStore(tmp_path / "cas")
@@ -185,8 +210,14 @@ def test_prior_memory_reaches_the_next_audit_context(
             )
         )
 
-        planner = _ContextCapturingPlanner()
-        agent = CodeAuditAgent(database, planner, store)
+        # The planner reads the one indexed function before concluding; an
+        # investigation that never reads code falls back instead of settling.
+        async with database.transaction() as repositories:
+            functions = await repositories.pair.list_functions(version_id)
+        planner = _ContextCapturingPlanner(
+            functions[0]["id"], [functions[0]["artifact_version_id"]]
+        )
+        agent = CodeAuditAgent(database, planner, store, fact_loader=StubFactLoader())
         auditor = SemanticAuditor(database, planner, store=store, agent=agent)
         await auditor.audit(_audit_job(f"job:memory:{suffix}", task_id))
 
