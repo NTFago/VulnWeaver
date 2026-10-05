@@ -208,6 +208,8 @@ export const failureCodeLabels: Record<string, string> = {
   "source_import.index_validation_failed": "源码索引校验失败",
   "source_import.persistence_unavailable": "工件存储暂不可用",
   "source_import.persistence_integrity_failed": "工件存储完整性校验失败",
+  "source_import.no_supported_source_files":
+    "归档中没有任何受支持的源码文件：请上传源码归档，二进制发行包请改用二进制导入",
   "source_import.environment_error": "源码导入执行环境错误",
   "binary_import.invalid_input_count": "二进制导入的输入数量不正确",
   "binary_import.invalid_arguments": "二进制导入参数不合法",
