@@ -310,8 +310,9 @@ class SourceImportExecutor:
         Extracting and tree-sitter indexing a repository is pure CPU work whose
         output is deterministic; a later task over the same upload in the same
         project adopts the earlier index version and only schedules its own
-        static-analysis Jobs (their findings are per-task evidence). PAIR rows
-        are keyed to the shared input version, so they carry over untouched.
+        static-analysis Jobs (their findings are per-task evidence). The adopted
+        graph is re-keyed onto this task's upload version, because every
+        consumer scopes pair rows to the task's own artifact versions.
         Any lookup trouble degrades to the ordinary full import.
         """
 
@@ -336,6 +337,58 @@ class SourceImportExecutor:
                         result = self._load_index_document(version["object_ref"])
                         if result is None:
                             continue
+                        if self._pair_importer is not None:
+                            # The audit scopes pair rows to this task's own
+                            # artifact versions, so the adopted index must be
+                            # re-keyed onto the new upload version: returning
+                            # only the prior version left the task with a
+                            # zero-function index and a misleading instant
+                            # "no findings" (same-project re-upload of the
+                            # FFmpeg/7-Zip acceptance archives, 2026-10-06).
+                            # import_graph is insert-or-verify, so re-importing
+                            # the deterministic document is idempotent.
+                            reanchored = dict(result)
+                            reanchored["artifact_version_id"] = parent_version_id
+                            try:
+                                await self._pair_importer.import_source_result(
+                                    cast(SourceImportResult, reanchored),
+                                    raw_object_ref=version["object_ref"],
+                                    tool=_tool_identity(job),
+                                    created_at=job["created_at"],
+                                )
+                            except IntegrityError as error:
+                                return _failed_result(
+                                    job["id"],
+                                    code="source_import.persistence_integrity_failed",
+                                    kind=FailureKind.INTERNAL,
+                                    message=(
+                                        "reused source index was read but graph "
+                                        "persistence failed"
+                                    ),
+                                    retryable=False,
+                                    details={"exception_type": type(error).__name__},
+                                )
+                            except PersistenceError as error:
+                                return _failed_result(
+                                    job["id"],
+                                    code=f"source_import.{error.code}",
+                                    kind=FailureKind.INTERNAL,
+                                    message=error.message,
+                                    retryable=error.retryable,
+                                    details=error.details,
+                                )
+                            except SQLAlchemyError as error:
+                                return _failed_result(
+                                    job["id"],
+                                    code="source_import.persistence_unavailable",
+                                    kind=FailureKind.ENVIRONMENT,
+                                    message=(
+                                        "reused source index was read but graph "
+                                        "persistence failed"
+                                    ),
+                                    retryable=True,
+                                    details={"exception_type": type(error).__name__},
+                                )
                         if self._static_scheduler is not None:
                             await self._static_scheduler.schedule(job, result, version_id)
                         LOGGER.info(

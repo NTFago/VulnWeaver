@@ -263,3 +263,91 @@ def test_source_executor_falls_back_without_a_matching_reuse_key(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_source_reuse_rekeys_pair_graph_onto_the_new_upload_version(
+    persistence_database_url: str, tmp_path: Path
+) -> None:
+    """A same-project re-upload must get its own pair graph, not an empty audit.
+
+    The first real-world evaluation resubmitted an identical archive into the
+    same project: the reuse adopted the prior index document and never keyed
+    pair rows to the new upload version, so the audit scoped to that version
+    saw zero functions and settled an instant, misleading "no findings"
+    (FFmpeg/7-Zip acceptance archives, 2026-10-06).
+    """
+
+    from vulnweaver_pair import SourcePairImporter
+
+    async def scenario() -> None:
+        marker = uuid.uuid4().hex[:12]
+        database = Database(DatabaseSettings(persistence_database_url))
+        store = LocalContentAddressedStore(tmp_path / "artifacts")
+        archive = zip_bytes(
+            {
+                "src/main.c": b"int main(){return helper();}",
+                "src/helper.c": b"int helper(){return 1;}\n",
+            }
+        ).getvalue()
+        stored = store.put_stream(io.BytesIO(archive), max_bytes=len(archive))
+        try:
+            version_id, task_id, project_id = await _seed(
+                database, f"src-rekey-a-{marker}", stored.object_ref
+            )
+            scheduler = _SpyStaticScheduler()
+            executor = SourceImportExecutor(
+                database,
+                store,
+                scratch_root=tmp_path,
+                static_scheduler=cast(StaticAnalysisScheduler, scheduler),
+                pair_importer=SourcePairImporter(database),
+            )
+            first_job = _import_job(
+                f"job:src-rekey-a-{marker}", task_id, version_id, stored.object_ref
+            )
+            first = await executor.execute(first_job, asyncio.Event())
+            assert first["status"] is JobStatus.SUCCEEDED
+            first_index_version = first["produced_artifact_version_ids"][0]
+            await _settle_prior_import(database, first_job, [first_index_version])
+
+            # A NEW upload of the same bytes into the same project: the task's
+            # artifact version differs from the first task's, and reuse kicks in.
+            second_suffix = f"src-rekey-b-{marker}"
+            version_b = f"artifact-version:{second_suffix}"
+            async with database.transaction() as repositories:
+                await repositories.artifacts.add(
+                    artifact(
+                        f"artifact:{second_suffix}",
+                        project_id=project_id,
+                        current_version_id=version_b,
+                    )
+                )
+                await repositories.artifacts.add_version(
+                    artifact_version(version_b, artifact_id=f"artifact:{second_suffix}")
+                )
+                await repositories.tasks.create(
+                    task(
+                        f"task:{second_suffix}",
+                        project_id=project_id,
+                        artifact_version_ids=[version_b],
+                        idempotency_key=f"task:{second_suffix}-key",
+                    )
+                )
+            second_job = _import_job(
+                f"job:{second_suffix}", f"task:{second_suffix}", version_b, stored.object_ref
+            )
+            second = await executor.execute(second_job, asyncio.Event())
+            assert second["status"] is JobStatus.SUCCEEDED
+            assert second["produced_artifact_version_ids"] == [first_index_version]
+
+            # The pair graph must exist under the new upload version too: the
+            # audit scopes to the task's own artifact versions.
+            async with database.transaction() as repositories:
+                first_functions = await repositories.pair.list_functions(version_id)
+                second_functions = await repositories.pair.list_functions(version_b)
+            assert len(first_functions) > 0
+            assert len(second_functions) == len(first_functions)
+        finally:
+            await database.dispose()
+
+    asyncio.run(scenario())
