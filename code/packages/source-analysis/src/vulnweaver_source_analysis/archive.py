@@ -56,6 +56,18 @@ class _Readable(Protocol):
     def read(self, size: int = -1, /) -> bytes: ...
 
 
+def _decode_text(raw: bytes) -> str | None:
+    """Decode one member as UTF-8 text, or None when it is not text."""
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if "\x00" in text:
+        return None
+    return text
+
+
 class SourceImportError(ValueError):
     def __init__(
         self,
@@ -166,6 +178,62 @@ class SafeArchiveImporter:
                 "unsupported_archive",
                 "source input must be a valid ZIP or TAR archive",
                 details={"filename": filename or "unknown"},
+            ) from error
+
+    def iter_member_texts(self, source: BinaryIO) -> Iterable[tuple[str, str]]:
+        """Yield ``(path, text)`` for every decodable text member in one pass.
+
+        One full metadata validation followed by one sequential decompression
+        pass, so a caller that wants many members of a large compressed archive
+        pays the stream cost once instead of once per member. Members that are
+        not UTF-8 text (wrong encoding, NUL bytes) are skipped rather than
+        failing the pass — a direct ``read_member`` of such a member still
+        raises its structured error — and every path/safety constraint of
+        ``extract`` applies unchanged.
+        """
+
+        source.seek(0)
+        if zipfile.is_zipfile(source):
+            source.seek(0)
+            with zipfile.ZipFile(source) as archive:
+                entries = [self._zip_entry(info) for info in archive.infolist()]
+                selected, _, _ = self._validate_entries(entries)
+                for entry in selected:
+                    if entry.is_directory:
+                        continue
+                    info = entry.source
+                    assert isinstance(info, zipfile.ZipInfo)
+                    with archive.open(info, "r") as stream:
+                        text = _decode_text(self._read_file(entry, stream, entry.size))
+                    if text is not None:
+                        yield entry.name, text
+            return
+        source.seek(0)
+        try:
+            with tarfile.open(fileobj=source, mode="r:*") as archive:
+                entries = [self._tar_entry(member) for member in archive.getmembers()]
+                selected, _, _ = self._validate_entries(entries)
+                for entry in selected:
+                    if entry.is_directory:
+                        continue
+                    member = entry.source
+                    assert isinstance(member, tarfile.TarInfo)
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise SourceImportError(
+                            "missing_archive_member",
+                            "regular TAR member has no readable content",
+                            details={"path": entry.name},
+                        )
+                    with stream:
+                        text = _decode_text(self._read_file(entry, stream, entry.size))
+                    if text is not None:
+                        yield entry.name, text
+        except (tarfile.ReadError, EOFError) as error:
+            raise SourceImportError(
+                "unsupported_archive",
+                "source input must be a valid ZIP or TAR archive",
+                details={},
             ) from error
 
     def _extract_zip(self, source: BinaryIO, root: Path, archive_bytes: int) -> ImportSummary:
