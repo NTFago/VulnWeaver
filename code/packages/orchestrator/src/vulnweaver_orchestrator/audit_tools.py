@@ -66,6 +66,7 @@ FINDING_REPORT_TOOL = "finding-report"
 _MAX_LIST_LIMIT = 200
 _MAX_SEARCH_LIMIT = 100
 _MAX_SEARCH_FILES = 200
+_MAX_INVENTORY_GROUPS = 80
 _MAX_TEXT_CHARS = 16_384
 _MAX_SOURCE_PATTERN_CHARS = 256
 # Model-supplied regexes are matched against whole source lines, and one
@@ -495,6 +496,37 @@ class AuditWorkspace:
         """True when the task's immutable index actually holds this version."""
 
         return version_id in self._versions
+
+    def path_inventory(self) -> JsonObject:
+        """Source function counts grouped by containing directory.
+
+        The context the agent starts from must show the shape of the tree, not
+        just a function total: an audit that never learns ``CPP/7zip/Archive/``
+        has thirty format handlers reads exactly one parser and honestly
+        concludes there is nothing else to look at. Groups are capped (largest
+        first) so even a monorepo stays a bounded context entry; ``total_dirs``
+        records what the cap hid.
+        """
+
+        groups: dict[str, int] = {}
+        for ref in self._functions:
+            source = ref.function["source_location"]
+            if source is None:
+                continue
+            parts = source["path"].rsplit("/", 1)
+            directory = parts[0] if len(parts) == 2 else "(root)"
+            groups[directory] = groups.get(directory, 0) + 1
+        ranked = sorted(groups.items(), key=lambda item: (-item[1], item[0]))
+        return cast(
+            JsonObject,
+            {
+                "total_dirs": len(groups),
+                "groups": [
+                    {"path": path, "functions": count}
+                    for path, count in ranked[:_MAX_INVENTORY_GROUPS]
+                ],
+            },
+        )
 
     # -- tools -------------------------------------------------------------
 
