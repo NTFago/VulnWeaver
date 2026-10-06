@@ -1525,3 +1525,107 @@ def test_soft_round_limit_scales_with_index_size() -> None:
         30_000,
     )
     assert unbounded.soft_round_limit is None
+
+
+def test_function_read_line_anchor_pages_through_long_functions() -> None:
+    """A 190-line parser must be readable past its first 80 lines.
+
+    vobsub_read_header spans lines 750-935 with the defect write near 868; an
+    excerpt anchored at the function start shows lines 740-819 and no tool
+    could ever see the sink. The line argument re-anchors the window inside
+    the function and the read proof covers the lines actually shown.
+    """
+
+    class CapturingLoader:
+        def __init__(self) -> None:
+            self.locations: list[JsonObject] = []
+
+        async def load(self, task_id: str, location: JsonObject) -> SourceReviewFacts:
+            self.locations.append(dict(location))
+            start = int(location["start_line"])
+            end = min(start + 79, int(location["end_line"]))
+            text = "".join(f"line {n}\n" for n in range(start, end + 1))
+            return SourceReviewFacts(
+                True,
+                None,
+                SourceExcerpt(
+                    artifact_version_id="version:test",
+                    archive_ref="cas://sha256/" + "a" * 64,
+                    archive_digest="sha256:" + "a" * 64,
+                    path=str(location["path"]),
+                    file_digest="sha256:" + "c" * 64,
+                    start_line=start,
+                    end_line=end,
+                    text=text,
+                    truncated=end < int(location["end_line"]),
+                ),
+            )
+
+    loader = CapturingLoader()
+
+    async def scenario() -> None:
+        workspace = AuditWorkspace(
+            cast(Database, None), cast(Any, None), "task:test",
+            fact_loader=cast(Any, loader),
+        )
+        workspace._functions = [
+            AuditFunctionRef(
+                "version:test", source_function("function:vobsub", "version:test", "mpeg.c")
+            )
+        ]
+        workspace._functions_by_id = {
+            "function:vobsub": workspace._functions[0]
+        }
+        workspace._source_version_id = "version:test"
+        workspace._functions[0].function["source_location"]["start_line"] = 750
+        workspace._functions[0].function["source_location"]["end_line"] = 935
+
+        default_read = await workspace.read_function(
+            function_id="function:vobsub", path=None, start_line=None
+        )
+        assert default_read["excerpt_start_line"] == 750
+        assert default_read["excerpt_end_line"] == 829
+
+        shifted = await workspace.read_function(
+            function_id="function:vobsub", path=None, start_line=None, line=860
+        )
+        assert loader.locations[-1]["start_line"] == 860
+        assert loader.locations[-1]["end_line"] == 935
+        assert shifted["excerpt_start_line"] == 860
+        assert "line 868" in shifted["code"]
+
+        # The read proof must cover the shifted window, authorizing a finding
+        # anchored inside it while leaving unshown lines unauthorized.
+        assert workspace.has_read_reported_code(path="mpeg.c", start_line=868, address=None)
+        beyond = 939
+        assert not workspace.has_read_reported_code(path="mpeg.c", start_line=beyond, address=None)
+
+    asyncio.run(scenario())
+
+
+def test_function_read_line_anchor_rejects_out_of_range_and_binary() -> None:
+    workspace = AuditWorkspace(cast(Database, None), cast(Any, None), "task:test")
+    source_ref = AuditFunctionRef(
+        "version:test", source_function("function:fn", "version:test", "a.c")
+    )
+    source_ref.function["source_location"]["start_line"] = 750
+    source_ref.function["source_location"]["end_line"] = 935
+    binary_ref = AuditFunctionRef("version:test", binary_function("function:bin", "version:test"))
+    workspace._functions = [source_ref, binary_ref]
+    workspace._functions_by_id = {"function:fn": source_ref, "function:bin": binary_ref}
+    workspace._source_version_id = "version:test"
+
+    async def scenario() -> None:
+        outside = await workspace.read_function(
+            function_id="function:fn", path=None, start_line=None, line=936
+        )
+        assert outside["failed"] is True
+        assert outside["reason_code"] == "function_read.line_outside_function"
+
+        on_binary = await workspace.read_function(
+            function_id="function:bin", path=None, start_line=None, line=100
+        )
+        assert on_binary["failed"] is True
+        assert on_binary["reason_code"] == "function_read.line_offset_binary"
+
+    asyncio.run(scenario())

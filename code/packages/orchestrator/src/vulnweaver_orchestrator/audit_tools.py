@@ -187,6 +187,11 @@ AUDIT_TOOLS: tuple[JsonObject, ...] = (
                     "function_id": {"type": "string", "minLength": 1, "maxLength": 512},
                     "path": {"type": "string", "minLength": 1, "maxLength": 1024},
                     "start_line": {"type": "integer", "minimum": 1},
+                    # Excerpt window anchor inside the function: a real parser
+                    # is far longer than one excerpt, and an audit that cannot
+                    # see past line 80 of a 190-line function reads only its
+                    # prologue. Must fall inside the resolved function.
+                    "line": {"type": "integer", "minimum": 1},
                 },
             },
         ),
@@ -570,6 +575,7 @@ class AuditWorkspace:
         function_id: str | None,
         path: str | None,
         start_line: int | None,
+        line: int | None = None,
     ) -> JsonObject:
         ref = await self._resolve_function(
             function_id=function_id, path=path, start_line=start_line
@@ -577,14 +583,27 @@ class AuditWorkspace:
         if ref is None:
             return {"found": False, "reason_code": "function_not_indexed"}
         function = ref.function
-        code, code_kind, truncated, read_start, read_end = await self._function_code(ref)
+        source = function["source_location"]
+        if line is not None:
+            if source is None:
+                return _failed("function_read.line_offset_binary", "line anchors a source window")
+            if not source["start_line"] <= line <= source["end_line"]:
+                return _failed(
+                    "function_read.line_outside_function",
+                    "the excerpt anchor must fall inside the indexed function",
+                    {
+                        "line": line,
+                        "start_line": source["start_line"],
+                        "end_line": source["end_line"],
+                    },
+                )
+        code, code_kind, truncated, read_start, read_end = await self._function_code(ref, line)
         if code:
             self._functions_read.add(function["id"])
-            source = function["source_location"]
             if source is not None and code_kind == "source" and read_start is not None:
                 self._read_source_lines.update(
-                    (ref.version_id, source["path"], line)
-                    for line in range(read_start, (read_end or read_start) + 1)
+                    (ref.version_id, source["path"], line_number)
+                    for line_number in range(read_start, (read_end or read_start) + 1)
                 )
             elif source is None:
                 self._read_binary_functions.add(function["id"])
@@ -598,8 +617,11 @@ class AuditWorkspace:
                 "code_truncated": truncated,
             }
         )
-        if function["source_location"] is not None:
-            summary["end_line"] = function["source_location"]["end_line"]
+        if source is not None:
+            summary["end_line"] = source["end_line"]
+            if read_start is not None:
+                summary["excerpt_start_line"] = read_start
+                summary["excerpt_end_line"] = read_end
         return summary
 
     async def search(self, *, pattern: str, scope: str, limit: int) -> JsonObject:
@@ -825,9 +847,15 @@ class AuditWorkspace:
         return None
 
     async def _function_code(
-        self, ref: AuditFunctionRef
+        self, ref: AuditFunctionRef, line: int | None = None
     ) -> tuple[str, str, bool, int | None, int | None]:
-        """Return code, kind, truncation and the exact source excerpt interval."""
+        """Return code, kind, truncation and the exact source excerpt interval.
+
+        ``line`` shifts the excerpt window's anchor inside the function, so a
+        long parser can be paged through instead of showing only its prologue;
+        the excerpt length is unchanged and the read proof still records the
+        exact lines that were shown.
+        """
 
         budget = self.limits.max_text_chars
         text = pseudocode_text(ref.function, limit=budget + 1)
@@ -838,7 +866,10 @@ class AuditWorkspace:
             return "", "unavailable", False, None, None
         loader = self.fact_loader
         assert loader is not None
-        facts = await loader.load(self.task_id, cast(JsonObject, dict(source)))
+        location = cast(JsonObject, dict(source))
+        if line is not None:
+            location["start_line"] = line
+        facts = await loader.load(self.task_id, location)
         if not facts.available or facts.excerpt is None:
             return "", "unavailable", False, None, None
         excerpt = facts.excerpt
@@ -1127,6 +1158,7 @@ class AuditStepExecutor:
                     function_id=_optional_str(arguments, "function_id"),
                     path=_optional_str(arguments, "path"),
                     start_line=_optional_int(arguments, "start_line"),
+                    line=_optional_int(arguments, "line"),
                 )
             if name == CODE_SEARCH_TOOL:
                 return await self.workspace.search(
@@ -1534,8 +1566,11 @@ def _bounded_int(
     return max(low, min(high, value))
 
 
-def _failed(code: str, detail: str) -> JsonObject:
-    return {"failed": True, "reason_code": code, "detail": detail}
+def _failed(code: str, detail: str, extra: JsonObject | None = None) -> JsonObject:
+    result: JsonObject = {"failed": True, "reason_code": code, "detail": detail}
+    if extra:
+        result.update(extra)
+    return result
 
 
 __all__ = [
