@@ -291,7 +291,10 @@ class CodeAuditAgent:
         self._budget = budget or AgentLoopBudget(
             max_plan_rejections=4,
             max_steps_per_plan=8,
-            max_observation_chars=8_192,
+            # 16 KiB: an excerpt of a real parser function (220 lines) must
+            # survive the per-step observation bound, or the model reads a
+            # prologue that ends before the sink does.
+            max_observation_chars=16_384,
             soft_round_limit=6,
             # Wall clock is the loop's only hard backstop (ADR-027).  The
             # course-era calibrations (30 minutes, then two hours) starved

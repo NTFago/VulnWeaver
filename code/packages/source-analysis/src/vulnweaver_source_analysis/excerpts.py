@@ -20,8 +20,14 @@ class ExcerptLimits:
     file_bytes: int = 1024 * 1024
     max_files: int = 20_000
     context_lines: int = 10
-    max_lines: int = 80
-    text_bytes: int = 16 * 1024
+    # A real-world parser function dwarfs a course-sized excerpt: the FFmpeg
+    # vobsub_read_header spans 186 lines and its out-of-bounds write sits near
+    # the end — an 80-line prologue-only window makes the sink invisible to
+    # every read tool. 220 lines covers the vast majority of C/C++ functions
+    # in one excerpt; anything longer is paged through by the audit's
+    # line-anchored read.
+    max_lines: int = 220
+    text_bytes: int = 32 * 1024
     max_cached_text_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:

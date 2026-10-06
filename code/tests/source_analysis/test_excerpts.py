@@ -311,3 +311,21 @@ def test_over_budget_member_is_not_cached_but_read(tmp_path: Path) -> None:
         reader.read_file(version, "src/big.py")
     assert reader.read_file(version, "src/small.py").text == "small = 1\n"
 
+
+
+def test_long_parser_function_fits_one_default_excerpt(tmp_path: Path) -> None:
+    """The vobsub_read_header shape: a 186-line function whose sink sits near
+    its end. A prologue-only window made the sink invisible to every read
+    tool; the default budget must cover such a function in one excerpt."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    body = "".join(f"line {n}\n" for n in range(1, 187)).encode()
+    version = registered(store, _tar_bytes({"src/parse.c": body}), max_bytes=1024 * 1024)
+
+    excerpt = SourceExcerptReader(store).read(
+        version, location(path="src/parse.c", start=1, end=186)
+    )
+
+    assert excerpt.start_line == 1 and excerpt.end_line == 186
+    assert not excerpt.truncated
+    assert excerpt.text.endswith("line 186\n")
