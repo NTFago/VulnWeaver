@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import stat
 import tarfile
@@ -195,3 +196,118 @@ def test_archive_symlink_and_traversal_rejected(tmp_path: Path) -> None:
     for payload in [output.getvalue(), archive_bytes({"../escape.py": b"x"})]:
         with pytest.raises(SourceImportError):
             SourceExcerptReader(store).read(registered(store, payload), location())
+
+
+class _CountingStore:
+    """Proxy that counts archive-open calls to expose per-read stream costs."""
+
+    def __init__(self, inner: LocalContentAddressedStore) -> None:
+        self._inner = inner
+        self.open_calls = 0
+
+    def open(self, object_ref: str):
+        self.open_calls += 1
+        return self._inner.open(object_ref)
+
+    def verify(self, object_ref: str):
+        return self._inner.verify(object_ref)
+
+    def put_stream(self, stream, *, max_bytes: int):
+        return self._inner.put_stream(stream, max_bytes=max_bytes)
+
+
+def _tar_bytes(members: dict[str, bytes]) -> bytes:
+    return archive_bytes(members, tar=True)
+
+
+def test_archive_over_two_thousand_members_reads_members(tmp_path: Path) -> None:
+    """Regression: member reads must cover every archive the importer accepts.
+
+    The excerpt reader once passed a 2000-file budget into whole-archive
+    metadata validation, so real-world trees like FFmpeg (10k+ files) failed
+    every code read and search with ``too_many_files`` — the audit could not
+    see a single line of source. The default cap now matches the import
+    ceiling, and this archive shape (2500 members) pins the old failure.
+    """
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    members = {
+        f"pkg/file{i}.c": f"int f{i}(void) {{ return {i}; }}\n".encode() for i in range(2500)
+    }
+    members["pkg/anchor.c"] = b"int anchor(void) { return 1; }\n"
+    version = registered(store, _tar_bytes(members), max_bytes=4 * 1024 * 1024)
+
+    reader = SourceExcerptReader(store)
+    excerpt = reader.read(version, location(path="pkg/anchor.c", start=1, end=1))
+    assert excerpt.text == "int anchor(void) { return 1; }\n"
+
+    whole = reader.read_file(version, "pkg/file7.c")
+    assert whole.text == "int f7(void) { return 7; }\n"
+    assert whole.file_digest == "sha256:" + hashlib.sha256(whole.text.encode()).hexdigest()
+
+
+def test_second_member_read_does_not_reopen_the_archive(tmp_path: Path) -> None:
+    """The warm pass pays the decompression cost once per archive, not per member."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    counting = _CountingStore(store)
+    members = {f"src/file{i}.py": f"value = {i}\n".encode() for i in range(300)}
+    version = registered(counting, _tar_bytes(members), max_bytes=1024 * 1024)
+
+    reader = SourceExcerptReader(counting)
+    first = reader.read_file(version, "src/file1.py")
+    opens_after_first = counting.open_calls
+    second = reader.read_file(version, "src/file2.py")
+
+    assert first.text == "value = 1\n"
+    assert second.text == "value = 2\n"
+    assert opens_after_first == 1
+    assert counting.open_calls == 1
+
+
+def test_iter_member_texts_yields_text_and_skips_binary_members(tmp_path: Path) -> None:
+    from vulnweaver_source_analysis.archive import ImportLimits, SafeArchiveImporter
+
+    payload = _tar_bytes(
+        {
+            "src/keep.py": b"keep = True\n",
+            "src/also.py": b"also = 'yes'\n",
+            "src/binary.bin": b"\xff\xfe\x00\x01",
+            "src/broken_text.py": b"broken\x00text",
+        }
+    )
+    importer = SafeArchiveImporter(ImportLimits())
+    yielded = dict(importer.iter_member_texts(io.BytesIO(payload)))
+    assert yielded == {"src/keep.py": "keep = True\n", "src/also.py": "also = 'yes'\n"}
+
+
+def test_text_cache_budget_exhaustion_still_reads_members(tmp_path: Path) -> None:
+    """Members beyond the cache budget keep taking the strict per-member path."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    counting = _CountingStore(store)
+    members = {f"src/file{i}.py": f"value = {i}\n".encode() for i in range(50)}
+    version = registered(counting, _tar_bytes(members), max_bytes=1024 * 1024)
+
+    reader = SourceExcerptReader(
+        counting, limits=ExcerptLimits(max_cached_text_bytes=1)
+    )
+    excerpt = reader.read_file(version, "src/file10.py")
+    assert excerpt.text == "value = 10\n"
+    # Nothing fit the cache, so each member read reopens the archive.
+    assert counting.open_calls >= 1
+
+
+def test_over_budget_member_is_not_cached_but_read(tmp_path: Path) -> None:
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    big = b"x" * 64
+    version = registered(
+        store,
+        _tar_bytes({"src/big.py": big, "src/small.py": b"small = 1\n"}),
+        max_bytes=1024 * 1024,
+    )
+    reader = SourceExcerptReader(store, limits=ExcerptLimits(file_bytes=32))
+    with pytest.raises(SourceImportError, match="budget"):
+        reader.read_file(version, "src/big.py")
+    assert reader.read_file(version, "src/small.py").text == "small = 1\n"
+

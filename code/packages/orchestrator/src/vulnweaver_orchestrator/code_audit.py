@@ -18,7 +18,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Protocol, cast
 
@@ -81,17 +81,17 @@ _MAX_CHECKPOINT_JOURNAL = 512
 
 AUDIT_AGENT_OBJECTIVE = (
     "Audit this task's indexed code for location-anchored security defects. Work "
-    "like an investigator: start from the leads and the function index, open the "
-    "functions that matter, follow the call chain, and search for the sources and "
-    "sinks involved. Reporting is the deliverable, not the searching: an "
-    "investigation that reports nothing has failed this task. Report a candidate "
-    "once the code you read substantiates it — you are the discovery stage, and "
-    "an independent review plus a confirmation policy downstream exist precisely "
-    "to filter false positives, so do not withhold a substantiated candidate out "
-    "of doubt. Never report a location you did not read. Once you have reported "
-    "every candidate the code supports and have no specific unresolved lead left "
-    "to name, stop: return zero steps rather than opening another line of "
-    "enquiry. More browsing will not add findings."
+    "like an investigator: start from the leads, the path inventory and the "
+    "function index, open the functions that matter, follow the call chain, and "
+    "search for the sources and sinks involved. Reporting is the deliverable, not "
+    "the searching: an investigation that reports nothing has failed this task. "
+    "Report a candidate once the code you read substantiates it — you are the "
+    "discovery stage, and an independent review plus a confirmation policy "
+    "downstream exist precisely to filter false positives, so do not withhold a "
+    "substantiated candidate out of doubt. Never report a location you did not "
+    "read. Once you have reported every candidate the code supports and have no "
+    "specific unresolved lead or unexplored attacker-facing subsystem left to "
+    "name, stop: return zero steps rather than opening another line of enquiry."
 )
 
 AUDIT_AGENT_INSTRUCTIONS = (
@@ -100,6 +100,15 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "follow edges with call-neighborhood; locate patterns with code-search. "
     "static-leads is unverified scanner output: confirm or refute each lead from "
     "code you read yourself, never from the lead text alone.\n\n"
+    "Coverage before depth. If indexed_functions is large (a real project), the "
+    "file tree is far bigger than your rounds can read one file at a time — "
+    "start from indexed_paths to see which subsystems exist, and spend the early "
+    "rounds sampling the attacker-facing ones breadth-first (format handlers, "
+    "parsers, protocol decoders, permission checks): one or two reads per "
+    "candidate subsystem before you deep-dive anywhere. Clearing one file "
+    "clears one file. 'The .7z parser is hardened' says nothing about the NTFS "
+    "handler two directories over, and 'no finding in the first file I opened' "
+    "is never a reason to stop.\n\n"
     "Tool contracts. Every step must copy input_refs verbatim from "
     "context.artifact_refs — an invented reference makes the Policy Engine reject "
     "the whole plan and wastes a round. Keep step_id unique inside one plan, and "
@@ -150,12 +159,34 @@ AUDIT_AGENT_INSTRUCTIONS = (
     "interrupted and is continuing: treat those steps as already executed, do not "
     "repeat them, and continue from the last observation.\n\n"
     "Stop when done. Once every substantiated candidate is reported and you can "
-    "name no specific unresolved lead, return zero steps and explain why you are "
-    "finished. More browsing will not add findings."
+    "name no specific unresolved lead and no unexplored attacker-facing "
+    "subsystem, return zero steps and explain which parts of the tree you "
+    "sampled and why the rest is lower value. A finished audit is justified by "
+    "coverage, not by fatigue."
 )
 
 _MAX_INVESTIGATION_STEPS = 24
 _MAX_INVESTIGATION_FIELD_CHARS = 400
+
+# The soft round limit is convergence pressure, not a hard stop (ADR-027: the
+# wall-clock deadline remains the only hard backstop). Six rounds of eight
+# steps cannot even sample the subsystems of a real-world tree — the first
+# real-world source audit spent all six in one parser file and honestly
+# concluded "nothing else to look at" — so large indices get a higher floor.
+_LARGE_INDEX_FUNCTIONS = 2_000
+_LARGE_INDEX_SOFT_ROUND_LIMIT = 16
+
+
+def _effective_budget(budget: AgentLoopBudget, function_count: int) -> AgentLoopBudget:
+    """Raise the soft round limit when the index is too large for the default."""
+
+    if (
+        function_count > _LARGE_INDEX_FUNCTIONS
+        and budget.soft_round_limit is not None
+        and budget.soft_round_limit < _LARGE_INDEX_SOFT_ROUND_LIMIT
+    ):
+        return replace(budget, soft_round_limit=_LARGE_INDEX_SOFT_ROUND_LIMIT)
+    return budget
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,12 +303,12 @@ class CodeAuditAgent:
         input_refs: tuple[str, ...] = (),
         prior_investigations: Sequence[Mapping[str, object]] = (),
     ) -> CodeAuditOutcome:
-        budget = self._budget
         workspace = AuditWorkspace(
             self._database, self._store, task_id,
             limits=self._limits, fact_loader=self._fact_loader,
         )
         await workspace.load()
+        budget = _effective_budget(self._budget, workspace.function_count)
         executor = AuditStepExecutor(
             workspace,
             symbolic_runner=self._symbolic_runner,
@@ -457,6 +488,7 @@ class CodeAuditAgent:
                 "source": source_count,
                 "binary": binary_count,
             },
+            "indexed_paths": workspace.path_inventory(),
             "static_leads": await workspace.static_leads(),
             "critical_logic": await workspace.critical_logic(),
             "binary_summary": await workspace.artifact_facts(kind="summary"),

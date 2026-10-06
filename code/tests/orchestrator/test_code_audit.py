@@ -1442,3 +1442,86 @@ def test_workspace_and_auditor_agree_on_the_anchor_versions(
             lambda vid: [binary_function(f"pair-fn:{uuid4().hex}", vid)],
         )
     )
+
+
+def test_path_inventory_groups_functions_by_directory_and_caps() -> None:
+    """The agent's opening context must show the tree's shape, not just a total.
+
+    The first real-world source audit spent every round inside one parser file
+    because nothing in its context said the tree had thirty other format
+    handlers; the inventory exists so breadth-first sampling is possible.
+    """
+
+    from vulnweaver_orchestrator.audit_tools import _MAX_INVENTORY_GROUPS
+
+    workspace = AuditWorkspace(cast(Database, None), cast(Any, None), "task:test")
+    workspace._functions = [
+        AuditFunctionRef(
+            "version:test",
+            source_function(f"pair-fn:a{i}", "version:test", f"libavformat/file{i}.c"),
+        )
+        for i in range(3)
+    ] + [
+        AuditFunctionRef(
+            "version:test",
+            source_function(
+                f"pair-fn:b{i}", "version:test", f"CPP/7zip/Archive/handler{i}.cpp"
+            ),
+        )
+        for i in range(2)
+    ] + [
+        AuditFunctionRef(
+            "version:test", source_function("pair-fn:root", "version:test", "main.py")
+        ),
+    ]
+
+    inventory = workspace.path_inventory()
+
+    assert inventory["total_dirs"] == 3
+    groups = {group["path"]: group["functions"] for group in inventory["groups"]}
+    assert groups == {"libavformat": 3, "CPP/7zip/Archive": 2, "(root)": 1}
+    # Largest group first, so the cap drops the least-used directories.
+    assert inventory["groups"][0]["path"] == "libavformat"
+
+    workspace._functions = [
+        AuditFunctionRef(
+            "version:test",
+            source_function(f"pair-fn:g{i}", "version:test", f"dir{i:03d}/file.c"),
+        )
+        for i in range(_MAX_INVENTORY_GROUPS + 5)
+    ]
+    capped = workspace.path_inventory()
+    assert len(capped["groups"]) == _MAX_INVENTORY_GROUPS
+    assert capped["total_dirs"] == _MAX_INVENTORY_GROUPS + 5
+
+
+def test_soft_round_limit_scales_with_index_size() -> None:
+    """Six rounds cannot sample a real-world tree; large indices raise the floor.
+
+    The soft limit stays convergence pressure — a budget that already asks for
+    more rounds is respected, and None (deadline-only) is never given a cap.
+    """
+
+    from vulnweaver_orchestrator.code_audit import _LARGE_INDEX_SOFT_ROUND_LIMIT, _effective_budget
+
+    default = AgentLoopBudget(
+        max_plan_rejections=4, max_steps_per_plan=8, soft_round_limit=6
+    )
+
+    small = _effective_budget(default, 1_500)
+    assert small.soft_round_limit == default.soft_round_limit
+
+    large = _effective_budget(default, 9_872)
+    assert large.soft_round_limit == _LARGE_INDEX_SOFT_ROUND_LIMIT
+
+    explicit = _effective_budget(
+        AgentLoopBudget(max_plan_rejections=4, max_steps_per_plan=8, soft_round_limit=20),
+        30_000,
+    )
+    assert explicit.soft_round_limit == 20
+
+    unbounded = _effective_budget(
+        AgentLoopBudget(max_plan_rejections=4, max_steps_per_plan=8, soft_round_limit=None),
+        30_000,
+    )
+    assert unbounded.soft_round_limit is None

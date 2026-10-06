@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -17,22 +18,29 @@ class ExcerptLimits:
     archive_bytes: int = 512 * 1024 * 1024
     extracted_bytes: int = 512 * 1024 * 1024
     file_bytes: int = 1024 * 1024
-    max_files: int = 2000
+    max_files: int = 20_000
     context_lines: int = 10
     max_lines: int = 80
     text_bytes: int = 16 * 1024
+    max_cached_text_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:
         if not 1 <= self.archive_bytes <= 512 * 1024 * 1024:
             raise ValueError("excerpt archive budget is outside the safe range")
         if not 1 <= self.file_bytes <= self.extracted_bytes <= 512 * 1024 * 1024:
             raise ValueError("excerpt extraction budget is outside the safe range")
+        # Member reads validate metadata across the whole archive, so this cap
+        # must cover every archive the import path accepts (ImportLimits's
+        # max_files): a smaller cap would make every code read of a large but
+        # legitimately imported tree fail with too_many_files.
         if not 1 <= self.max_files <= 20_000:
             raise ValueError("excerpt file count is outside the safe range")
         if not 0 <= self.context_lines < self.max_lines <= 500:
             raise ValueError("excerpt line budget is outside the safe range")
         if not 1 <= self.text_bytes <= 128 * 1024:
             raise ValueError("excerpt text budget is outside the safe range")
+        if not 1 <= self.max_cached_text_bytes <= 512 * 1024 * 1024:
+            raise ValueError("excerpt text cache budget is outside the safe range")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +88,52 @@ class SourceExcerptReader:
                 max_file_bytes=self._limits.extracted_bytes,
             )
         )
+        # Warm text cache: one sequential pass per archive materializes every
+        # decodable member (within the byte budgets) so a large compressed
+        # archive is not re-decompressed for every function read or search hit.
+        # Keyed by object_ref, which is content-addressed and immutable.
+        self._text_cache: dict[tuple[str, str], str] = {}
+        self._warmed: set[str] = set()
+        self._warm_lock = threading.Lock()
+
+    def _warm_text_cache(self, version: ArtifactVersion) -> None:
+        """Materialize decodable members of one archive into the cache, once.
+
+        Members over ``file_bytes`` or beyond the total cache budget are left
+        out on purpose: they keep taking the strict per-member path with its
+        exact error codes. The lock matters because audit code search runs the
+        reader inside a worker thread while excerpt loads may come from
+        ``asyncio.to_thread`` on the same instance.
+        """
+
+        object_ref = version["object_ref"]
+        if object_ref in self._warmed:
+            return
+        with self._warm_lock:
+            if object_ref in self._warmed:
+                return
+            cached = 0
+            try:
+                with self._store.open(object_ref) as source:
+                    for path, text in self._importer.iter_member_texts(source):
+                        if len(text) > self._limits.file_bytes:
+                            continue
+                        if cached + len(text) > self._limits.max_cached_text_bytes:
+                            break
+                        self._text_cache[(object_ref, path)] = text
+                        cached += len(text)
+            except SourceImportError:
+                # A member the warm pass cannot agree on must not poison every
+                # read: keep whatever was cached and let the affected members
+                # take the strict per-member path with its exact error codes.
+                pass
+            self._warmed.add(object_ref)
+
+    def _cached_text(self, version: ArtifactVersion, path: str) -> str | None:
+        object_ref = version["object_ref"]
+        if object_ref not in self._warmed:
+            self._warm_text_cache(version)
+        return self._text_cache.get((object_ref, path))
 
     def read(self, version: ArtifactVersion, location: SourceLocation) -> SourceExcerpt:
         validate_contract("SourceLocation", location)
@@ -163,6 +217,10 @@ class SourceExcerptReader:
             self._verified_archives[archive_key] = archive_size
         if archive_size > self._limits.archive_bytes:
             raise SourceImportError("excerpt_archive_too_large", "Source archive exceeds budget")
+
+        cached = self._cached_text(version, relative.as_posix())
+        if cached is not None:
+            return cached, "sha256:" + hashlib.sha256(cached.encode("utf-8")).hexdigest()
 
         try:
             with self._store.open(version["object_ref"]) as source:
