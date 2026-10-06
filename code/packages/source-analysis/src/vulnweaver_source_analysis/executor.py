@@ -346,9 +346,24 @@ class SourceImportExecutor:
                             # "no findings" (same-project re-upload of the
                             # FFmpeg/7-Zip acceptance archives, 2026-10-06).
                             # import_graph is insert-or-verify, so re-importing
-                            # the deterministic document is idempotent.
+                            # the deterministic document is idempotent. Every
+                            # version reference is re-anchored — the top-level
+                            # id AND each function's source location, or the
+                            # excerpt loader reads the locations as outside
+                            # the task's inputs and no code is ever shown
+                            # (observed in the same round).
                             reanchored = dict(result)
                             reanchored["artifact_version_id"] = parent_version_id
+                            reanchored["functions"] = [
+                                {
+                                    **function,
+                                    "location": {
+                                        **function["location"],
+                                        "artifact_version_id": parent_version_id,
+                                    },
+                                }
+                                for function in result["functions"]
+                            ]
                             try:
                                 await self._pair_importer.import_source_result(
                                     cast(SourceImportResult, reanchored),

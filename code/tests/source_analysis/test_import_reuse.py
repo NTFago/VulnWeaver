@@ -341,12 +341,19 @@ def test_source_reuse_rekeys_pair_graph_onto_the_new_upload_version(
             assert second["produced_artifact_version_ids"] == [first_index_version]
 
             # The pair graph must exist under the new upload version too: the
-            # audit scopes to the task's own artifact versions.
+            # audit scopes to the task's own artifact versions. Each function's
+            # source location must be re-anchored as well, or the excerpt
+            # loader reads it as outside the task's inputs and the audit sees
+            # a full function list it can never actually read.
             async with database.transaction() as repositories:
                 first_functions = await repositories.pair.list_functions(version_id)
                 second_functions = await repositories.pair.list_functions(version_b)
             assert len(first_functions) > 0
             assert len(second_functions) == len(first_functions)
+            for function in second_functions:
+                location = function["source_location"]
+                assert location["artifact_version_id"] == version_b
+                assert location["artifact_version_id"] in {version_b}
         finally:
             await database.dispose()
 
