@@ -35,6 +35,15 @@ def main() -> int:
     parser.add_argument("archive", type=Path, help="path to the source archive to upload")
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     parser.add_argument("--project-name", default=None)
+    parser.add_argument(
+        "--project-id",
+        default=None,
+        help="reuse an existing project (keeps the investigation-memory chain alive); "
+        "omit to create a fresh one",
+    )
+    parser.add_argument(
+        "--kind", default="source_archive", help="artifact kind (source_archive/elf/pe)"
+    )
     parser.add_argument("--poll-seconds", type=float, default=30.0)
     parser.add_argument("--max-polls", type=int, default=1440)
     parser.add_argument("--submit-only", action="store_true", help="exit after task creation")
@@ -56,25 +65,29 @@ def main() -> int:
         jobs_response = client.get(f"/api/tasks/{task_id}/jobs")
         jobs_response.raise_for_status()
     else:
-        project = client.post(
-            "/api/projects",
-            headers={**headers, "Idempotency-Key": f"proj-rw-{stamp}"},
-            json={
-                "schema_version": "1.0.0",
-                "name": args.project_name or f"realworld-{stamp}",
-                "input_scope": ["local-sample"],
-                "permission_mode": "request_permission",
-                # Dynamic-verification opt-in: fuzz oracle, sandbox-command.
-                "exploit_validation_enabled": True,
-            },
-        )
-        project.raise_for_status()
-        project_id = project.json()["id"]
-        print("project:", project_id)
+        if args.project_id:
+            project_id = args.project_id
+            print("reusing project:", project_id)
+        else:
+            project = client.post(
+                "/api/projects",
+                headers={**headers, "Idempotency-Key": f"proj-rw-{stamp}"},
+                json={
+                    "schema_version": "1.0.0",
+                    "name": args.project_name or f"realworld-{stamp}",
+                    "input_scope": ["local-sample"],
+                    "permission_mode": "request_permission",
+                    # Dynamic-verification opt-in: fuzz oracle, sandbox-command.
+                    "exploit_validation_enabled": True,
+                },
+            )
+            project.raise_for_status()
+            project_id = project.json()["id"]
+            print("project:", project_id)
 
         upload = client.post(
             f"/api/projects/{project_id}/artifacts",
-            params={"kind": "source_archive"},
+            params={"kind": args.kind},
             headers={
                 **headers,
                 "Idempotency-Key": f"upload-rw-{stamp}",
