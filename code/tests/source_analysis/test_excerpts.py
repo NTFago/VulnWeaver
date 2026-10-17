@@ -329,3 +329,47 @@ def test_long_parser_function_fits_one_default_excerpt(tmp_path: Path) -> None:
     assert excerpt.start_line == 1 and excerpt.end_line == 186
     assert not excerpt.truncated
     assert excerpt.text.endswith("line 186\n")
+
+
+def test_form_feed_does_not_shift_excerpt_lines(tmp_path: Path) -> None:
+    """Regression (excerpt/tool line-number double standard): a form feed on
+    its own line used to add a phantom line via str.splitlines, shifting every
+    excerpt line number against tree-sitter and semgrep/cppcheck diagnostics.
+    The review then read the wrong code while read-proof accounting still
+    passed. Both sides now count \n only."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    parts = [f"L{n}\n" for n in range(1, 41)]
+    parts.insert(4, "\x0c\n")  # form-feed-only line between L4 and L5
+    version = registered(
+        store, _tar_bytes({"src/parse.c": "".join(parts).encode()}), max_bytes=1024 * 1024
+    )
+
+    # \n-only numbering: L20 sits on line 21 (L4 is line 4, the FF is line 5).
+    excerpt = SourceExcerptReader(store).read(
+        version, location(path="src/parse.c", start=21, end=21)
+    )
+
+    assert excerpt.start_line == 11 and excerpt.end_line == 31
+    assert "L20\n" in excerpt.text
+
+
+def test_review_sized_budget_covers_span_wider_than_default(tmp_path: Path) -> None:
+    """The review is one shot per finding with no follow-up window shift, so
+    its reader must cover a real-world parser span end to end: a 299-line
+    finding location under the audit's 220-line window was reviewed with the
+    tail cut off and honestly downgraded to unverifiable."""
+
+    store = LocalContentAddressedStore(tmp_path / "cas")
+    body = "".join(f"line {n}\n" for n in range(1, 300)).encode()
+    version = registered(store, _tar_bytes({"src/parse.c": body}), max_bytes=1024 * 1024)
+
+    reader = SourceExcerptReader(
+        store, limits=ExcerptLimits(max_lines=500, text_bytes=128 * 1024)
+    )
+    excerpt = reader.read(version, location(path="src/parse.c", start=1, end=299))
+
+    assert excerpt.start_line == 1 and excerpt.end_line == 299
+    assert not excerpt.truncated
+    assert excerpt.text.startswith("line 1\n")
+    assert excerpt.text.endswith("line 299\n")

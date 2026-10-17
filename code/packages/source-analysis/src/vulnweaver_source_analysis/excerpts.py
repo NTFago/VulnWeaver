@@ -13,6 +13,31 @@ from vulnweaver_contracts import ArtifactVersion, SourceLocation, validate_contr
 from vulnweaver_source_analysis.archive import ImportLimits, SafeArchiveImporter, SourceImportError
 
 
+def _split_lines_keep_newline(text: str) -> list[str]:
+    """Split on ``\\n`` only, keeping each terminator.
+
+    ``str.splitlines`` also breaks on form feed, vertical tab, NEL and Unicode
+    line separators, which silently shifts excerpt line numbers against every
+    tool-side line reference: tree-sitter positions and semgrep/cppcheck
+    diagnostics all count ``\\n`` only. Real-world C/C++ sources contain form
+    feeds, so the excerpt side must use the same single standard.
+    """
+
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def _count_lines(text: str) -> int:
+    """Count lines under the ``\\n``-only standard used by ``_split_lines_keep_newline``."""
+
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
 @dataclass(frozen=True, slots=True)
 class ExcerptLimits:
     archive_bytes: int = 512 * 1024 * 1024
@@ -147,7 +172,7 @@ class SourceExcerptReader:
         if location["end_line"] < location["start_line"]:
             raise SourceImportError("excerpt_invalid_location", "Source line range is invalid")
         text, _ = self._read_text_member(version, location["artifact_version_id"], path)
-        lines = text.splitlines(keepends=True)
+        lines = _split_lines_keep_newline(text)
         anchor = location["start_line"]
         if anchor > len(lines) or location["end_line"] > len(lines):
             raise SourceImportError("excerpt_line_missing", "Source line range is unavailable")
@@ -159,7 +184,7 @@ class SourceExcerptReader:
         truncated = end < desired_end or len(encoded) > self._limits.text_bytes
         if len(encoded) > self._limits.text_bytes:
             selected_text = encoded[: self._limits.text_bytes].decode("utf-8", errors="ignore")
-            end = start + len(selected_text.splitlines()) - 1
+            end = start + _count_lines(selected_text) - 1
         if not selected_text:
             raise SourceImportError("excerpt_text_budget", "Source text cannot fit the byte budget")
         return SourceExcerpt(

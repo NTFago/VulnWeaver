@@ -15,7 +15,12 @@ from vulnweaver_contracts import (
     validate_contract,
 )
 from vulnweaver_persistence import Database, EntityNotFound
-from vulnweaver_source_analysis import SourceExcerpt, SourceExcerptReader, SourceImportError
+from vulnweaver_source_analysis import (
+    ExcerptLimits,
+    SourceExcerpt,
+    SourceExcerptReader,
+    SourceImportError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +35,15 @@ class SourceReviewFactLoader:
         self, database: Database, store: ArtifactStore, *, reader: SourceExcerptReader | None = None
     ) -> None:
         self._database = database
-        self._reader = reader or SourceExcerptReader(store)
+        # The review is one shot per finding: unlike the audit's line-anchored
+        # read there is no follow-up window shift, so a span wider than the
+        # window would be reviewed blind. The reader's validated ceiling (500
+        # lines / 128 KiB) covers real-world parser functions end to end; the
+        # audit path keeps its own narrower, paged budget.
+        self._reader = reader or SourceExcerptReader(
+            store,
+            limits=ExcerptLimits(max_lines=500, text_bytes=128 * 1024),
+        )
 
     async def load(self, task_id: str, location: JsonObject) -> SourceReviewFacts:
         try:
