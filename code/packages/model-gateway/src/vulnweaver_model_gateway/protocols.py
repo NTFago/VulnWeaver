@@ -89,6 +89,12 @@ def _anthropic_request(
         # Claude family maximum; providers reject a value they do not support.
         "max_tokens": endpoint.max_output_tokens or 128_000,
         "messages": chat_messages,
+        # Long-horizon reasoning models routinely think for minutes before the
+        # first byte; CDN edges in front of providers kill idle non-streaming
+        # requests at ~2 minutes (observed as HTTP 554). Streaming keeps bytes
+        # flowing from the first event, and the transport reassembles the full
+        # response body so parsing below is unchanged.
+        "stream": True,
     }
     if system_parts:
         payload["system"] = "\n\n".join(system_parts)
