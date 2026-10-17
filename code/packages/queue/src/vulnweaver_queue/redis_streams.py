@@ -348,6 +348,92 @@ class RedisStreamsClient:
             original_message_id=message.message_id,
         )
 
+    async def quarantine(
+        self,
+        stream: str,
+        group: str,
+        message_id: str,
+        *,
+        reason: str,
+    ) -> DeadLetteredMessage | None:
+        """Preserve one undecodable entry in the dead-letter stream and ACK it.
+
+        A poisoned entry can never pass contract validation, so no consumer
+        can ever process it: without quarantine it is re-delivered forever and
+        crash-loops every consumer in the group. The raw entry is preserved
+        verbatim (with the decode ``reason``) for post-mortem, and the pending
+        entry is ACKed atomically. Returns ``None`` when the entry no longer
+        exists in the stream (already trimmed or handled).
+        """
+
+        self._ensure_owned_stream(stream)
+        _validate_consumer_name(group, "group")
+        try:
+            entries = await self._client.xrange(stream, min=message_id, max=message_id, count=1)
+        except RedisError as error:
+            raise _unavailable("quarantine", error) from error
+        decoded_entries = cast(list[tuple[str, dict[str, str]]], entries)
+        if not decoded_entries:
+            return None
+        raw_id, fields = decoded_entries[0]
+        raw_event = fields.get("event", "")
+        failure = cast(
+            StructuredFailure,
+            {
+                "code": "queue.malformed_message",
+                "kind": "environment",
+                "message": reason[:2048],
+                "retryable": False,
+                "details": {},
+            },
+        )
+        fingerprint = _text_fingerprint(
+            _stable_json({"stream": stream, "message_id": raw_id, "quarantine": True})
+        )
+        quarantine_fields = [
+            "event",
+            raw_event[:65_536],
+            "original_stream",
+            stream,
+            "original_message_id",
+            raw_id,
+            "failure",
+            _stable_json(failure),
+            "attempt",
+            "0",
+            "raw_fields",
+            _stable_json(dict(fields)),
+        ]
+        deduplication_key = self._dead_letter_deduplication_key(stream, raw_id)
+        try:
+            response = await self._client.eval(
+                _DEAD_LETTER_SCRIPT,
+                3,
+                self.streams.dead_letters,
+                deduplication_key,
+                stream,
+                fingerprint,
+                self._settings.deduplication_ttl_seconds,
+                self._settings.stream_maxlen or "",
+                group,
+                raw_id,
+                *quarantine_fields,
+            )
+        except ResponseError as error:
+            if _DEAD_LETTER_CONFLICT in str(error):
+                raise QueueMessageConflict(
+                    "pending entry was already dead-lettered with different content",
+                    details={"stream": stream, "message_id": raw_id},
+                ) from error
+            raise _unavailable("quarantine", error) from error
+        except RedisError as error:
+            raise _unavailable("quarantine", error) from error
+        return DeadLetteredMessage(
+            stream=self.streams.dead_letters,
+            message_id=_string(response),
+            original_message_id=raw_id,
+        )
+
     async def claim_stale(
         self,
         stream: str,
@@ -441,10 +527,10 @@ def _validate_queue_contract(
 
 def _decode_stream_response(response: object) -> list[StreamMessage]:
     messages: list[StreamMessage] = []
-    try:
-        streams = cast(list[tuple[str, list[tuple[str, dict[str, str]]]]], response)
-        for stream, entries in streams:
-            for message_id, fields in entries:
+    streams = cast(list[tuple[str, list[tuple[str, dict[str, str]]]]], response)
+    for stream, entries in streams:
+        for message_id, fields in entries:
+            try:
                 encoded = fields["event"]
                 decoded: object = json.loads(encoded)
                 if not isinstance(decoded, dict):
@@ -460,21 +546,27 @@ def _decode_stream_response(response: object) -> list[StreamMessage]:
                 ):
                     if fields[field] != str(payload[field]):
                         raise ValueError(f"stream field {field} does not match payload")
-                messages.append(
-                    StreamMessage(
-                        stream=stream,
-                        message_id=message_id,
-                        event=cast(QueueEvent, payload),
-                    )
+            except (
+                ContractValidationError,
+                KeyError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                # Carry the culprit's identity so consumers can quarantine the
+                # one poisoned entry instead of crash-looping on a batch whose
+                # bad member is re-delivered forever.
+                raise MalformedQueueMessage(
+                    "Redis Stream entry contains an invalid event",
+                    details={"stream": stream, "message_id": message_id},
+                ) from error
+            messages.append(
+                StreamMessage(
+                    stream=stream,
+                    message_id=message_id,
+                    event=cast(QueueEvent, payload),
                 )
-    except (
-        ContractValidationError,
-        KeyError,
-        TypeError,
-        ValueError,
-        json.JSONDecodeError,
-    ) as error:
-        raise MalformedQueueMessage("Redis Stream entry contains an invalid event") from error
+            )
     return messages
 
 
@@ -486,6 +578,10 @@ def _decode_stale_claim(stream: str, response: object) -> StaleClaimBatch:
         next_start_id = _string(values[0])
         entries = cast(list[tuple[str, dict[str, str]]], values[1])
         messages = _decode_stream_response([(stream, entries)])
+    except MalformedQueueMessage:
+        # Already carries the culprit stream/message_id from the per-entry
+        # decoder; keep it intact so consumers can quarantine the entry.
+        raise
     except (TypeError, ValueError) as error:
         raise MalformedQueueMessage("Redis XAUTOCLAIM response is invalid") from error
     return StaleClaimBatch(next_start_id, tuple(messages))

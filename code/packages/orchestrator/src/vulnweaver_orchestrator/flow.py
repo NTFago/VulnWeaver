@@ -32,7 +32,13 @@ from vulnweaver_contracts import (
 from vulnweaver_domain import IllegalTransitionError, transition_task
 from vulnweaver_model_gateway import ModelGateway
 from vulnweaver_persistence import Database, EntityNotFound, PersistenceError
-from vulnweaver_queue import QueueUnavailable, RedisStreamsClient, StreamMessage
+from vulnweaver_queue import (
+    MalformedQueueMessage,
+    QueueError,
+    QueueUnavailable,
+    RedisStreamsClient,
+    StreamMessage,
+)
 from vulnweaver_tool_runtime import (
     PolicyContext,
     PolicyDecisionStatus,
@@ -182,8 +188,55 @@ class Orchestrator:
                 with suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
                 continue
+            except MalformedQueueMessage as error:
+                # Same contract as the worker: an undecodable event can never
+                # be processed, so quarantine it and keep the loop alive
+                # instead of crash-looping the whole orchestrator group.
+                if await self._quarantine_malformed(error):
+                    attempt = 0
+                else:
+                    attempt += 1
+                    with suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            stop.wait(), timeout=self._settings.retry_delay_seconds(attempt)
+                        )
+                continue
             attempt = 0
             yield results
+
+    async def _quarantine_malformed(self, error: MalformedQueueMessage) -> bool:
+        details = error.details
+        stream = details.get("stream")
+        message_id = details.get("message_id")
+        if not isinstance(stream, str) or not isinstance(message_id, str):
+            LOGGER.warning(
+                "orchestrator_malformed_event_unidentified details=%s", error.as_dict()
+            )
+            return False
+        try:
+            quarantined = await self._queue.quarantine(
+                stream, self._settings.consumer_group, message_id, reason=error.message
+            )
+        except QueueError as quarantine_error:
+            LOGGER.warning(
+                "orchestrator_malformed_event_quarantine_failed details=%s",
+                quarantine_error.as_dict(),
+            )
+            return False
+        if quarantined is None:
+            LOGGER.warning(
+                "orchestrator_malformed_event_vanished stream=%s message_id=%s",
+                stream,
+                message_id,
+            )
+            return True
+        LOGGER.warning(
+            "orchestrator_malformed_event_quarantined stream=%s message_id=%s dead_letter_id=%s",
+            stream,
+            message_id,
+            quarantined.message_id,
+        )
+        return True
 
     async def process_once(self) -> tuple[OrchestrationResult, ...]:
         """Process one bounded event batch; permanent poison events are ACKed."""

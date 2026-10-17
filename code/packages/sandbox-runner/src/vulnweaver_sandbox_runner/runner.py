@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import io
 import logging
 import shutil
 import tempfile
@@ -111,8 +110,10 @@ class SandboxRunner:
         work_dir = Path(tempfile.mkdtemp(prefix=f"{container_name}-", dir=self._root)).resolve()
         input_dir = work_dir / "input"
         output_dir = work_dir / "output"
+        spill_dir = work_dir / "spill"
         input_dir.mkdir()
         output_dir.mkdir()
+        spill_dir.mkdir()
         result: SandboxResult | None = None
         cancellation_error: asyncio.CancelledError | None = None
         runtime_started = False
@@ -149,6 +150,7 @@ class SandboxRunner:
                     resource_budget=request["resource_budget"],
                     timeout_seconds=request["timeout_seconds"],
                     max_output_bytes=MAX_SANDBOX_OUTPUT_BYTES,
+                    spill_dir=spill_dir,
                 )
                 runtime_started = True
                 try:
@@ -354,8 +356,8 @@ class SandboxRunner:
             output_dir,
             request["output_file_names"],
         )
-        stdout_bytes = len(execution.stdout)
-        stderr_bytes = len(execution.stderr)
+        stdout_bytes = execution.stdout_path.stat().st_size
+        stderr_bytes = execution.stderr_path.stat().st_size
         total_output = output_bytes + stdout_bytes + stderr_bytes
         usage = _usage(
             execution.duration_millis,
@@ -365,8 +367,10 @@ class SandboxRunner:
         )
         output_refs = _store_outputs(self._store, approved_outputs)
         remaining = MAX_SANDBOX_OUTPUT_BYTES - output_bytes
-        stdout_ref, _ = _store_stream(self._store, execution.stdout, remaining)
-        stderr_ref, _ = _store_stream(self._store, execution.stderr, remaining - stdout_bytes)
+        stdout_ref, _ = _store_spill(self._store, execution.stdout_path, remaining)
+        stderr_ref, _ = _store_spill(
+            self._store, execution.stderr_path, remaining - stdout_bytes
+        )
         status = _status(execution.status)
         failure = None
         if status is SandboxStatus.FAILED:
@@ -444,10 +448,11 @@ def _store_path(store: ArtifactStore, path: Path, max_bytes: int) -> StoredObjec
         return store.put_stream(source, max_bytes=max(1, max_bytes))
 
 
-def _store_stream(store: ArtifactStore, value: bytes, max_bytes: int) -> tuple[str | None, int]:
-    if not value:
+def _store_spill(store: ArtifactStore, path: Path, max_bytes: int) -> tuple[str | None, int]:
+    if not path.exists() or path.stat().st_size == 0:
         return None, 0
-    stored = store.put_stream(io.BytesIO(value), max_bytes=max(1, max_bytes))
+    with path.open("rb") as source:
+        stored = store.put_stream(source, max_bytes=max(1, max_bytes))
     return stored.object_ref, stored.size_bytes
 
 

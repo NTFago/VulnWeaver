@@ -104,6 +104,16 @@ def request(
     )
 
 
+def _empty_spills(request: RuntimeRequest) -> tuple[Path, Path]:
+    spill_dir = request.spill_dir
+    spill_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = spill_dir / "stdout"
+    stderr_path = spill_dir / "stderr"
+    stdout_path.write_bytes(b"")
+    stderr_path.write_bytes(b"")
+    return stdout_path, stderr_path
+
+
 class _FakeRuntime:
     def __init__(
         self,
@@ -125,11 +135,16 @@ class _FakeRuntime:
         if self.cancel_parent:
             raise asyncio.CancelledError
         if cancellation.is_set():
-            return RuntimeExecution("cancelled", None, b"", b"", 1, 0, 0)
+            return RuntimeExecution("cancelled", None, *_empty_spills(request), 1, 0, 0)
         (request.output_dir / "report.txt").write_text("safe output", encoding="utf-8")
         if self.unexpected_output:
             (request.output_dir / "secret.txt").write_text("unexpected", encoding="utf-8")
-        return RuntimeExecution("succeeded", 0, self.stdout, b"", 12, 3, 4096)
+        stdout_path = request.spill_dir / "stdout"
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_path.write_bytes(self.stdout)
+        stderr_path = request.spill_dir / "stderr"
+        stderr_path.write_bytes(b"")
+        return RuntimeExecution("succeeded", 0, stdout_path, stderr_path, 12, 3, 4096)
 
     async def cleanup(self, container_name: str) -> bool:
         self.cleaned.append(container_name)
@@ -347,6 +362,7 @@ def test_docker_runtime_builds_fixed_isolated_flags_and_rejects_host_mounts(
         argv=("entrypoint", "--input", "/input/input.bin"),
         input_dir=tmp_path / "input",
         output_dir=tmp_path / "output",
+        spill_dir=tmp_path / "spill",
         resource_budget=budget(),
         timeout_seconds=10,
         max_output_bytes=1024,
