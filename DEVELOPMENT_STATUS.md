@@ -6,6 +6,18 @@
 
 ## 当前焦点
 
+2026-10-17 **P1 加固批（4 项）+ 两次全 E2E RW 复跑**。在 2026-10-14 全面 code review（`code/docs/code-review-2026-10-14.md`）与首轮 GLM RW 实跑暴露的问题之上，修复 code review 的 4 个 P1 并全部合并部署（`d533aae`，全量门禁 **832 passed / 7 skipped**、pyright 0 errors）：
+
+1. **毒丸队列消息隔离**（原 review P1-1）：解码错误现在携带肇事条目的 stream/message_id，队列新增原子 `quarantine()`（原始负载+原因存 dead-letter 后 ACK），worker 与 orchestrator 循环捕获后隔离并继续消费——单条坏消息不再让整个消费组崩溃循环。
+2. **runner 输出落盘**（原 review P1-2）：8 GiB 输出预算从"进程内存缓冲（join 再翻倍）"改为溢出直接写请求工作目录、CAS 从磁盘流式读取——峰值内存一个 64KiB 块，`yes` 一类命令不再能 OOM 整个动态执行面。
+3. **fuzz 分诊时间预留**（原 review P1-4）：afl-fuzz 改为 `max_duration - reserve` 结束（reserve 按 max_crashes 计算、封顶时长一半），分诊循环遵守墙钟 deadline，放不下的崩溃保留原始字节 + AFL 文件名信号——时间到且有崩溃不再丢全部证据。
+4. **归档限额先于物化**（原 review P1-6）：TAR 三路径改流式成员迭代（校验在第一个超限成员处中止解压），ZIP 各入口先查 EOCD 声明成员数再让 zipfile 解析中央目录——合法大小的成员数炸弹不再打爆导入内存。
+
+另修 E2E 脚本轮询健壮性（`51e39b4`）：数小时跟拍不再被一次非列表 /jobs 响应杀死（5xx/形状错误重试，连续 5 次才放弃）。
+
+**两次全 E2E RW 复跑（脚本全模式，上传→跟拍→终态→发现清单）**，均在复用的 R5 项目内（FFmpeg `task:c23ed085…`、7-Zip `task:234f09ba…`，均 `completed/partial`，cppcheck 超时仍是唯一失败作业）：FFmpeg 审计产出 **1 个 CWE-400 候选**（`libavformat/nsvdec.c:345`，NSVf ~44 字节头触发 ~4GiB 索引数组提交）→ proof 沙箱真实执行 → review 判 `unverifiable`（诚实降级）→ report ✓；7-Zip 本轮审计收敛 0 候选（模型驱动调查的非确定性，上轮同内容曾产出 HFS+ CWE-125 候选），无候选则验证链不派发，语义正常。**待部署验证说明**：本批镜像（worker/runner/dispatcher/orchestrator）已在两轮 E2E 结束后重建上线，容器内已验证新代码（spill 落盘、queue/archive 可导入）；毒丸隔离与 fuzz 预留为故障注入路径，由新增回归覆盖（真实 Redis 的 worker 级隔离测试、队列原子 quarantine 测试、EOCD 炸弹与 2 万成员 tar 测试、fuzz 助手测试），未在栈内人为注入故障复演。
+
+
 2026-10-17 **两次 RealWorld 任务全链路完整完成（新供应商 天璇/GLM）**。模型供应商从 DeepSeek（402 账户级阻塞，R10）切换到天璇 `https://llm.buptmerak.cn/v1`（Anthropic Messages 协议，模型 `glm-5.3-anthropic`/`glm-5.3-flash-anthropic`，1M 上下文；key 在 `code/secrets/model_api_key.txt`，已 gitignored）。经设置 API 完成 provider 注册与四角色绑定（audit/review→pro，planning/report→flash，fallback 互为对方；provider timeout 600s、max_attempts 4）。**两个 RW 源码轨任务终态 `completed/partial`，全链路 8 类 job 真实跑完**：
 
 - **FFmpeg 8.1.2**（`task:756a94ba…`，项目 RW：FFmpeg-8.1.2-R5 复用记忆链）：审计 1 个候选 **CWE-400**（Smacker frame-count 索引循环缺 EOF 上界）→ **proof 沙箱真实执行 → `not_exploitable_under_environment`**（诚实判定）→ review → report ✓。
