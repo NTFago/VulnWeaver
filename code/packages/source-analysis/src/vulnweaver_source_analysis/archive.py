@@ -195,6 +195,7 @@ class SafeArchiveImporter:
         source.seek(0)
         if zipfile.is_zipfile(source):
             source.seek(0)
+            self._guard_zip_entry_count(source)
             with zipfile.ZipFile(source) as archive:
                 entries = [self._zip_entry(info) for info in archive.infolist()]
                 selected, _, _ = self._validate_entries(entries)
@@ -211,7 +212,10 @@ class SafeArchiveImporter:
         source.seek(0)
         try:
             with tarfile.open(fileobj=source, mode="r:*") as archive:
-                entries = [self._tar_entry(member) for member in archive.getmembers()]
+                # Streaming iteration, not getmembers(): validation raises at
+                # the first over-limit member, so a member-count bomb stops
+                # decompressing there instead of materializing every header.
+                entries = (self._tar_entry(member) for member in archive)
                 selected, _, _ = self._validate_entries(entries)
                 for entry in selected:
                     if entry.is_directory:
@@ -236,8 +240,38 @@ class SafeArchiveImporter:
                 details={},
             ) from error
 
+    def _guard_zip_entry_count(self, source: BinaryIO) -> None:
+        """Reject member-count bombs before zipfile parses the central directory.
+
+        ``ZipFile`` eagerly parses the whole central directory at construction,
+        so a 512 MB upload carrying millions of directory records would be
+        fully materialized before the ``max_files`` limit ever ran. The End of
+        Central Directory record declares the entry count; check it first. A
+        missing or truncated EOCD is left to ``ZipFile`` to report its own
+        structured error for.
+        """
+
+        source.seek(0, os.SEEK_END)
+        size = source.tell()
+        window = min(size, 65_535 + 22)
+        source.seek(size - window)
+        tail = source.read(window)
+        offset = tail.rfind(b"PK")
+        if offset < 0 or offset + 22 > len(tail):
+            return
+        total_entries = int.from_bytes(tail[offset + 10 : offset + 12], "little")
+        if total_entries == 0xFFFF:
+            return  # ZIP64 marker: entry count lives in the ZIP64 EOCD
+        if total_entries > self._limits.max_files:
+            raise SourceImportError(
+                "too_many_files",
+                "archive file-count limit exceeded",
+                details={"declared_entries": total_entries},
+            )
+
     def _extract_zip(self, source: BinaryIO, root: Path, archive_bytes: int) -> ImportSummary:
         try:
+            self._guard_zip_entry_count(source)
             with zipfile.ZipFile(source) as archive:
                 entries = [self._zip_entry(info) for info in archive.infolist()]
                 selected, file_count, skipped = self._validate_entries(entries)
@@ -259,6 +293,7 @@ class SafeArchiveImporter:
         self, source: BinaryIO, path: str, archive_bytes: int, member_limit: int
     ) -> bytes:
         try:
+            self._guard_zip_entry_count(source)
             with zipfile.ZipFile(source) as archive:
                 entries = [self._zip_entry(info) for info in archive.infolist()]
                 selected, _, _ = self._validate_entries(entries)
@@ -274,7 +309,10 @@ class SafeArchiveImporter:
     def _extract_tar(
         self, archive: tarfile.TarFile, root: Path, archive_bytes: int
     ) -> ImportSummary:
-        entries = [self._tar_entry(member) for member in archive.getmembers()]
+        # Streaming iteration, not getmembers(): validation raises at the
+        # first over-limit member, so a member-count bomb stops
+        # decompressing there instead of materializing every header first.
+        entries = (self._tar_entry(member) for member in archive)
         selected, file_count, skipped = self._validate_entries(entries)
         self._check_archive_ratio(selected, archive_bytes)
         total = 0
@@ -298,7 +336,10 @@ class SafeArchiveImporter:
     def _read_tar_member(
         self, archive: tarfile.TarFile, path: str, archive_bytes: int, member_limit: int
     ) -> bytes:
-        entries = [self._tar_entry(member) for member in archive.getmembers()]
+        # Streaming iteration, not getmembers(): validation raises at the
+        # first over-limit member, so a member-count bomb stops
+        # decompressing there instead of materializing every header first.
+        entries = (self._tar_entry(member) for member in archive)
         selected, _, _ = self._validate_entries(entries)
         self._check_archive_ratio(selected, archive_bytes)
         entry = self._selected_file(selected, path)

@@ -1105,3 +1105,48 @@ def test_stale_message_and_expired_lease_are_taken_over_end_to_end(
 def test_worker_settings_reject_unsafe_bounds(overrides: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         WorkerSettings(**overrides)  # type: ignore[arg-type]
+
+
+def test_malformed_queue_entry_is_quarantined_without_crashing_the_worker(
+    worker_database_url: str, redis_url: str, redis_namespace: str
+) -> None:
+    """Regression (poison-pill isolation): one undecodable stream entry used
+    to escape the worker loop and crash-loop the whole consumer group on
+    redelivery. The worker must quarantine the poisoned entry (raw payload
+    preserved in the dead-letter stream) and keep consuming."""
+
+    async def scenario() -> None:
+        database = Database(DatabaseSettings(worker_database_url))
+        queue = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        raw = Redis.from_url(redis_url, decode_responses=True)
+        executor = SuccessExecutor()
+        stop = asyncio.Event()
+        worker = ReliableWorker(database, queue, executor, _worker_settings("worker-poison"))
+        try:
+            await _enqueue(database, queue, "job:t06-worker-poison")
+            # Parked ahead of the valid job: decode fails before the executor
+            # is ever consulted.
+            await raw.xadd(queue.streams.jobs, {"event": "{not json"})
+            running = asyncio.create_task(worker.run(stop))
+            await _wait_for_status(
+                database, "job:t06-worker-poison", JobStatus.SUCCEEDED, timeout=15
+            )
+            stop.set()
+            await asyncio.wait_for(running, 5)
+            assert executor.calls == 1
+            assert (await raw.xpending(queue.streams.jobs, "workers"))["pending"] == 0
+
+            dead = await raw.xrange(queue.streams.dead_letters, count=100)
+            quarantined = [
+                fields
+                for _, fields in dead
+                if fields.get("event") == "{not json"
+                and "malformed" in fields.get("failure", "")
+            ]
+            assert quarantined, "the poisoned entry must be preserved for post-mortem"
+        finally:
+            await raw.aclose()
+            await queue.close()
+            await database.dispose()
+
+    asyncio.run(scenario())

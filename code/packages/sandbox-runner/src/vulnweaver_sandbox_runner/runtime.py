@@ -27,14 +27,15 @@ class RuntimeRequest:
     resource_budget: ResourceBudget
     timeout_seconds: int
     max_output_bytes: int
+    spill_dir: Path
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeExecution:
     status: str
     exit_code: int | None
-    stdout: bytes
-    stderr: bytes
+    stdout_path: Path
+    stderr_path: Path
     duration_millis: int
     cpu_millis: int
     memory_bytes: int
@@ -94,7 +95,9 @@ class DockerCliRuntime:
             env=_runtime_environment(),
         )
         overflow = asyncio.Event()
-        communicate = asyncio.create_task(_communicate(process, request.max_output_bytes, overflow))
+        communicate = asyncio.create_task(
+            _communicate(process, request.max_output_bytes, overflow, request.spill_dir)
+        )
         cancelled = asyncio.create_task(cancellation.wait())
         overflowed = asyncio.create_task(overflow.wait())
         usage = _RuntimeUsage(last_sample_at=time.monotonic())
@@ -103,6 +106,14 @@ class DockerCliRuntime:
             self._monitor_usage(request.container_name, usage, usage_stopped)
         )
         status = "failed"
+        request.spill_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = request.spill_dir / "stdout"
+        stderr_path = request.spill_dir / "stderr"
+
+        def _empty_spills() -> None:
+            stdout_path.write_bytes(b"")
+            stderr_path.write_bytes(b"")
+
         try:
             done, _ = await asyncio.wait(
                 {communicate, cancelled, overflowed},
@@ -113,24 +124,28 @@ class DockerCliRuntime:
                 await self._stop(request.container_name)
                 await _finish_communication(communicate)
                 status = "timed_out"
-                stdout, stderr, exit_code = b"", b"", None
+                _empty_spills()
+                exit_code = None
             elif cancelled in done and cancelled.result():
                 await self._stop(request.container_name)
                 await _finish_communication(communicate)
                 status = "cancelled"
-                stdout, stderr, exit_code = b"", b"", None
+                _empty_spills()
+                exit_code = None
             elif overflowed in done and overflowed.result():
                 await self._stop(request.container_name)
                 await _finish_communication(communicate)
                 status = "failed"
-                stdout, stderr, exit_code = b"", b"", None
+                _empty_spills()
+                exit_code = None
             else:
                 try:
-                    stdout, stderr, exit_code = await communicate
+                    stdout_path, stderr_path, exit_code = await communicate
                 except OutputLimitExceeded:
                     await self._stop(request.container_name)
                     status = "failed"
-                    stdout, stderr, exit_code = b"", b"", None
+                    _empty_spills()
+                    exit_code = None
                 else:
                     status = "succeeded" if exit_code == 0 else "failed"
             await _finish_usage_monitor(usage_task, usage_stopped)
@@ -138,8 +153,8 @@ class DockerCliRuntime:
             return RuntimeExecution(
                 status=status,
                 exit_code=exit_code,
-                stdout=stdout,
-                stderr=stderr,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
                 duration_millis=max(0, int((time.monotonic() - started) * 1000)),
                 cpu_millis=max(0, round(usage.cpu_millis)),
                 memory_bytes=usage.peak_memory_bytes,
@@ -570,17 +585,25 @@ async def _communicate(
     process: asyncio.subprocess.Process,
     max_output_bytes: int,
     overflow: asyncio.Event,
-) -> tuple[bytes, bytes, int]:
+    spill_dir: Path,
+) -> tuple[Path, Path, int]:
     if process.stdout is None or process.stderr is None:
         raise RuntimeError("runtime pipes are unavailable")
+    spill_dir.mkdir(parents=True, exist_ok=True)
     budget = _OutputBudget(max_output_bytes, overflow, asyncio.Lock())
-    stdout_task = asyncio.create_task(_read_bounded(process.stdout, budget))
-    stderr_task = asyncio.create_task(_read_bounded(process.stderr, budget))
+    stdout_task = asyncio.create_task(
+        _capture_stream(process.stdout, budget, spill_dir / "stdout")
+    )
+    stderr_task = asyncio.create_task(
+        _capture_stream(process.stderr, budget, spill_dir / "stderr")
+    )
     try:
-        stdout, stderr, exit_code = await asyncio.gather(stdout_task, stderr_task, process.wait())
+        stdout_path, stderr_path, exit_code = await asyncio.gather(
+            stdout_task, stderr_task, process.wait()
+        )
         if overflow.is_set():
             raise OutputLimitExceeded("sandbox output exceeds its limit")
-        return stdout, stderr, exit_code
+        return stdout_path, stderr_path, exit_code
     finally:
         if not stdout_task.done():
             stdout_task.cancel()
@@ -588,25 +611,38 @@ async def _communicate(
             stderr_task.cancel()
 
 
-async def _read_bounded(reader: asyncio.StreamReader, budget: _OutputBudget) -> bytes:
-    chunks: list[bytes] = []
-    while True:
-        chunk = await reader.read(65_536)
-        if not chunk:
-            return b"".join(chunks)
-        async with budget.lock:
-            if budget.remaining == 0:
-                budget.overflow.set()
-                continue
-            if len(chunk) > budget.remaining:
-                budget.remaining = 0
-                budget.overflow.set()
-                continue
-            budget.remaining -= len(chunk)
-        chunks.append(chunk)
+async def _capture_stream(
+    reader: asyncio.StreamReader, budget: _OutputBudget, destination: Path
+) -> Path:
+    """Spill one output pipe straight to disk instead of process memory.
+
+    The output budget is a host-disk protection (ADR-025), not a memory
+    budget: accumulating it as in-memory chunks let a single runaway command
+    grow the runner's heap by the full budget (then double it at join) and
+    OOM the whole dynamic-execution plane. Peak memory here is one chunk;
+    the file holds at most ``budget`` bytes and dies with the request's
+    work directory.
+    """
+
+    with destination.open("wb") as spill:
+        while True:
+            chunk = await reader.read(65_536)
+            if not chunk:
+                return destination
+            async with budget.lock:
+                if budget.remaining == 0:
+                    budget.overflow.set()
+                    continue
+                if len(chunk) > budget.remaining:
+                    chunk = chunk[: budget.remaining]
+                    budget.remaining = 0
+                    budget.overflow.set()
+                else:
+                    budget.remaining -= len(chunk)
+            spill.write(chunk)
 
 
-async def _finish_communication(task: asyncio.Task[tuple[bytes, bytes, int]]) -> None:
+async def _finish_communication(task: asyncio.Task[tuple[Path, Path, int]]) -> None:
     with suppress(OutputLimitExceeded, asyncio.CancelledError):
         await task
 

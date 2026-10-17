@@ -329,3 +329,78 @@ def test_invalid_event_and_unavailable_redis_are_structured(
 def test_queue_configuration_has_safe_bounds(settings: dict[str, object]) -> None:
     with pytest.raises(QueueConfigurationError):
         QueueSettings(**settings)  # type: ignore[arg-type]
+
+
+def test_malformed_entry_reports_culprit_and_quarantine_preserves_it(
+    redis_url: str, redis_namespace: str
+) -> None:
+    """Regression (poison-pill isolation): a single undecodable entry used to
+    raise without identity, so every consumer crash-looped on redelivery and
+    the whole group stopped processing. The error now names the culprit, and
+    quarantine preserves the raw entry in the dead-letter stream before ACK."""
+
+    async def scenario() -> None:
+        client = RedisStreamsClient(QueueSettings(redis_url, namespace=redis_namespace))
+        raw = Redis.from_url(redis_url, decode_responses=True)
+        try:
+            await client.ensure_group(client.streams.jobs, "workers")
+            event = job_event(job(), "event:t-queue-poison")
+            await client.publish(event)
+            poisoned_id = await raw.xadd(client.streams.jobs, {"event": "{not json"})
+
+            try:
+                await client.read_group(
+                    client.streams.jobs, "workers", "consumer-a", count=10
+                )
+            except MalformedQueueMessage as error:
+                assert error.details["stream"] == client.streams.jobs
+                assert error.details["message_id"] == poisoned_id
+            else:
+                raise AssertionError("malformed entry must fail the read loudly")
+
+            quarantined = await client.quarantine(
+                client.streams.jobs,
+                "workers",
+                str(poisoned_id),
+                reason="Redis Stream entry contains an invalid event",
+            )
+            assert quarantined is not None
+            poisoned_pending = await raw.xpending_range(
+                client.streams.jobs, "workers", min=poisoned_id, max=poisoned_id, count=10
+            )
+            assert poisoned_pending == [], "quarantine must ACK the poisoned entry"
+            # The valid message read in the same failed batch stays pending
+            # until its own consumer ACKs it; that lifecycle is independent.
+
+            dead = await raw.xrange(client.streams.dead_letters, count=10)
+            preserved = [fields for _, fields in dead if fields.get("event") == "{not json"]
+            assert preserved, "the raw payload must be preserved for post-mortem"
+            failure = json.loads(preserved[0]["failure"])
+            assert failure["code"] == "queue.malformed_message"
+
+            # The stream is consumable again: the valid message was delivered
+            # in the same failed batch and stays recoverable from the PEL.
+            claimed = await client.claim_stale(
+                client.streams.jobs, "workers", "consumer-a", min_idle_milliseconds=1
+            )
+            assert [m.event["event_id"] for m in claimed.messages] == [event["event_id"]]
+            await client.acknowledge(client.streams.jobs, "workers", claimed.messages[0].message_id)
+
+            # Re-quarantine is idempotent (fingerprint dedup), and once the
+            # stream entry is gone the quarantine reports not-found.
+            again = await client.quarantine(
+                client.streams.jobs, "workers", str(poisoned_id), reason="again"
+            )
+            assert again is not None and again.original_message_id == poisoned_id
+            await raw.xdel(client.streams.jobs, poisoned_id)
+            assert (
+                await client.quarantine(
+                    client.streams.jobs, "workers", str(poisoned_id), reason="gone"
+                )
+                is None
+            )
+        finally:
+            await raw.aclose()
+            await client.close()
+
+    asyncio.run(scenario())

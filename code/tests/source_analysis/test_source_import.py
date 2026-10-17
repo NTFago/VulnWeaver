@@ -696,3 +696,54 @@ def test_source_executor_returns_terminal_failure_after_index_publish(
             await database.dispose()
 
     asyncio.run(scenario())
+
+
+def test_tar_member_count_bomb_fails_at_the_limit_not_after_full_materialization(
+    tmp_path: Path,
+) -> None:
+    """Regression (limits before materialization): extract used to load every
+    member header via getmembers() before the max_files check ran, so a
+    legitimate-sized upload of tiny headers decompressed the whole stream and
+    materialized millions of TarInfo objects first. Streaming iteration makes
+    validation abort the decompression at the limit."""
+
+    importer = SafeArchiveImporter(ImportLimits(max_files=20_000))
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        empty = io.BytesIO(b"")
+        for index in range(20_500):
+            info = tarfile.TarInfo(f"m/{index:06d}.txt")
+            info.size = 0
+            archive.addfile(info, empty)
+    payload.seek(0)
+    destination = tmp_path / "out"
+
+    with pytest.raises(SourceImportError) as excinfo:
+        importer.extract(payload, destination, filename="bomb.tar.gz")
+
+    assert excinfo.value.code == "too_many_files"
+    # extract() creates the root before validating; the bomb must not have
+    # written anything into it.
+    assert list(destination.iterdir()) == []
+
+
+def test_zip_declared_entry_count_is_checked_before_central_directory(tmp_path: Path) -> None:
+    """The End of Central Directory record declares the entry count; a zip
+    whose EOCD claims more members than the limit is rejected before zipfile
+    eagerly parses the whole central directory."""
+
+    importer = SafeArchiveImporter(ImportLimits(max_files=20_000))
+    payload = zip_bytes({"src/app.py": b"VALUE = 1\n"})
+    raw = payload.getvalue()
+    assert raw.rfind(b"PK\x05\x06") == len(raw) - 22  # no comment: EOCD is last
+    forged = bytearray(raw)
+    entry_count_offset = len(raw) - 22 + 10
+    forged[entry_count_offset : entry_count_offset + 2] = (30_000).to_bytes(2, "little")
+    forged_stream = io.BytesIO(bytes(forged))
+    destination = tmp_path / "out"
+
+    with pytest.raises(SourceImportError) as excinfo:
+        importer.extract(forged_stream, destination, filename="bomb.zip")
+
+    assert excinfo.value.code == "too_many_files"
+    assert list(destination.iterdir()) == []
