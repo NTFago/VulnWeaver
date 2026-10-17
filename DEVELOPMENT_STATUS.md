@@ -2,9 +2,23 @@
 
 > 轻量交接台账。稳定规则与安全红线见 `AGENTS.md`；已完成任务（T45–T52 等）的实现明细与 2026-10-01 前的门禁记录已裁撤，见 Git 历史、PR 与 `code/docs/progress/`。
 
-更新时间：2026-10-06（Asia/Shanghai）
+更新时间：2026-10-17（Asia/Shanghai）
 
 ## 当前焦点
+
+2026-10-17 **两次 RealWorld 任务全链路完整完成（新供应商 天璇/GLM）**。模型供应商从 DeepSeek（402 账户级阻塞，R10）切换到天璇 `https://llm.buptmerak.cn/v1`（Anthropic Messages 协议，模型 `glm-5.3-anthropic`/`glm-5.3-flash-anthropic`，1M 上下文；key 在 `code/secrets/model_api_key.txt`，已 gitignored）。经设置 API 完成 provider 注册与四角色绑定（audit/review→pro，planning/report→flash，fallback 互为对方；provider timeout 600s、max_attempts 4）。**两个 RW 源码轨任务终态 `completed/partial`，全链路 8 类 job 真实跑完**：
+
+- **FFmpeg 8.1.2**（`task:756a94ba…`，项目 RW：FFmpeg-8.1.2-R5 复用记忆链）：审计 1 个候选 **CWE-400**（Smacker frame-count 索引循环缺 EOF 上界）→ **proof 沙箱真实执行 → `not_exploitable_under_environment`**（诚实判定）→ review → report ✓。
+- **7-Zip 26.00**（`task:7f3d29d3…`，项目 RW：7-Zip-26.00-src-R5 复用记忆链）：审计 1 个候选 **CWE-125**（HFS+ catalog record offset 当节点相对索引用）→ review 判 `unverifiable`（诚实降级：函数摘录截断，finding 跨 1031-1329 行摘录只到 1240——"摘录窗口"问题在新模型上复现）→ proof 失败（见下）→ fuzz ✓ → report ✓。审计仅 26 分钟（DeepSeek 时代以小时计）。
+
+**本轮修复的阻塞缺陷（已合并 main `40ea271`，analysis-worker 镜像已重建部署）**：
+1. **P1·anthropic-messages 非流式调用被供应商 CDN 掐断**（`fix/model-gateway-anthropic-stream` `2dccee4`）：EdgeOne 边缘对首字节 >~120s 的请求回 554，长思考调用确定性死亡（实测一小时 200:554:429 = 11:19:5，审计爬行随时终态失败）。修复：anthropic 请求声明 `stream:true`，transport 层新增 `_SseResponseAggregator` 把 SSE 事件重组为与非流式完全相同的响应体（请求构建与响应解析零改动；摄取按 `max_response_bytes` 有界；流中 error 事件映射可重试协议错误；`message_delta.usage` 按替换语义合并防重复计数）。门禁：ruff、pyright 0 errors，全量 **822 passed / 7 skipped**；修复后实测 200 全绿、0 次 554/429。
+2. **配置类**：网关 `messages_url` 只追加 `/messages`，base_url 必须自带 `/v1`（首投 404 全灭的根因）；provider 默认超时 60s 对思考型模型过短 → provider 级显式 600s/4 次。
+3. **环境**：天璇 DNS 走宿主机 fake-ip 代理段（198.18.x），08:24 曾瞬时 `Errno -5` 导致 planning 短暂失败——模型网关已有重试吸收；偶发即可自愈。
+
+**遗留观察项**：① 7z proof 的 `auto_exploit.model_protocol_error`——driver 生成单次模型调用协议错误，job failure details 为空（`AutoExploitError` 未透传网关错误详情，可观测性缺口）；同路径 FFmpeg proof 成功证明非普遍性，疑似 GLM 单次响应无 text 块（纯 thinking）或 usage 异常，复现时再修。② review `unverifiable` 的根因（函数摘录 220 行窗口 < finding 跨度）与 code review 报告 P1-5（splitlines 行号口径）同族，摘录预算/平移读取已有 `line` 参数，reviewer 未用——可考虑 review 提示词允许锚点平移。③ 静态线索 job 双双 `static_analysis.timeout`（cppcheck 600s）仍为已知边界，不影响审计。
+
+**基线参考**：2026-10-14 全面 code review（6 P1 / 15 P2 / 无 P0）见 `code/docs/code-review-2026-10-14.md`（`63398ce`）；main 当前领先 origin/main 19 个提交，未推送（含 review 文档与本轮修复）。
 
 2026-10-06 RealWorld R1 源码轨评测与发现链修复（多轮迭代，分支 `fix/source-excerpt-large-archives` 已并入 main）。按用户目标投递 RealWorld 验收样本（FFmpeg 8.1.2 / 7-Zip 26.00 源码，哈希与登记一致；`.7z` 源码包 dev 容器转 tar.gz；新增可复用投递脚本 `code/scripts/e2e_realworld_audit.py`）。**共发现并修复 6 条发现链断点/缺陷**，评测九轮迭代（R1 零读取 → R2 首批真实候选+验证链全通 → R4/R6 同项目复用两段断裂 → R8 读到锚点行原文 → R9 因 DeepSeek 402 阻塞）：
 
