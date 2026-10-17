@@ -267,6 +267,147 @@ class TransportResponse:
     body: object
 
 
+class _SseResponseAggregator:
+    """Reassemble an Anthropic-style SSE stream into the non-streaming body.
+
+    Kept intentionally line-oriented and synchronous: ``feed_line`` is called
+    once per line from the transport's async reader, so a hostile or runaway
+    stream is bounded by ``max_response_bytes`` at ingestion time rather than
+    buffered whole. Unknown event types and non-JSON data lines are ignored so
+    vendor extensions cannot break parsing.
+    """
+
+    def __init__(self, max_response_bytes: int) -> None:
+        self._max_bytes = max_response_bytes
+        self._fed_bytes = 0
+        self._blocks: dict[int, _StreamBlock] = {}
+        self._usage: dict[str, int] = {}
+        self._stop_reason: str | None = None
+        self._stopped = False
+
+    def feed_line(self, line: str) -> None:
+        if not line.startswith("data:"):
+            return
+        payload = line[len("data:") :].strip()
+        if not payload or payload == "[DONE]":
+            return
+        self._fed_bytes += len(payload.encode("utf-8", errors="replace"))
+        if self._fed_bytes > self._max_bytes:
+            raise ModelProtocolError(
+                "model response exceeded the configured size limit",
+                details={"status_code": 200},
+                retryable=False,
+            )
+        try:
+            event: object = json.loads(payload)
+        except ValueError:
+            return
+        if not isinstance(event, dict):
+            return
+        event_mapping = cast(dict[str, object], event)
+        event_type = event_mapping.get("type")
+        if event_type == "message_start":
+            message = event_mapping.get("message")
+            if isinstance(message, Mapping):
+                usage = cast(Mapping[str, object], message).get("usage")
+                if isinstance(usage, Mapping):
+                    self._merge_usage(cast(dict[str, object], usage))
+        elif event_type == "content_block_start":
+            index = event_mapping.get("index")
+            block = event_mapping.get("content_block")
+            if isinstance(index, int) and isinstance(block, Mapping) and index not in self._blocks:
+                block_type = cast(Mapping[str, object], block).get("type")
+                self._blocks[index] = _StreamBlock(
+                    type=block_type if isinstance(block_type, str) else ""
+                )
+        elif event_type == "content_block_delta":
+            index = event_mapping.get("index")
+            delta = event_mapping.get("delta")
+            if not isinstance(index, int) or not isinstance(delta, Mapping):
+                return
+            fields = cast(Mapping[str, object], delta)
+            block = self._blocks.setdefault(index, _StreamBlock())
+            delta_type = fields.get("type")
+            text = fields.get("text")
+            thinking = fields.get("thinking")
+            partial_json = fields.get("partial_json")
+            if delta_type == "text_delta" and isinstance(text, str):
+                block.text += text
+            elif delta_type == "thinking_delta" and isinstance(thinking, str):
+                block.thinking += thinking
+            elif delta_type == "input_json_delta" and isinstance(partial_json, str):
+                block.partial_json += partial_json
+        elif event_type == "message_delta":
+            delta = event_mapping.get("delta")
+            if isinstance(delta, Mapping):
+                stop_reason = cast(Mapping[str, object], delta).get("stop_reason")
+                if isinstance(stop_reason, str):
+                    self._stop_reason = stop_reason
+            usage = event_mapping.get("usage")
+            if isinstance(usage, Mapping):
+                # message_delta carries the final cumulative output count;
+                # replace rather than add so message_start's placeholder is
+                # not double-counted.
+                self._merge_usage(cast(dict[str, object], usage), replace=True)
+        elif event_type == "message_stop":
+            self._stopped = True
+        elif event_type == "error":
+            error = event_mapping.get("error")
+            detail = (
+                cast(Mapping[str, object], error).get("message")
+                if isinstance(error, Mapping)
+                else None
+            )
+            message = detail if isinstance(detail, str) else "unknown stream error"
+            raise ModelProtocolError(f"model stream reported an error: {message}", retryable=True)
+
+    def _merge_usage(self, source: dict[str, object], *, replace: bool = False) -> None:
+        for key, value in source.items():
+            if isinstance(value, int) and not isinstance(value, bool):
+                if replace:
+                    self._usage[key] = value
+                else:
+                    self._usage[key] = self._usage.get(key, 0) + value
+
+    def finish(self) -> JsonObject:
+        if not self._stopped:
+            raise ModelProtocolError(
+                "model stream ended without a message_stop event", retryable=True
+            )
+        content: list[dict[str, str]] = [
+            block.document() for _, block in sorted(self._blocks.items())
+        ]
+        return cast(
+            JsonObject,
+            {
+                "role": "assistant",
+                "content": content,
+                "stop_reason": self._stop_reason,
+                "usage": dict(self._usage),
+            },
+        )
+
+
+@dataclass(slots=True)
+class _StreamBlock:
+    type: str = ""
+    text: str = ""
+    thinking: str = ""
+    partial_json: str = ""
+
+    def document(self) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in (
+                ("type", self.type),
+                ("text", self.text),
+                ("thinking", self.thinking),
+                ("partial_json", self.partial_json),
+            )
+            if value != ""
+        }
+
+
 class HttpxChatTransport:
     """Small vendor-neutral HTTP transport for OpenAI-compatible APIs."""
 
@@ -293,6 +434,14 @@ class HttpxChatTransport:
         timeout_seconds: float,
         max_response_bytes: int,
     ) -> TransportResponse:
+        if payload.get("stream") is True:
+            return await self._post_streaming(
+                url,
+                headers,
+                payload,
+                timeout_seconds=timeout_seconds,
+                max_response_bytes=max_response_bytes,
+            )
         try:
             async with httpx.AsyncClient(
                 timeout=timeout_seconds,
@@ -306,23 +455,70 @@ class HttpxChatTransport:
                 details={"error_type": type(error).__name__},
                 retryable=True,
             ) from error
-        if len(response.content) > max_response_bytes:
+        return self._decode_response(response.status_code, response.content, max_response_bytes)
+
+    def _decode_response(
+        self, status_code: int, content: bytes, max_response_bytes: int
+    ) -> TransportResponse:
+        if len(content) > max_response_bytes:
             raise ModelProtocolError(
                 "model response exceeded the configured size limit",
-                details={"status_code": response.status_code},
+                details={"status_code": status_code},
                 retryable=False,
             )
         try:
-            body: object = response.json()
+            body: object = json.loads(content)
         except (ValueError, json.JSONDecodeError) as error:
-            if 200 <= response.status_code < 300:
+            if 200 <= status_code < 300:
                 raise ModelProtocolError(
                     "model endpoint returned non-JSON content",
-                    details={"status_code": response.status_code},
+                    details={"status_code": status_code},
                     retryable=True,
                 ) from error
             body = {}
-        return TransportResponse(response.status_code, body)
+        return TransportResponse(status_code, body)
+
+    async def _post_streaming(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        payload: JsonObject,
+        *,
+        timeout_seconds: float,
+        max_response_bytes: int,
+    ) -> TransportResponse:
+        """Consume an SSE stream and reassemble the complete response body.
+
+        Streaming exists so CDN edges in front of providers never see an idle
+        request: reasoning models can exceed a 2-minute time-to-first-byte,
+        which edges answer with 554. Events are reassembled into the same
+        non-streaming body shape, so request building and response parsing
+        stay protocol-identical across both paths.
+        """
+        try:
+            async with (
+                httpx.AsyncClient(
+                    timeout=timeout_seconds,
+                    follow_redirects=False,
+                    proxy=self._proxy_url,
+                ) as client,
+                client.stream("POST", url, headers=dict(headers), json=payload) as response,
+            ):
+                content_type = str(response.headers.get("content-type", ""))
+                streaming = "text/event-stream" in content_type
+                if not (200 <= response.status_code < 300) or not streaming:
+                    content = await response.aread()
+                    return self._decode_response(response.status_code, content, max_response_bytes)
+                aggregator = _SseResponseAggregator(max_response_bytes)
+                async for line in response.aiter_lines():
+                    aggregator.feed_line(line)
+                return TransportResponse(response.status_code, aggregator.finish())
+        except (httpx.TimeoutException, httpx.TransportError) as error:
+            raise ModelTransportError(
+                "model endpoint transport failed",
+                details={"error_type": type(error).__name__},
+                retryable=True,
+            ) from error
 
 
 class AgentRunRecorder(Protocol):
