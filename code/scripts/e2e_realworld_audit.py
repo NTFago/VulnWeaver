@@ -114,8 +114,30 @@ def main() -> int:
             return 0
 
     seen: dict[str, str] = {}
+    jobs: list[dict[str, object]] = []
+    consecutive_errors = 0
     for poll in range(args.max_polls):
-        jobs = client.get(f"/api/tasks/{task_id}/jobs").json()
+        jobs_response = client.get(f"/api/tasks/{task_id}/jobs")
+        # A transient gateway/API hiccup must not kill a hours-long watch:
+        # retry with backoff and only give up after repeated failures.
+        if jobs_response.status_code >= 500 or jobs_response.status_code == 401:
+            consecutive_errors += 1
+            if consecutive_errors >= 5:
+                jobs_response.raise_for_status()
+            print(f"[poll {poll}] jobs poll got {jobs_response.status_code}; retrying")
+            time.sleep(args.poll_seconds)
+            continue
+        jobs_response.raise_for_status()
+        payload = jobs_response.json()
+        if not isinstance(payload, list):
+            consecutive_errors += 1
+            if consecutive_errors >= 5:
+                raise RuntimeError(f"unexpected jobs payload: {str(payload)[:200]}")
+            print(f"[poll {poll}] unexpected jobs payload; retrying")
+            time.sleep(args.poll_seconds)
+            continue
+        consecutive_errors = 0
+        jobs = payload
         summary = {}
         for job in jobs:
             state = f"{job['status']}/{job.get('outcome_code') or ''}"
