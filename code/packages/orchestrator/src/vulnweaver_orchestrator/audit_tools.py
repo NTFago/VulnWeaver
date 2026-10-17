@@ -939,7 +939,13 @@ class AuditWorkspace:
                 continue
             scanned += 1
             stop = False
-            for number, line in enumerate(text.splitlines(), start=1):
+            # Line numbers feed the same (version, path, line) read-proof
+            # accounting as excerpt reads, so the split must follow the
+            # excerpt's \n-only standard: str.splitlines also breaks on form
+            # feeds and would shift every reported hit line.
+            for number, line in enumerate(
+                text.split("\n"), start=1
+            ):
                 if len(matches) >= limit:
                     stop = True
                     break

@@ -198,7 +198,13 @@ class ProofJobExecutor:
                 job, "proof.script_ref_outside_project", FailureKind.POLICY, str(error)
             )
         except AutoExploitError as error:
-            return _worker_failure(job, error.code, error.kind, error.code.replace("_", " "))
+            return _worker_failure(
+                job,
+                error.code,
+                error.kind,
+                error.message or error.code.replace("_", " "),
+                details=error.details,
+            )
         except (ProofExecutionError, ExecutionBundleError, ObservationError) as error:
             return _worker_failure(job, "proof.invalid_request", FailureKind.VALIDATION, str(error))
         except (TypeError, ValueError) as error:
@@ -627,6 +633,7 @@ def _worker_failure(
     message: str = "proof job rejected",
     *,
     retryable: bool = False,
+    details: JsonObject | None = None,
 ) -> WorkerResult:
     return WorkerResult(
         schema_version=SchemaVersion.VALUE_1_0_0,
@@ -635,7 +642,11 @@ def _worker_failure(
         produced_artifact_version_ids=[],
         evidence_ids=[],
         failure=StructuredFailure(
-            code=code, kind=kind, message=message, retryable=retryable, details={}
+            code=code,
+            kind=kind,
+            message=message,
+            retryable=retryable,
+            details=details or {},
         ),
     )
 

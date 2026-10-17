@@ -137,6 +137,25 @@ def build_app():
         return reconfigurable.runner(store, sandbox_root)
 
     app = create_sandbox_app(_runner_source, bearer_token=token)
+
+    @app.on_event("startup")
+    async def _recover_orphan_containers() -> None:
+        # Workload containers are not --rm: a runner that died mid-request
+        # leaves them, their keeper containers and output volumes alive on the
+        # shared docker host. Sweeping once at startup reclaims exactly the
+        # orphans this runner owns (by ownership label) after a crash or
+        # redeploy; request paths clean up after themselves.
+        try:
+            runner = await _runner_source()
+            removed = await runner.recover_orphans()
+        except Exception as error:  # pragma: no cover - lifecycle glue
+            LOGGER.warning(
+                "sandbox_orphan_recovery_failed", extra={"error": str(error)[:200]}
+            )
+            return
+        if removed:
+            LOGGER.info("sandbox_orphans_recovered", extra={"removed": sorted(removed)})
+
     if database is not None:
 
         @app.on_event("shutdown")
